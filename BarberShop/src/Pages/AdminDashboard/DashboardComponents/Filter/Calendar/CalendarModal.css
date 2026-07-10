@@ -1,0 +1,128 @@
+.modal-calendar {
+    background: #0a1628;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.75rem;
+    padding: 0.75rem;
+    user-select: none;
+    width: 100%;
+    box-sizing: border-box;
+    position:absolute;
+    z-index:50;
+    min-width:250px;
+}
+
+
+.modal-calendar-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+
+.modal-calendar-nav-btn {
+    width: 1.25rem;
+    height: 1.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.25rem;
+    border: none;
+    background: none;
+    color: #9ca3af;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: color 0.15s, background 0.15s;
+}
+
+    .modal-calendar-nav-btn:hover {
+        color: #ffffff;
+        background: rgba(255, 255, 255, 0.1);
+    }
+
+.modal-calendar-month {
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+}
+
+.modal-calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+}
+
+.modal-calendar-weekday {
+    text-align: center;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--grey-400);
+    padding: 0.25rem 0;
+    margin-bottom: 0.25rem;
+}
+
+.modal-calendar-days {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    row-gap: 0;
+}
+
+.modal-calendar-day {
+    width: 100%;
+    height: 1.75rem;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    background: none;
+    color: #9ca3af;
+    transition: background 0.15s, color 0.15s;
+}
+
+    .modal-calendar-day:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: #ffffff;
+    }
+
+    .modal-calendar-day.selected {
+        background: var(--green-500);
+        color: #0a1628;
+        font-weight: 700;
+        box-shadow: 0 0 8px rgba(0, 217, 126, 0.4);
+    }
+
+    .modal-calendar-day.today {
+        border: 1px solid var(--green-500);
+        color: var(--green-500);
+        background: none;
+    }
+
+        .modal-calendar-day.today:hover {
+            background: rgba(0, 217, 126, 0.1);
+        }
+
+    .modal-calendar-day.outside {
+        pointer-events: none;
+        color: #4b5563;
+    }
+
+.modal-calendar-footer {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    text-align: center;
+}
+
+.modal-calendar-selected-badge {
+    display: inline-block;
+    background: rgba(0, 217, 126, 0.15);
+    color: #00d97e;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+}

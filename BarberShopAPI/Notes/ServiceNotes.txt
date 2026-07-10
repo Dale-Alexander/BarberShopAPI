@@ -1,0 +1,23 @@
+﻿app.UseStaticFiles exposes the wwwroot/uploads folder to the web. No actual files are
+saved here - it just tells the server. That line just says: "If someone requests
+/uploads server files from this folder. the controller handles the file upload
+logic"
+
+Let's say the user uploads cat.png from his device. Controller builds the folder path
+C:\Project\wwwroot\uploads. Ensures the folder exists. Generates a unique file name
+like 3f8b2c1a-9d8e-4a56-823f-f7a1d3c2a123.png and builds the full server path:
+C:\Project\wwwroot\uploads\3f8b2c1a-9d8e-4a56-823f-f7a1d3c2a123.png. Saves the file
+to disk in wwwroot/uploads. It stores the relative URL for the database or the
+API response. Client can access the image like this:
+                        <img
+                            src={
+                                service.imageUrl.startsWith("http")
+                                    ? service.imageUrl
+                                    : `${import.meta.env.VITE_BASE_URL}${service.imageUrl}`
+                            }
+                            alt={service.name}
+                        />
+ASP.NET Core UseStatisticFiles serves the file directly from wwwroot/uploads
+
+
+

@@ -1,0 +1,225 @@
+@import url("https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@400;600;700&display=swap");
+/* primary/background:primary--500, secondary green-500, neutral: grey-700 */
+:root {
+    /* GREY */
+    --grey-100: #e0e0e0;
+    --grey-200: #c2c2c2;
+    --grey-300: #a3a3a3;
+    --grey-400: #858585;
+    --grey-500: #666666;
+    --grey-600: #525252;
+    --grey-700: #3d3d3d;
+    --grey-800: #292929;
+    --grey-900: #141414;
+    --muted-fg: hsl(215, 15%, 55%);
+    --muted: hsl(220, 20%, 20%);
+    /* PRIMARY */
+    --primary-100: #d0d1d5;
+    --primary-200: #a1a4ab;
+    --primary-300: #727681;
+    --primary-400: #1f2a40;
+    --primary-500: #141b2d;
+    --primary-600: #101624;
+    --primary-700: #0c101b;
+    --primary-800: #080b12;
+    --primary-900: #040509;
+    /* GREEN ACCENT */
+    --green-100: #0f2922;
+    --green-200: #1e5245;
+    --green-300: #2e7c67;
+    --green-400: #3da58a;
+    --green-500: #4cceac;
+    --green-600: #70d8bd;
+    --green-700: #94e2cd;
+    --green-800: #b7ebde;
+    --green-900: #dbf5ee;
+    /* RED ACCENT */
+    --red-100: #2c100f;
+    --red-200: #58201e;
+    --red-300: #832f2c;
+    --red-400: #af3f3b;
+    --red-500: #db4f4a;
+    --red-600: #e2726e;
+    --red-700: #e99592;
+    --red-800: #f1b9b7;
+    --red-900: #f8dcdb;
+    /* BLUE ACCENT */
+    --blue-100: #151632;
+    --blue-200: #2a2d64;
+    --blue-300: #3e4396;
+    --blue-400: #535ac8;
+    --blue-500: #6870fa;
+    --blue-600: #868dfb;
+    --blue-700: #a4a9fc;
+    --blue-800: #c3c6fd;
+    --blue-900: #e1e2fe;
+    /* BACKGROUND */
+    --bg-default: var(--primary-500);
+    --font-family: "Source Sans Pro", sans-serif;
+    --font-size-base: 12px;
+    --h1: 40px;
+    --h2: 32px;
+    --h3: 24px;
+    --h4: 20px;
+    --h5: 16px;
+    --h6: 14px;
+    --background: #F5F0E8;
+    --calendar-bg: #FFFDF7;
+    --time-bg: #F9F4EA;
+    --text-dark-300: #1A1A1A;
+    --text-dark-200: #6B6B6B;
+    --text-dark-100: #A8A8A8;
+    --btn-gold: #D4A843;
+    --btn-gold-2: #D4A843 ;
+    --border-gold: #F5E6C0;
+    --circle-gold: #E8C96D;
+}
+
+*,
+*::before,
+*::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+html, body, #root{
+    height:100%;
+    width:100%;
+    font-family:var(--font-family);
+}
+body{
+    line-height:1.5;
+}
+
+
+.admin-app{
+    min-height: 100vh;
+    user-select:none;
+    display:flex;
+    overflow-x:hidden;
+    background-color: var(--primary-500);
+}
+
+.home-page-main{
+    flex:1;
+    min-width:0;
+    position:relative;
+}
+::-webkit-scrollbar {
+    width: 10px;
+  }
+  button{
+    border:none;
+  }
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+
+.modal-content {
+    border-radius: 0.5rem;
+    width: 100%;
+    max-width: 440px;
+    max-height: 85vh;
+    overflow-y: auto;
+    background: hsl(220, 25%, 14%);
+}
+
+.modal-content--wide {
+    max-width: 640px;
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 20px 0;
+}
+
+    .modal-header h2 {
+        font-size: 1.15rem;
+        font-weight: 600;
+        color: hsl(210, 20%, 90%);
+    }
+
+.modal-close {
+    background: transparent;
+    color: hsl(215, 15%, 55%);
+    transition: color 0.2s;
+    cursor: pointer;
+}
+
+    .modal-close:hover {
+        color: hsl(210, 20%, 90%);
+    }
+
+.modal-body {
+    padding: 20px;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 0 20px 20px;
+}
+
+.btn-primary {
+    background: var(--green-500);
+    color: hsl(220, 25%, 10%);
+    padding: 8px 20px;
+    border-radius: 0.5rem;
+    font-size: 0.0875rem;
+    font-weight: 600;
+    transition: opacity 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: fit-content;
+    cursor: pointer;
+}
+
+    .btn-primary:hover {
+        opacity: 0.9;
+    }
+
+.btn-secondary {
+    color: hsl(210, 20%, 90%);
+    background: hsl(220, 25%, 18%);
+    padding: 8px 20px;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: background 0.2s;
+    cursor: pointer;
+}
+
+    .btn-secondary:hover {
+        background: var(--muted);
+    }
+  
+  /* Track */
+  ::-webkit-scrollbar-track {
+    background: #e0e0e0;
+  }
+  
+  /* Handle */
+  ::-webkit-scrollbar-thumb {
+    background: #888;
+  }
+  
+  /* Handle on hover */
+  ::-webkit-scrollbar-thumb:hover {
+    background: #555;
+  }
+  input {
+    border: none;
+    outline: none;
+    font: inherit;
+  }

@@ -1,0 +1,68 @@
+﻿
+
+
+Fix the default values inside the BarberShopContext 
+Run a test with a cookie that lasts only 1 minute and then try to login. See if the cookie will be deleted or will still be there
+The Sidebar integrated together with the dashboard might need fixing
+
+notes about migrations and applicability of changes when changing from null to non-null but with default that isnt the case
+
+
+Check that all the combinations of the inputs work. Make sure the columns have a default value with appropriate maxlength values
+and make sure they have null/non-null appropriately
+
+Look at BarberController of old project and look how capitalize is used. It returns the duplicate field that was entered to the browser
+#What happens when a barber or an admin try to make a booking. 
+
+Check if i really truly need withCredentials:true in the interceptor since i am running a proxy
+which treats the frontend and the backend as the same origin and therefore check if i really need
+to use the following that is on the server: "builder.Services.AddCors(options =>
+{
+options.AddPolicy("AllowReactDev", policy =>
+{
+    policy.WithOrigins("http://localhost:5173")
+          .AllowAnyHeader()
+          .AllowAnyMethod()
+          .AllowCredentials();
+});
+});
+"
+
+
+
+Check if you the filtered index and not just a normal index.  see what happens when creating a barber, deleting it and creating 
+it with the same email and how that relates to the amount of people. 
+
+
+When getting bookings for date and time see whether you should put [Authorize] since
+the admin can access it for editing
+
+
+ Those that have a filtered unique index in BarberShopContext.cs, check if only the active ones should be unique(some of them probably do). This means you have to add this:
+ "AND [IsActive] = 1".
+
+ When making a closure check if it conflicts with any existing bookings. 
+ IF so tell the user what date the booking is and maybe what the booking is
+
+
+
+
+Also when making creating a booking. Make sure you do this:
+catch (DbUpdateException ex) when (ex.InnerException?.Message.Contains("unique") == true)
+
+When cash payment is due, dont forget to change the payment status from pending to confirmed
+
+When sending the phone or anyother data for that matter, make sure it is well formatted on the backend
+
+when fetching a barber first to see if he exists or is active, select only the necessary columns you want because if you want to check the isActive status of the barber 
+when you have 100s and 1000s of bookings, you will be fetching all of the unnecessary columns which will take a lot of time so select only the barber Id and isActive column
+probably. Do the same for other stuff
+
+When going to production you need to toggle off test mode for stripe and then the
+live keys will be revealed pk_live sk_live... . You then need to change your env variables
+
+Also check if keys expire after 90 days
+
+
+In DatesController, see if ValidationException actually sends messages to the frontend
+Add some validation on names in Services and maybe other attributes which need validation in all controllers

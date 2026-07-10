@@ -1,0 +1,327 @@
+﻿.calendar-header-title-container {
+    margin-bottom: 30px;
+}
+
+.calendar-header-title {
+    color: var(--grey-100);
+    font-weight: bold;
+    margin-bottom: 5px;
+    font-size: 30px;
+}
+@media (max-width: 530px) {
+    /* target whatever wraps your page content */
+    .calendar-header-title-container {
+        padding-left: 50px;
+    }
+}
+
+
+.calendar-header-subtitle {
+    color: var(--green-500);
+    font-size: 17px;
+}
+
+.fc-daygrid-day,
+.fc-timegrid-slot {
+    cursor: pointer;
+}
+
+.fc-daygrid-more-link {
+    padding: 2px 4px;
+    border-radius: 4px;
+    color: #ffffff;
+    background-color: #3788d8;
+}
+
+    .fc-daygrid-more-link:hover {
+        background-color: var(--blue-300) !important;
+    }
+
+.fc-day-past-custom {
+    background-color: #f3f4f6 !important;
+    opacity: 0.6;
+}
+
+    .fc-day-past-custom .fc-daygrid-day-number {
+        color: #9ca3af !important;
+    }
+
+.fc-slot-past-custom {
+    background-color: #f3f4f6 !important;
+}
+
+    .fc-slot-past-custom .fc-timegrid-slot-label-cushion {
+        color: #9ca3af !important;
+    }
+
+.fc-daygrid-day-number,
+.fc-col-header-cell-cushion {
+    color: var(--grey-100);
+}
+
+.fc-timegrid-slot-label-cushion {
+    color: var(--grey-100);
+}
+
+.fc-scrollgrid,
+.fc-scrollgrid td,
+.fc-scrollgrid th {
+    border-color: var(--grey-100) !important;
+}
+
+.fc-toolbar-title {
+    color: var(--grey-100);
+}
+
+.fc-scrollgrid-sync-table colgroup col {
+    color: var(--grey-100);
+}
+
+.fc-timegrid-axis-cushion {
+    color: var(--grey-100);
+}
+
+.fc-daygrid-more-link {
+    color: var(--grey-100);
+}
+
+.fc-list-event-title a, .fc-list-event-time {
+    color: var(--grey-100) !important;
+}
+
+.fc-list-event:hover .fc-list-event-title a,
+.fc-list-event:hover .fc-list-event-time {
+    color: var(--primary-500) !important;
+}
+
+.fc-daygrid-dot-event {
+    color: white !important;
+    background: #3788d8;
+}
+
+    .fc-daygrid-dot-event .fc-event-title {
+        font-weight: 500;
+    }
+
+    .fc-daygrid-dot-event:hover {
+        background: #3788d8 !important;
+    }
+
+.fc-daygrid-event-dot {
+    border-color: var(--blue-300) !important;
+}
+
+/* ══════════════════════════════════════
+   DESKTOP: toggle hidden, sidebar visible
+══════════════════════════════════════ */
+.calendar-sidebar-toggle {
+    display: none;
+}
+
+/* ══════════════════════════════════════
+   MOBILE: ≤ 740px
+══════════════════════════════════════ */
+@media (max-width: 740px) {
+
+    /* Force toolbar to single row filling full width */
+    .fc .fc-toolbar {
+        display: grid !important;
+        grid-template-columns: auto 1fr auto !important;
+        align-items: center !important;
+        gap: 0 !important;
+        flex-direction: unset !important;
+    }
+
+    /* Left: prev/next arrows */
+    .fc .fc-toolbar-chunk:first-child {
+        justify-self: start;
+    }
+
+    /* Center: title bigger and centered */
+    .fc .fc-toolbar-chunk:nth-child(2) {
+        justify-self: center;
+    }
+
+    .fc .fc-toolbar-title {
+        font-size: 1.1rem !important;
+        white-space: nowrap;
+    }
+
+    /* Right: view switcher buttons */
+    .fc .fc-toolbar-chunk:last-child {
+        justify-self: end;
+    }
+
+    #calendar-page .fc-button-primary {
+        font-size: 0.9rem !important;
+        padding: 7px 10px !important;
+    }
+
+
+    /* Stack layout vertically */
+    .calendar-layout {
+        flex-direction: column !important;
+    }
+
+    /* Hide desktop sidebar completely */
+    .calendar-sidebar-desktop {
+        display: none !important;
+    }
+
+    /* Remove left margin so calendar fills full width */
+    .calendar-main {
+        margin-left: 0 !important;
+        width: 100%;
+    }
+
+    /* ── Burger toggle button ── */
+    .calendar-sidebar-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: var(--primary-400);
+        border: none;
+        border-radius: 6px;
+        color: var(--grey-100);
+        padding: 8px 14px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        cursor: pointer;
+        margin-bottom: 12px;
+        width: fit-content;
+    }
+
+        .calendar-sidebar-toggle:hover {
+            opacity: 0.85;
+        }
+
+    /* Event count badge */
+    .events-badge {
+        background: #3788d8;
+        color: #fff;
+        border-radius: 999px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        padding: 1px 7px;
+        margin-left: 2px;
+    }
+
+    /* ── Bottom Drawer Overlay ── */
+    .events-drawer-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1400;
+        display: flex;
+        align-items: flex-end;
+    }
+
+    /* ── Drawer Panel ── */
+    .events-drawer {
+        width: 100%;
+        max-height: 55vh;
+        background: var(--primary-400);
+        border-radius: 16px 16px 0 0;
+        padding: 10px 16px 24px;
+        display: flex;
+        flex-direction: column;
+        animation: drawerSlideUp 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+    }
+
+    @keyframes drawerSlideUp {
+        from {
+            transform: translateY(100%);
+        }
+
+        to {
+            transform: translateY(0);
+        }
+    }
+
+    /* Drag handle pill */
+    .drawer-handle {
+        width: 40px;
+        height: 4px;
+        background: rgba(255, 255, 255, 0.25);
+        border-radius: 999px;
+        margin: 0 auto 12px;
+        flex-shrink: 0;
+    }
+
+    /* Drawer header row */
+    .drawer-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-shrink: 0;
+        margin-bottom: 8px;
+    }
+
+    /* Close button */
+    .drawer-close-btn {
+        background: none;
+        border: none;
+        color: var(--grey-100);
+        cursor: pointer;
+        padding: 4px;
+        display: flex;
+        align-items: center;
+        opacity: 0.8;
+    }
+
+        .drawer-close-btn:hover {
+            opacity: 1;
+        }
+
+    /* Scrollable event list */
+    .drawer-body {
+        overflow-y: auto;
+        flex: 1;
+    }
+
+    /* Empty state */
+    .drawer-empty {
+        color: var(--grey-100);
+        opacity: 0.6;
+        text-align: center;
+        padding: 24px 0;
+        font-size: 0.9rem;
+    }
+
+    /* ── FullCalendar mobile tweaks ── */
+    .fc .fc-toolbar {
+        flex-direction: column !important;
+        gap: 6px;
+        align-items: center;
+    }
+
+    .fc .fc-toolbar-title {
+        font-size: 1rem !important;
+    }
+
+    .fc .fc-button {
+        font-size: 0.7rem !important;
+        padding: 4px 7px !important;
+    }
+
+    .fc .fc-daygrid-day-number {
+        font-size: 0.7rem;
+        padding: 2px 4px;
+    }
+
+    .fc .fc-col-header-cell-cushion {
+        font-size: 0.7rem;
+        padding: 4px 2px;
+    }
+
+    .fc-event-title,
+    .fc-event-time {
+        font-size: 0.65rem !important;
+    }
+
+    .fc {
+        height: 60vh !important;
+    }
+}
+
+

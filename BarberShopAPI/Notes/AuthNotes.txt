@@ -1,0 +1,110 @@
+﻿.UseAuthentication() and .UseAuthorization() run on every request
+
+.UseAuthentication answers "who is this request coming from"
+
+On every request when execution reaches:app.UseAuthentication(), ASP.NET
+does this:
+Looks at your configured default scheme: JwtBearerDefaults.AuthenticateScheme,
+Invokes the JWT Bearer Middleware, JWT Middleware:
+1) Fires OnMessageReceived
+2) Checks for cookie named "jwt" and sets context.Token
+3) Validates the token(Signature, Expiration, Clock skew)
+4) If token is valid it builds a ClaimPrincipal and assigns it to HttpContext.User
+5) If invalid or missing, HttpContext.User is empty
+
+After validation, it parses the JWT claims and builds a ClaimsPrincipal Object.
+var principal = new ClaimsPrincipal(...)
+Then ASP.Net Core sets context.HttpContext.User = principal
+
+options.TokenValidationParameters = new TokenValidationParameters{...}: This is 
+not the validation itself. It's the configuration the JWT middleware uses to 
+validate tokens. think of it as the rulebook the middleware follows.
+Ex:
+ValidateIssuer - false = Dont check the tokens issuer when it comes to validating
+So the middleware reads this object and applies these rules when validating the 
+token
+
+This is how context.Token is used internally by the middleware:
+
+    var principal = JwtSecurityTokenHandler.ValidateToken(
+        context.Token,
+        options.TokenValidationParameters,
+        out var validatedToken
+    );
+
+    context.HttpContext.User = principal;
+    //remember the above is internal anf i think is triggered when OnMessageRecieved is triggered
+
+    A standard JWT looks like this: 
+    header -> Alogirthm, token type
+    Payload -> Contains claims(userId, role etc)
+    Signature
+    .ValidateToken() splits the JWT into these 3 components and extracts claims from 
+    the payload. 
+    The following happens inside .ValidateToken():
+    var jwtToken = handler.ReadJWtToken(context.Token)
+    It valides the signarure and expiration using the TokenValidationParameters
+    Extracts claims from payload: var claims = jwtToken.Claims
+    var identity = new ClaimsIdentity(claims, JwtBearerDefaults.AuthenticateScheme)
+    var principal = new ClaimsPrincipal(identity);
+    HttpContext.User = principal;
+Just look at the .AddAuthentication() clause to see all this in action
+
+
+
+.UseAuthorization():
+.UseAuthorization answers "is this user allowed to access this endpoint"
+When execution reaches app.UseAuthorization(), ASP.NET Core looks at the 
+endpoint/route metadata: Does it have [Authorize],[AllowAnonymous] ?, it evaluates rules using 
+HttpContext.User.
+If the endpoint has no [Authorize] Request continues.
+If the endpoint has [Authorize] then check if User.Identity.IsAuthenticated == true
+then allow, if false then block. On failure it triggers the challenge for the
+scheme which in my case is JWT and returns 401 Unauthorized
+
+If [Authorize] is not present it essentially does nothing, first it needs to look
+at the endpoint metadata
+
+When [Authorize]
+ is used, you are basically telling ASP.NET core: "This endpoint requires an 
+ authenticated user. If the user is not authenticated, dont even run my controller
+ -> return 401." It basically checks if HttpContext.User exists
+
+ //Lets say a customer tries to send a backend request. This is what happens:
+ UseAuthentication() runs -> tries to find JWT, finds none, HttpContext.User = 
+ anonymous(not authenticated), UseAuthorization() -> endpoint has no [Authorize],
+ does nothing, controller runs
+
+ Authentication does not block, Authorization([Authorize]) is what blocks
+
+ TokenVersion in User.cs is used so that we may logout on all devices and tabs
+
+in /logout we increment TokenVersion(user.TokenVersion++). That single line
+invalidates every token ever issued on every device immediately
+
+TokenVersion explanation runthrough: 
+User is created ->  user logs in -> user maes a protected backend request ->
+user logs out of all devices -> user makes a backend request from a device
+containing an old tokenVersion -> user logs in again
+
+User is created: Token version is set to 0
+User logs in for the first time, the token' payload contains the id, role and 
+tokenVersion.
+ 
+User makes a request to create a booking. Authentication middleware runs which 
+reads JWT from cookie and pupulates HTTPContext.User with the id, role, 
+tokenVersion. TokenVersionMiddlewareruns: It compares the DB tokenVersion 
+with the JWT tokenVersion. They are both the same which calls await _next(context),
+and the request continues to controller. User logs out of all devices:
+The authentication and TokenVersion middleware run normally like the previous
+case, the the logout controller runs: tokenVersion is implemented and saved to
+the database. The cookie is deleted from the current browser and the DB
+TokenVersion is set to 1. At this point Old JWTs on other devices still
+have tokenVersion = 0. Lets say Alice uses a device with tokenVersion still
+set to 0 and she makes a request. Middleware reads the claims and sees that the 
+JWT tokenVersion is set to 0. The middleware compares the DB token version with 
+JWT tokenVersion and it sees that there is a mismatch. The request is rejected
+immediately via sending a 401 status code. When user logs in again, the JWT's
+tokenVersion claim will now be set to 1. When she makes a backend request,
+the DB tokenVersion and the JWT tokenVersion match and so middleware allows the
+new token. 

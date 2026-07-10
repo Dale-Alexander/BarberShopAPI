@@ -1,0 +1,69 @@
+fetchUser() inside AuthContext runs once everytime when
+the app first loads meaning that the backend is queried
+once per app refresh,not per route.
+Page Refresh flow ->
+App mounts -> AuthContextProvider useEffect runs
+-> GET/auth/me -> Backend validates JWT ->
+setUser(user | null)
+
+When user visits frontend route /admin:
+RequireRole Renders -> Reads user from AuthContext
+-> Checks Role -> Allows or redirects
+
+When app mounts, one backend request to 
+/auth/me. /auth/me has [Authorize] which basically 
+checks if there is an authenticated user(It checks
+if HttpContext.User is present). But before this
+happens .UseAuthentication() runs which checks if
+there is a token. If there is, then validate It
+and if it is valid, set HttpContext.User. If there 
+is no token HttpContext.User is not set. [Authorize]
+will check if HttpContext.User is set (meaning
+if .UseAuthentication() found a valid token meaning
+the user is logged in), if it the controller runs and 
+sends the user data(Id, role). Then we do 
+setUser(res.data). If the [Authorize] finds 
+HttpContext.User to be empty, it returns a 401
+Unauthorized, in which we do setUser(null). Keep
+in mind that all this happens when the app first mounts.
+
+Then if we try visiting /admin, RequireRole runs
+which reads the User from AuthContext which is set
+when the app first runs because fetchUser() runs 
+which sends a backendrequest to /auth/me. If there is
+a user meaning that the user is logged in, check
+if the user role is allowed. If yes then allow, 
+otherwise redirect. If there is no user found
+meaning the user is not authenticated, redirect 
+the user to login.
+
+Keep in mind that the AuthContextProvider mounts
+before the app actually mounts, so if there is a
+user which is logged in, we make sure that we wait
+for the user to load and then the app loads. 
+AuthContextProvider needs to mount first otherwise
+if there is an authenticated user but the app
+mounts before, RequireRole will check for
+a user and it will find it to be null even though
+there is a user which is set, it just hasnt loaded
+in yet. 
+
+You might be wondering what happens when we refresh on
+/admin and we are authenticated. Remember that
+/auth/me is called once on every app mount/refresh.
+/auth/me will get the user from the token
+and the reason the token doesnt disppear is 
+because cookies arent wiped out when we refresh
+because they are stored in the browser's memory and 
+not React/JS memory
+
+
+withCredentials:true:
+/auth/login → browser receives JWT cookie from the server → must have withCredentials: true
+/auth/me → browser sends JWT cookie to the server → must have withCredentials: true
+
+so withCredentials:true sends cookies from the server to the browser and vice versa
+
+we need withCredentials:true because we have cross-origin requests so the clause withCredentials:true must be included
+
+

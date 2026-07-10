@@ -1,0 +1,181 @@
+using BarberShopAPI.Models;
+using BarberShopAPI.Models.Enums;
+using Microsoft.EntityFrameworkCore;
+using System.Threading;
+
+namespace BarberShopAPI.Data
+{
+    public class BarberShopContext : DbContext
+    // DbContext is Ef Core's main class for talking to the database.
+    //It acts like a bridge between my C# models and the database tables
+    //Each instance of DbContext allows you to query data: context.Users.ToList(), CRUD etc
+    {
+        public BarberShopContext(DbContextOptions<BarberShopContext> options) : base(options)
+        {
+
+        }
+        /* 
+         *DbContextOptions contains configuration for the database (like the connection string, provider type)
+         *You pass these options from Program.cs when you configure EF Core:
+         *builder.Services.AddDbContext<BarberShopContext>(options =>
+         options.UseNpgsql(connectionString));
+         This lets EfCore which database to connect to and how
+         */
+        public DbSet<User> Users { get; set; }
+        public DbSet<Booking> Bookings { get; set; }
+        public DbSet<Barber> Barbers { get; set; }
+        public DbSet<Service> Services { get; set; }
+        public DbSet<BookingService> BookingServices { get; set; }
+        public DbSet<Payment> Payments { get; set; }
+        public DbSet<ShopClosure> ShopClosures { get; set; }
+
+        /* 
+         *Each DbSet corresponds to a table in the database. EF Core will
+         *map my model class User to a Users table automatically
+         *You use them like this: context.Bookings.ToList();
+         */
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+
+            var shopClosure = modelBuilder.Entity<ShopClosure>();
+
+            shopClosure.HasIndex(c => new { c.StartDate, c.EndDate })
+      .IsUnique()
+      .HasFilter("[BarberId] IS NULL AND [IsFullDay] = 1 AND [IsActive] = 1"); // shop-wide full day
+
+            shopClosure.HasIndex(c => new { c.BarberId, c.StartDate, c.EndDate })
+                   .IsUnique()
+                   .HasFilter("[BarberId] IS NOT NULL AND [IsFullDay] = 1 AND [IsActive] = 1"); // barber full day
+            //the time overlapping is considered in the backend
+            shopClosure.Property(sc => sc.IsActive).HasDefaultValue(true);
+
+            modelBuilder.Entity<Booking>().HasIndex(b => new { b.BarberId, b.StartDateTime }).IsUnique();
+
+            var user = modelBuilder.Entity<User>();
+
+            // Map enum Role as string and set SQL default
+            user.Property(u => u.Role)
+                .HasConversion<string>();
+
+
+            // Default timestamps
+            user.Property(u => u.CreatedAt)
+                .HasDefaultValueSql("GETUTCDATE()");
+
+            user.Property(u => u.UpdatedAt)
+                .HasDefaultValueSql("GETUTCDATE()");
+
+            // Column lengths
+            user.Property(u => u.Name).HasMaxLength(50);
+            user.Property(u => u.Surname).HasMaxLength(50);
+            user.Property(u => u.Phone).HasMaxLength(20);
+            user.Property(u => u.Email).HasMaxLength(100);
+
+            // **Unique constraints**
+            user.HasIndex(u => u.Phone)
+                .IsUnique()
+                .HasDatabaseName("UX_User_Phone");
+
+            user.HasIndex(u => u.Email)
+                .IsUnique()
+                .HasDatabaseName("UX_User_Email");
+
+            var service = modelBuilder.Entity<Service>();
+
+            // Defaults
+            service.Property(s => s.IsActive)
+                   .HasDefaultValue(true);
+
+            // Optional: Column lengths
+            service.Property(s => s.Name).HasMaxLength(100);
+            service.Property(s => s.Description).HasMaxLength(500);
+            service.Property(s => s.ImageUrl).HasMaxLength(200);
+
+            var payment = modelBuilder.Entity<Payment>();
+
+            payment.HasIndex(p => p.BookingId)
+       .IsUnique()
+       .HasDatabaseName("UX_Payment_BookingId");
+
+            payment.HasIndex(p => p.StripePaymentIntentId)
+                   .IsUnique()
+                   .HasDatabaseName("UX_Payment_StripePaymentIntentId");
+
+            // Enum mappings as strings
+
+
+            payment.Property(p => p.Status)
+                   .HasConversion(
+                       v => v.ToString(),
+                       v => (PaymentStatus)Enum.Parse(typeof(PaymentStatus), v)
+                   )
+                   .HasDefaultValueSql("'PENDING'");
+
+            // Timestamps defaults
+            payment.Property(p => p.CreatedAt)
+                   .HasDefaultValueSql("GETUTCDATE()");
+
+            payment.Property(p => p.UpdatedAt)
+                   .HasDefaultValueSql("GETUTCDATE()");
+
+            payment.Property(p => p.Method)
+       .HasConversion(
+           v => v.ToString(),
+           v => (PaymentMethod)Enum.Parse(typeof(PaymentMethod), v)
+       )
+       .HasDefaultValueSql("'CASH'");
+
+            var bookingService = modelBuilder.Entity<BookingService>();
+
+            // Enum mapping
+
+            bookingService.Property(bs => bs.Status)
+                          .HasConversion(
+                              v => v.ToString(),
+                              v => (BookingServiceStatus)Enum.Parse(typeof(BookingServiceStatus), v)
+                          )
+                          .HasDefaultValueSql("'ACTIVE'");
+
+            // UpdatedAt default
+            bookingService.Property(bs => bs.UpdatedAt)
+                          .HasDefaultValueSql("GETUTCDATE()");
+            var booking = modelBuilder.Entity<Booking>();
+            booking.Property(b => b.Status)
+                   .HasConversion(
+                       v => v.ToString(),
+                       v => (BookingStatus)Enum.Parse(typeof(BookingStatus), v)
+                   )
+                   .HasDefaultValueSql("'PENDING'");
+
+            var barber = modelBuilder.Entity<Barber>();
+            // In your DbContext OnModelCreating:
+
+            // Timestamps
+            booking.Property(b => b.CreatedAt)
+                   .HasDefaultValueSql("GETUTCDATE()");
+            booking.Property(b => b.UpdatedAt)
+                   .HasDefaultValueSql("GETUTCDATE()");
+
+            barber.HasIndex(b => b.UserId)
+       .IsUnique()
+       .HasDatabaseName("UX_Barber_UserId");
+
+            // Default value for IsActive
+            barber.Property(b => b.isActive)
+                   .HasDefaultValue(true);
+
+            // Default timestamps
+            barber.Property(b => b.CreatedAt)
+                   .HasDefaultValueSql("GETUTCDATE()");
+            barber.Property(b => b.UpdatedAt)
+                   .HasDefaultValueSql("GETUTCDATE()");
+
+            base.OnModelCreating(modelBuilder);
+        }
+        /* onModelCreating is a place to configure EF Core beyong default conventions
+         * You are telling EF Core: In the bookings table, create a unique index on 
+         * (BarberId, StartDateTime)
+         */
+
+    }
+}

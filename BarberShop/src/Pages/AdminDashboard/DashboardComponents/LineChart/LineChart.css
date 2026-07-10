@@ -1,0 +1,33 @@
+.chart-container{
+    height:100%;
+    min-height:300px;
+}
+.back-to-year{
+    display:flex;
+    align-items:Center;
+    gap:4px;
+}
+
+.graph-display-option-line{
+    padding: 7px 14px;
+    border-radius:0.5rem;
+    font-size:0.8rem;
+    font-weight:600;
+    transition:all 0.3s ease;
+    border:none;
+    cursor:pointer;
+    font-family:var(--font-family);
+    background: var(--primary-500);
+    color: var(--muted-fg);
+}
+.graph-display-option-line svg{
+    transition:0.3s ease;
+}
+.graph-display-option-line:hover svg{
+    transform: scale(1.2) translateX(-2px);
+}
+.graph-display-option-line:hover{
+    color:var(--green-500);
+
+}
+

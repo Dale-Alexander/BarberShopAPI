@@ -1,0 +1,83 @@
+footer {
+    background-color: #f0ede6;
+    border-top: 1px solid #e5e0d5;
+}
+
+.main-footer-container {
+    max-width: 1024px;
+    margin: 0 auto;
+    padding: 24px 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+/* BRAND */
+.main-footer-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.main-logo-box {
+    width: 24px;
+    height: 24px;
+    background-color: #c9a84c;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.main-logo-box svg{
+    color:white;
+}
+
+.main-logo-icon {
+    color: white;
+    font-size: 12px;
+}
+
+.main-brand-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: #1a1a1a;
+}
+
+/* HOURS */
+.main-footer-hours {
+    font-size: 14px;
+    color: #aaa;
+    text-align: center;
+    margin: 0;
+}
+
+/* CONTACT */
+.main-footer-contact {
+    display: flex;
+    gap: 16px;
+    color: #aaa;
+}
+
+    .main-footer-contact a {
+        font-size: 14px;
+        color: #aaa;
+        text-decoration: none;
+        transition: color 0.2s ease;
+    }
+
+        .main-footer-contact a:hover {
+            color: #c9a84c;
+        }
+
+/* RESPONSIVE (like sm:flex-row) */
+@media (min-width: 640px) {
+    .main-footer-container {
+        flex-direction: row;
+    }
+
+    .main-footer-hours {
+        text-align: center;
+    }
+}

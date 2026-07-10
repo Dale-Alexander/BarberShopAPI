@@ -1,0 +1,223 @@
+﻿.fpi-wrapper {
+    position: relative;
+    width: 100%;
+    font-family: inherit;
+}
+
+/* ── Input row ── */
+.fpi-input-row {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    border: 1px solid #ede9e0;
+    border-radius: 8px;
+    background: #fff;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    overflow: hidden;
+}
+
+    .fpi-input-row:focus-within,
+    .fpi-input-row--open {
+        border-color: #c9a84c;
+        box-shadow: 0 0 0 3px rgba(201, 168, 76, 0.10);
+    }
+
+/* ── Flag button ── */
+.fpi-flag-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 10px 10px 10px 12px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: #1a1a1a;
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+
+    .fpi-flag-btn:hover {
+        background: #faf8f3;
+    }
+
+.fpi-flag {
+    font-size: 18px;
+    line-height: 1;
+}
+
+.fpi-dialcode {
+    font-size: 13px;
+    color: #555;
+    font-variant-numeric: tabular-nums;
+}
+
+.fpi-chevron {
+    color: #aaa;
+    transition: transform 0.2s;
+    margin-left: 1px;
+}
+
+.fpi-chevron--up {
+    transform: rotate(180deg);
+}
+
+.fpi-divider {
+    width: 1px;
+    height: 20px;
+    background: #ede9e0;
+    flex-shrink: 0;
+}
+
+/* ── Number input ── */
+.fpi-number-input {
+    flex: 1;
+    border: none;
+    outline: none;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: #1a1a1a;
+    background: transparent;
+    min-width: 0;
+}
+
+    .fpi-number-input::placeholder {
+        color: #bbb;
+    }
+
+/* ── Dropdown ── */
+.fpi-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    background: #fff;
+    border: 1px solid #ede9e0;
+    border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.09), 0 2px 6px rgba(0,0,0,0.05);
+    z-index: 999;
+    overflow: hidden;
+    animation: fpi-drop 0.15s ease;
+}
+
+@keyframes fpi-drop {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ── Search ── */
+.fpi-search-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
+    border-bottom: 1px solid #f2ede4;
+    gap: 8px;
+}
+
+.fpi-search-icon {
+    flex-shrink: 0;
+}
+
+.fpi-search {
+    flex: 1;
+    border: none;
+    outline: none;
+    font-size: 13px;
+    color: #1a1a1a;
+    background: transparent;
+}
+
+    .fpi-search::placeholder {
+        color: #bbb;
+    }
+
+.fpi-search-clear {
+    border: none;
+    background: none;
+    color: #aaa;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+    transition: color 0.15s;
+}
+
+    .fpi-search-clear:hover {
+        color: #555;
+    }
+
+/* ── List ── */
+.fpi-list {
+    list-style: none;
+    margin: 0;
+    padding: 6px 0;
+    max-height: 220px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #e5dfd2 transparent;
+}
+
+    .fpi-list::-webkit-scrollbar {
+        width: 4px;
+    }
+
+    .fpi-list::-webkit-scrollbar-thumb {
+        background: #e5dfd2;
+        border-radius: 99px;
+    }
+
+/* ── Items ── */
+.fpi-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+
+    .fpi-item:hover {
+        background: #faf8f2;
+    }
+
+.fpi-item--active {
+    background: #fdf8ee;
+}
+
+.fpi-item-flag {
+    font-size: 17px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.fpi-item-name {
+    font-size: 13px;
+    color: #1a1a1a;
+    flex: 1;
+}
+
+.fpi-item-code {
+    font-size: 12px;
+    color: #aaa;
+    font-variant-numeric: tabular-nums;
+    margin-left: auto;
+}
+
+.fpi-check {
+    flex-shrink: 0;
+    margin-left: 4px;
+}
+
+.fpi-empty {
+    padding: 16px;
+    text-align: center;
+    font-size: 13px;
+    color: #bbb;
+}

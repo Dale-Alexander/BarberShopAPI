@@ -1,0 +1,119 @@
+.user-form-modal {
+    background: #fff;
+    border-radius: 12px;
+    padding: 2rem;
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+    .user-form-modal h2 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        margin: 0;
+        color: #1a1a1a;
+    }
+
+    .user-form-modal p {
+        margin: 0;
+        font-size: 0.9rem;
+        color: #666;
+    }
+
+.user-form-modal-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+    .user-form-modal-field label {
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: #333;
+    }
+
+    .user-form-modal-field input {
+        padding: 0.65rem 0.85rem;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        font-size: 0.9rem;
+        outline: none;
+        transition: border-color 0.2s;
+    }
+
+        .user-form-modal-field input:focus {
+            border-color: #a0855b;
+        }
+
+.usre-form-optional {
+    font-size: 0.75rem;
+    color: #999;
+    font-weight: 400;
+}
+
+.user-form-required {
+    color: #e53e3e;
+}
+
+.user-form-error {
+    font-size: 0.78rem;
+    color: #e53e3e;
+}
+
+.user-form-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+}
+
+.user-form-btn-cancel {
+    padding: 0.6rem 1.25rem;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background: #fff;
+    color: #333;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+    .user-form-btn-cancel:hover {
+        background: #f5f5f5;
+    }
+
+.user-form-btn-confirm {
+    padding: 0.6rem 1.25rem;
+    border: none;
+    border-radius: 8px;
+    background: #1a1a1a;
+    color: #fff;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+    .user-form-modal-btn-confirm:hover {
+        background: #333;
+    }
+
+.user-form-modal-field select {
+    padding: 0.65rem 0.85rem;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    outline: none;
+    background: #fff;
+    cursor: pointer;
+    transition: border-color 0.2s;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.85rem center;
+}
+
+    .user-form-modal-field select:focus {
+        border-color: #a0855b;
+    }

@@ -1,0 +1,24 @@
+PaymentIntent
+Think of it like an order ticket at a restaurant. 
+When you tell the waiter what you want, they write it on a ticket and 
+give it a number. That ticket tracks everything about your order — what it is,
+how much it costs, and what stage it's at (pending, paid, failed). 
+A PaymentIntent is the same idea but for a payment. 
+You tell Stripe "I want to charge €20 in EUR via card" and Stripe creates 
+a record that tracks that payment from start to finish.
+It lives on Stripe's servers, not yours.
+
+ClientSecret
+When Stripe creates that PaymentIntent, it gives you the clientSecret:
+
+A clientSecret — a short-lived token you send to the frontend
+
+The clientSecret is essentially a claim ticket. It proves to 
+Stripe that your frontend is allowed to complete this specific
+PaymentIntent and no other. Your frontend passes it to Stripe's JS library
+like so:  await stripe.confirmCardPayment(clientSecret, {
+    payment_method: { card: elements.getElement(CardElement) }
+});
+```
+
+Stripe then knows exactly which PaymentIntent to charge against.
