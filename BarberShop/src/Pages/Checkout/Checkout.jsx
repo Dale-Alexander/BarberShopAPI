@@ -8,16 +8,28 @@ import ElementsWrapper from "./ElementsWrapper/ElementsWrapper.jsx";
 import PaymentForm from "./PaymentForm/PaymentForm";
 import LoadingSpinner from "../../Components/LoadingSpinner/LoadingSpinner";
 const Checkout = () => {
-    const [paymentMethod, setPaymentMethod] = useState("CASH");
     const { bookingId } = useParams();
+    const [paymentMethod, setPaymentMethod] = useState(
+        () => sessionStorage.getItem(`clientSecret_${bookingId}`) ? "CARD" : "CASH"
+    );
     const { data, loading, error } = useFetch(`/api/bookings/checkout/${bookingId}`, false);
     const [bookingDetails, setBookingDetails] = useState(null);
-    const [clientSecret, setClientSecret] = useState(null);
+    const [clientSecret, setClientSecret] = useState(
+        () => sessionStorage.getItem(`clientSecret_${bookingId}`) || null
+    );
     const navigate = useNavigate();
     const [fullName, setFullName] = useState("");
     const [phone, setPhone] = useState("");
-    //fullName and phone are declared here because iof they are declared in PaymentForm, then they will be reset when i click on the card paymentMethod(when clientSecret is generated)
+    const [email, setEmail] = useState("");
+    //fullName and phone are declared here because if they are declared in PaymentForm, then they will be reset when i click on the card paymentMethod(when clientSecret is generated)
 
+    useEffect(() => {
+        // Persisted so a refresh mid-payment resumes the same PaymentIntent instead of
+        // creating a new one every time (startCardFlow's `if (clientSecret) return clientSecret`
+        // guard only works against in-memory state, which a reload wipes out).
+        if (clientSecret) sessionStorage.setItem(`clientSecret_${bookingId}`, clientSecret);
+        else sessionStorage.removeItem(`clientSecret_${bookingId}`);
+    }, [clientSecret, bookingId]);
 
     useEffect(() => {
         if (error) {
@@ -59,7 +71,7 @@ const Checkout = () => {
             {/* MAIN */}
             <main className="checkout-main">
                     <Navlinks currentScreen="checkout" isEditMode={false} isAdminMode={false} bookingId={bookingId} />
-                    <PaymentForm phone={phone} setPhone={setPhone} fullName={fullName} setFullName={setFullName} bookingId={bookingId} bookingDetails={bookingDetails} clientSecret={clientSecret} setClientSecret={setClientSecret} paymentMethod={paymentMethod} setPaymentMethod={setPaymentMethod} />
+                    <PaymentForm email={email} setEmail={setEmail} phone={phone} setPhone={setPhone} fullName={fullName} setFullName={setFullName} bookingId={bookingId} bookingDetails={bookingDetails} clientSecret={clientSecret} setClientSecret={setClientSecret} paymentMethod={paymentMethod} setPaymentMethod={setPaymentMethod} />
                 </main>
             </div>
         </ElementsWrapper>

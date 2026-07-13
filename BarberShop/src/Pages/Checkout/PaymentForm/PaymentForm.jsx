@@ -8,21 +8,27 @@ import StripePaymentSection from "../StripePaymentSection/StripePaymentSection";
 import { BookingDetailsContext } from "../../../Context/BookingDetailsContext";
 import FancyPhoneInput from "../../../Components/FancyPhoneInput/FancyPhoneInput";
 import usePhone from "../../../Hooks/usePhone";
-const PaymentForm = ({ bookingId, bookingDetails, clientSecret, setClientSecret, paymentMethod, setPaymentMethod, phone, setPhone, fullName, setFullName }) => {
+const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, setClientSecret, paymentMethod, setPaymentMethod, phone, setPhone, fullName, setFullName }) => {
     const stripeRef = useRef(null);
     const [loadingPayment, setLoadingPayment] = useState(false);
     const { showToast } = useContext(ToastContext);
     const [hasClickedConfirm, setHasClickedConfirm] = useState(false);
     const navigate = useNavigate();
+    const [emailTouched, setEmailTouched] = useState(false);
     const { clearBooking } = useContext(BookingDetailsContext);
-    const {handlePhoneChange, isValid:isPhoneValid} = usePhone(phone);
+    const { handlePhoneChange, isValid: isPhoneValid } = usePhone(phone);
     useEffect(() => {
         console.log(clientSecret);
     }, [clientSecret]);
 
+    const isValidEmail = (value) => {
+        if (!value?.trim()) return false;
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+    }
 
     const isUserDetailsValid = () => {
         if (!fullName.trim()) return false;
+        if (!isValidEmail(email)) return false;
         if (!isPhoneValid()) return false;
         return true;
     };
@@ -44,6 +50,7 @@ const PaymentForm = ({ bookingId, bookingDetails, clientSecret, setClientSecret,
                 fullName,
                 phone,
                 bookingId,
+                email,
                 amount: bookingDetails?.price * 100
             }
             const { data } = await axios.post(`/api/bookings/payment-intent`, payload);
@@ -65,10 +72,12 @@ const PaymentForm = ({ bookingId, bookingDetails, clientSecret, setClientSecret,
                 fullName,
                 bookingId,
                 phone,
+                email,
                 amount: bookingDetails?.price
             });
             console.log("Booking confirmed", data);
             clearBooking();
+            setClientSecret(null);
             navigate(`/booking/success/${bookingId}`, { replace: true });
         }
         catch (err) {
@@ -86,14 +95,17 @@ const PaymentForm = ({ bookingId, bookingDetails, clientSecret, setClientSecret,
         }
         setHasClickedConfirm(true);
         const success = await stripeRef.current.confirmPayment();
-if (success) clearBooking();
-else setHasClickedConfirm(false);
+        if (success) {
+            clearBooking();
+            setClientSecret(null);
+        }
+        else setHasClickedConfirm(false);
     }
 
 
     const handleCardMethodSelected = async () => {
         if (!isUserDetailsValid()) {
-            showToast("Incorrect Inputs", "Please input a valid name and phone number");
+            showToast("Incorrect Inputs", "Please input a valid name and phone number and email address");
             return;
         }
         setPaymentMethod("CARD");
@@ -123,6 +135,20 @@ else setHasClickedConfirm(false);
                         <div className="checkout-field">
                             <label className="checkout-field__label">Phone Number</label>
                             <FancyPhoneInput value={phone} onChange={(val, iso2) => handlePhoneChange(val, iso2, setPhone)}/>
+                        </div>
+                        <div className="checkout-field">
+                            <label className="checkout-field__label">Email</label>
+                            <input
+                                value={email}
+                                onBlur={() => setEmailTouched(true)}
+                                onChange={(e) => setEmail(e.target.value)}
+                                className={`checkout-field__input ${emailTouched && !isValidEmail(email) ? "checkout-field__input--invalid" : ""}`}
+                                type="email"
+                                name="customerEmail"
+                                placeholder="john@example.com" />
+                            {emailTouched && !isValidEmail(email) && (
+                                <p className = "checkout-field__error">Please enter a valid email address</p>
+                            ) }
                         </div>
                     </div>
                 </div>
@@ -214,19 +240,19 @@ else setHasClickedConfirm(false);
                                 key: "Date",
                                 val: bookingDetails?.startDateTime
                                     ? new Date(bookingDetails.startDateTime).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })
-                                    : "—"
+                                    : "ï¿½"
                             },
                             {
                                 icon: <Clock size={16} />,
                                 key: "Time",
                                 val: bookingDetails?.startDateTime
                                     ? new Date(bookingDetails.startDateTime).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
-                                    : "—"
+                                    : "ï¿½"
                             },
                             {
                                 icon: <Timer size={16} />,
                                 key: "Duration",
-                                val: bookingDetails?.durationMin ? `${bookingDetails.durationMin} min` : "—"
+                                val: bookingDetails?.durationMin ? `${bookingDetails.durationMin} min` : "ï¿½"
                             },
                         ].map(({ icon, key, val }) => (
                             <div className="checkout-summary__row" key={key}>

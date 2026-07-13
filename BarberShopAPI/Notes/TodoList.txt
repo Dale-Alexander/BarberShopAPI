@@ -1,17 +1,10 @@
-﻿
-
-
-Fix the default values inside the BarberShopContext 
-Run a test with a cookie that lasts only 1 minute and then try to login. See if the cookie will be deleted or will still be there
-The Sidebar integrated together with the dashboard might need fixing
+﻿Run a test with a cookie that lasts only 1 minute and then try to login. See if the cookie will be deleted or will still be there
 
 notes about migrations and applicability of changes when changing from null to non-null but with default that isnt the case
 
 
-Check that all the combinations of the inputs work. Make sure the columns have a default value with appropriate maxlength values
-and make sure they have null/non-null appropriately
-
 Look at BarberController of old project and look how capitalize is used. It returns the duplicate field that was entered to the browser
+
 #What happens when a barber or an admin try to make a booking. 
 
 Check if i really truly need withCredentials:true in the interceptor since i am running a proxy
@@ -28,41 +21,72 @@ options.AddPolicy("AllowReactDev", policy =>
 });
 "
 
-
-
 Check if you the filtered index and not just a normal index.  see what happens when creating a barber, deleting it and creating 
-it with the same email and how that relates to the amount of people. 
+it with the same email and how that relates to the amount of people. I dont think you even have a statcard in the dashboard showing the amount of different people. 
 
-
-When getting bookings for date and time see whether you should put [Authorize] since
-the admin can access it for editing
-
-
- Those that have a filtered unique index in BarberShopContext.cs, check if only the active ones should be unique(some of them probably do). This means you have to add this:
- "AND [IsActive] = 1".
-
- When making a closure check if it conflicts with any existing bookings. 
- IF so tell the user what date the booking is and maybe what the booking is
-
+When making a closure check if it conflicts with any existing bookings. 
+If so tell the admin what date the booking is and maybe what the user's details are and maybe if he has an email, then send him an email saying, your booking was
+cancelled because the shop will be closing on that day. Regardless of whether he has an email or not, show the user's telephoone number incase the admin wants 
+to call him informing him on the matter. Most of this part is done and the booking's infor is sent back but the mob number and the email aren't sent from the backend,
+only his name and other information. Im not sure if this is done on the frontend but i dont think it is.
 
 
 
 Also when making creating a booking. Make sure you do this:
 catch (DbUpdateException ex) when (ex.InnerException?.Message.Contains("unique") == true)
 
-When cash payment is due, dont forget to change the payment status from pending to confirmed
 
-When sending the phone or anyother data for that matter, make sure it is well formatted on the backend
 
 when fetching a barber first to see if he exists or is active, select only the necessary columns you want because if you want to check the isActive status of the barber 
 when you have 100s and 1000s of bookings, you will be fetching all of the unnecessary columns which will take a lot of time so select only the barber Id and isActive column
-probably. Do the same for other stuff
+probably. Do the same for other stuff. This is probably true for update-booking and delete/:id in barbers controller
 
 When going to production you need to toggle off test mode for stripe and then the
 live keys will be revealed pk_live sk_live... . You then need to change your env variables
 
 Also check if keys expire after 90 days
 
-
-In DatesController, see if ValidationException actually sends messages to the frontend
 Add some validation on names in Services and maybe other attributes which need validation in all controllers
+
+When confirming the booking, make sure the form has an email form to fill in
+and next to it say something like "A reminder will be sent by email 2 hours before appointment"
+
+IDempotencyCheck when sending a reminder and maybe even when sending a confirmation email
+To do this add another field to the booking schema named ReminderSentAt
+and in the email service check if it is not null. If this is the case then return
+
+
+In production change the from email you use when sending emails, change it to the 
+custom domain that you will have
+
+
+Maybe a post-visit follow-up email ("thanks for visiting, leave a review")
+
+Maybe loyalty tracking(10th cut free)
+
+
+Add a mark as paid button to cash bookings in the dashboard
+
+Decide whether bookings created by the admin can be marked as paid since their amount is set to null
+
+
+Dpnt forget that the githib repo is private and not public
+
+When you have the admin's email and password, re run dotnet run -- --seed-admin in the terminal with the new values in the .env file
+
+
+
+Check for Strip exceptions and general exceptions in webhoook, confirm-cash, DatesController and the BookingCanceller
+
+From Claude: "- Known caveat (unchanged from the webhook discussion): if a Stripe refund succeeds but the DB write then fails, that one booking needs manual follow-up — logged, money never at risk."
+
+Implement the closure/booking collision on the frontend. When making a closure, if the closure conflicts with some bookings, return those bookings(already done
+in the Dates controller) and ask the user if he is sure he wants to create a closure. If he clicks yes, then those bookings are cancelled. Everything is done on
+the backend, the frontend is what needs work. 
+
+If a booking extends beyond the closing hour, is it allowed. 
+
+If a booking ends at 10:00, and a closure starts at that time, is that considered a conflict? Does it take into consideration the buffer after the booking? 
+
+Hangfire not initialized in Program.cs and encoding issues in FancyPhoneInput and somewhere else.
+

@@ -43,6 +43,8 @@ namespace BarberShopAPI.Models
         public virtual Payment? Payment { get; set; }
         public virtual ICollection<BookingService> Services { get; set; }
         public int DurationMin { get; set; }
+
+        public string? ReminderJobId { get; set; }
         /* the reason why it is not an IQueryable is because IQueryable
          * is for queries, not storage. */
 
@@ -55,8 +57,14 @@ namespace BarberShopAPI.Models
         Whenever you have ICollection<Model> that means it is a one-many 
         relationship
          */
-        public DateTime CreatedAt { get; set; } = DateTime.Now;
-        public DateTime UpdatedAt { get; set; } = DateTime.Now;
+
+        public DateTime? ReminderSentAt { get; set; }
+        public DateTime? ConfirmationSentAt { get; set; }
+
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+        public string? ContactEmail { get; set; }
+        public string? StripePaymentIntentId { get; set; }
 
         /* How to know its a navigation property: 
          *DataType is another model class. For example: Payment, Barber etc

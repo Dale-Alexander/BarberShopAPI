@@ -15,6 +15,6 @@ namespace BarberShopAPI.Models
         [ForeignKey("ServiceId")]
         public virtual Service Service { get; set; }
         public BookingServiceStatus Status { get; set; } = BookingServiceStatus.ACTIVE;
-        public DateTime UpdatedAt { get; set; } = DateTime.Now;
+        public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     }
 }

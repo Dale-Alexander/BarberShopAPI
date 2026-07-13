@@ -8,7 +8,10 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 using Microsoft.IdentityModel.Tokens;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Authorization;
+using Hangfire;
+using BarberShopAPI.Services;
 
 namespace BarberShopAPI.Controllers
 {
@@ -17,9 +20,11 @@ namespace BarberShopAPI.Controllers
     public class authController : ControllerBase
     {
         private readonly BarberShopContext _context;
-        public authController(BarberShopContext context)
+        private readonly IEmailService _emailService;
+        public authController(BarberShopContext context, IEmailService emailService)
         {
             _context = context;
+            _emailService = emailService;
         }
         [HttpPost("login")]
         public async Task <IActionResult> Login([FromBody] LoginEmailPasswordViewModel request)
@@ -93,7 +98,7 @@ namespace BarberShopAPI.Controllers
                     It only runs on subsequent requests where the client 
                     includes the JWT cookie and that is where HTTPContext.User is
                     set*/
-                    Expires = DateTime.Now.AddDays(1),//stays logged in for 1 day
+                    Expires = DateTime.UtcNow.AddDays(1),//stays logged in for 1 day
                     SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
                 };
 
@@ -124,7 +129,7 @@ namespace BarberShopAPI.Controllers
                     HttpOnly = true,
                     Secure = false,
                     SameSite = SameSiteMode.Lax,
-                    Expires = DateTime.Now.AddDays(1)
+                    Expires = DateTime.UtcNow.AddDays(1)
                 });
                 Console.WriteLine("Login successful");
                 return Ok(new
@@ -207,87 +212,92 @@ namespace BarberShopAPI.Controllers
             return Ok(new { message = "Logged out successfully" });
         }
 
+        /* Forgot-password step 1: request a reset link. Deliberately has no [Authorize] -
+         * whoever calls this has, by definition, lost access to their session. Security
+         * doesn't come from being logged in, it comes from possessing the token that's
+         * about to be emailed: an attacker who only knows the target's email address has
+         * nothing to submit to ResetPassword below, since the raw token never touches
+         * this response, only the user's actual inbox (see EmailService.
+         * sendPasswordResetEmailAsync). This replaced an earlier version of this endpoint
+         * that changed the password directly from just an email with no verification at
+         * all - a real account-takeover hole. */
         [HttpPost("forgot-password")]
-        public async Task<IActionResult> CreateNewPassword([FromBody] NewPasswordViewModel request)
+        public async Task<IActionResult> RequestPasswordReset([FromBody] RequestPasswordResetViewModel request)
         {
             if (!ModelState.IsValid) return BadRequest(ModelState);
             try
             {
                 var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == request.Email);
-                if (user == null)
+                if (user != null && (user.Role.ToString() == "ADMIN" || user.Role.ToString() == "BARBER"))
                 {
-                    return NotFound(new { message = "User with that email was not found" });
+                    var rawToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+                    user.PasswordResetTokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawToken)));
+                    user.PasswordResetTokenExpiresAt = DateTime.UtcNow.AddMinutes(30);
+                    await _context.SaveChangesAsync();
+
+                    BackgroundJob.Enqueue<IEmailService>(service => service.sendPasswordResetEmailAsync(user.Id, rawToken));
                 }
-                if (user.Role.ToString() != "ADMIN" && user.Role.ToString() != "BARBER")
-                {
-                    return StatusCode(403, new { message = "Only admin and barbers can log in" });
-                }
-                if (string.IsNullOrEmpty(request.newPassword) || string.IsNullOrEmpty(request.confirmNewPassword))
-                {
-                    return StatusCode(500, new { message = "Password not set" });
-                }
-                if (request.confirmNewPassword != request.newPassword)
-                {
-                    return StatusCode(500, new { message = "Both inputs need to be the same" });
-                }
-                if (BCrypt.Net.BCrypt.Verify(request.newPassword, user.Password))
-                {
-                    return StatusCode(400, new { message = "This password is already in use" });
-                }
-                user.Password = BCrypt.Net.BCrypt.HashPassword(request.newPassword);
-                await _context.SaveChangesAsync();
 
-                var TokenHandler = new JwtSecurityTokenHandler();
-
-                var key = Encoding.ASCII.GetBytes(Environment.GetEnvironmentVariable("JWT_SECRET"));
-                /* _config["JwtSecret"] is a string from appsettings.json
-                 *JWT signing requires bytes, not strings. This is the private key used
-                 *to sign the token and verify the token in the future
-                 */
-                var tokenDescriptor = new SecurityTokenDescriptor
-                /* Token descriptor describes what the token should look like
-                 *Subject: Wraps the claims into a ClaimsIdentity. This becomes
-                 *HttpContext.User after validation
-                 *Expires: Token expiry date
-                 *SigningCredentials: This is where the securty happens:
-                 *SymmetricSecurtiyKey(key): Same key signs and verifies,
-                 *Fast and Standard For APIs
-                 *HmacSha256Signature: Strong Hashing algorithm,
-                 *Industry default
-                 */
-                {
-                    Subject = new ClaimsIdentity(new[]
-                    {
-                    new Claim("id", user.Id.ToString()),
-                    new Claim(ClaimTypes.Role, user.Role.ToString()),
-                    new Claim("tokenVersion", user.TokenVersion.ToString())
-                }),
-                    Expires = DateTime.Now.AddDays(1),//stays logged in for 1 day
-                    SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
-                };
-
-                var token = TokenHandler.CreateToken(tokenDescriptor);
-
-                var jwt = TokenHandler.WriteToken(token);
-
-
-                Response.Cookies.Append("jwt", jwt, new CookieOptions
-                {
-                    HttpOnly = true,
-                    Secure = false,
-                    SameSite = SameSiteMode.Lax,
-                    Expires = DateTime.Now.AddDays(1)
-                });
-
-                return Ok(new { message = "Updated password successfully", user.Id, user.Email, user.Role});
+                // Always return the same generic message, whether or not the email
+                // exists or belongs to an admin/barber - avoids leaking which emails
+                // have accounts.
+                return Ok(new { message = "If an account with that email exists, a password reset link has been sent." });
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
-                Console.WriteLine($"Login exception: {ex.Message}");
+                Console.WriteLine($"RequestPasswordReset exception: {ex.Message}");
                 return StatusCode(500, new { message = ex.Message });
             }
         }
 
+        /* Forgot-password step 2: actually change the password, using the token from the
+         * emailed link instead of a session. Also has no [Authorize] for the same reason
+         * as RequestPasswordReset above - the token itself is the proof of identity. */
+        [HttpPost("reset-password")]
+        public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordViewModel request)
+        {
+            if (!ModelState.IsValid) return BadRequest(ModelState);
+            try
+            {
+                if (request.NewPassword != request.ConfirmNewPassword)
+                {
+                    return BadRequest(new { message = "Both inputs need to be the same" });
+                }
+
+                // Hash whatever token was submitted and look up whoever has that exact
+                // hash on file (never trust a user id/email from the request body here -
+                // the token is the only thing that ties this request to an account).
+                var tokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(request.Token)));
+                var user = await _context.Users.FirstOrDefaultAsync(u => u.PasswordResetTokenHash == tokenHash);
+
+                if (user == null || user.PasswordResetTokenExpiresAt == null || user.PasswordResetTokenExpiresAt < DateTime.UtcNow)
+                {
+                    return BadRequest(new { message = "This reset link is invalid or has expired" });
+                }
+
+                user.Password = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+                // Nulling both fields makes the token single-use: it can't be replayed
+                // once a reset has gone through, and the next PasswordResetTokenHash
+                // lookup above will simply find no match for it.
+                user.PasswordResetTokenHash = null;
+                user.PasswordResetTokenExpiresAt = null;
+                // Bumping TokenVersion invalidates every JWT issued under the old
+                // password (TokenVersionMiddleware compares this against the token's
+                // claim on every authenticated request) - same reasoning as
+                // BarbersController's deactivate/reactivate flow. No new JWT is issued
+                // here on purpose: the user goes back to /login and proves they actually
+                // know the new password, rather than this endpoint silently trusting
+                // that the reset request itself was legitimate.
+                user.TokenVersion = (user.TokenVersion ?? 0) + 1;
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Password updated successfully" });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"ResetPassword exception: {ex.Message}");
+                return StatusCode(500, new { message = ex.Message });
+            }
         }
     }
-
+}

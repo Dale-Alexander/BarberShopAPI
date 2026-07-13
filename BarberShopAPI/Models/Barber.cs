@@ -14,8 +14,8 @@ namespace BarberShopAPI.Models
         public string? Bio { get; set; }
         public string? ImageUrl { get; set; }
         public virtual ICollection<Booking> Bookings { get; set; }
-        public DateTime CreatedAt { get; set; } = DateTime.Now;
-        public DateTime UpdatedAt { get; set; } = DateTime.Now;
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
         public bool isActive { get; set; } = true;
         public ICollection<ShopClosure>? Closures { get; set; }
     }

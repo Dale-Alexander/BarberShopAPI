@@ -18,7 +18,7 @@ namespace BarberShopAPI.Models
         public PaymentStatus Status {get;set;} = PaymentStatus.PENDING;
         public string? StripePaymentIntentId { get; set; }
         public DateTime? PaidAt { get; set; }
-        public DateTime CreatedAt { get; set; } = DateTime.Now;
-        public DateTime UpdatedAt { get; set; } = DateTime.Now;
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     }
 }

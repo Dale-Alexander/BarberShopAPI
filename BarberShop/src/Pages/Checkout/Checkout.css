@@ -170,6 +170,16 @@
         border-color: #c9a84c;
     }
 
+.checkout-field__input--invalid {
+    border-color: #d64545;
+}
+
+.checkout-field__error {
+    font-size: 11px;
+    color: #d64545;
+    margin-top: 4px;
+}
+
 .checkout-field__input--mono {
     font-family: monospace;
     letter-spacing: 0.1em;

@@ -1,6 +1,7 @@
 using BarberShopAPI.Data;
 using BarberShopAPI.ViewModels;
 using BarberShopAPI.Models;
+using BarberShopAPI.Models.Enums;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -9,6 +10,8 @@ using Microsoft.EntityFrameworkCore;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using System.Security.Claims;
+using BarberShopAPI.Common;
+using Stripe;
 namespace BarberShopAPI.Controllers
 {
     [Route("api/[controller]")]
@@ -36,6 +39,45 @@ namespace BarberShopAPI.Controllers
                 }
                 await ValidateClosureAsync(newClosure);
 
+                // Find bookings this closure would land on. A shop-wide closure (BarberId == null) hits
+                // every barber's bookings; a barber closure only that barber's. We express the closure as a
+                // [start, end) DateTime window and use the same interval-overlap test the booking-create path
+                // uses, so the two directions agree on what "conflicts" means.
+                var newEndDate = newClosure.EndDate ?? newClosure.StartDate;
+                var closureStart = newClosure.IsFullDay
+                    ? newClosure.StartDate.ToDateTime(TimeOnly.MinValue)
+                    : newClosure.StartDate.ToDateTime(newClosure.StartTime.Value);
+                var closureEnd = newClosure.IsFullDay
+                    ? newEndDate.AddDays(1).ToDateTime(TimeOnly.MinValue)
+                    : newClosure.StartDate.ToDateTime(newClosure.EndTime.Value);
+
+                var conflicts = await _context.Bookings
+                    .Include(b => b.User)
+                    .Where(b => b.Status != BookingStatus.CANCELLED &&
+                                (newClosure.BarberId == null || b.BarberId == newClosure.BarberId) &&
+                                b.StartDateTime < closureEnd &&
+                                b.StartDateTime.AddMinutes(b.DurationMin) > closureStart)
+                    .ToListAsync();
+
+                // Soft warn: don't create the closure yet - hand the admin the conflicting bookings so they
+                // can decide. They re-submit with ConfirmCancelBookings = true to go ahead.
+                if (conflicts.Count > 0 && !newClosure.ConfirmCancelBookings)
+                {
+                    return Conflict(new
+                    {
+                        requiresConfirmation = true,
+                        message = "This closure overlaps existing bookings. Confirm to cancel and refund them.",
+                        conflicts = conflicts.Select(b => new
+                        {
+                            b.Id,
+                            Date = b.StartDateTime.ToString("dddd, MMMM d, yyyy"),
+                            Time = b.StartDateTime.ToString("h:mm tt"),
+                            Customer = b.User != null ? $"{b.User.Name} {b.User.Surname}".Trim() : null,
+                            Status = b.Status.ToString()
+                        })
+                    });
+                }
+
                 var closure = new ShopClosure
                 {
                     StartDate = newClosure.StartDate,
@@ -49,6 +91,12 @@ namespace BarberShopAPI.Controllers
                 /* The reason we do this is because the database only accepts the type "ShopClosure" and not "ShopClosureViewModel" */
                 _context.ShopClosures.Add(closure);
                 await _context.SaveChangesAsync();
+
+                // Closure now exists, so the slot is blocked against NEW bookings. Clear out the ones that
+                // were already on it. We create the closure first so that even if a cancellation below fails,
+                // the slot stays closed and the failure is isolated to that one booking (logged for follow-up).
+                await CancelConflictingBookingsAsync(conflicts);
+
                 return Ok(new GetBarberShopClosuresViewModel
                 {
                     Id = closure.Id,
@@ -68,6 +116,46 @@ namespace BarberShopAPI.Controllers
             {
                 Console.WriteLine(ex.Message);
                 return StatusCode(500, new { message = "Unexpected server error occurred" });
+            }
+        }
+
+        /* Cancels the bookings a just-created closure landed on. COMPLETED (paid) bookings go through the
+         * shared BookingCanceller (refund + closure email). PENDING bookings are different: their payment
+         * is still in flight, so instead of refunding we try to void the in-flight PaymentIntent. If Stripe
+         * won't let us (the payment is already succeeding), we leave the booking PENDING and rely on the
+         * webhook's closure guard to refund + cancel it when the payment lands - it can never be confirmed
+         * onto the now-closed slot either way. Failures are logged, not thrown, so one bad booking doesn't
+         * undo the closure or block the others.*/
+        private async Task CancelConflictingBookingsAsync(List<Booking> conflicts)
+        {
+            foreach (var booking in conflicts)
+            {
+                if (booking.Status == BookingStatus.PENDING)
+                {
+                    if (!string.IsNullOrWhiteSpace(booking.StripePaymentIntentId))
+                    {
+                        try
+                        {
+                            await new PaymentIntentService().CancelAsync(booking.StripePaymentIntentId);
+                        }
+                        catch (StripeException ex)
+                        {
+                            Console.WriteLine($"Booking {booking.Id}: couldn't cancel PaymentIntent for a pending closure-conflict, leaving it for the webhook guard: {ex.Message}");
+                            continue;
+                        }
+                    }
+                    // No reminder job to delete: those are only scheduled at confirmation (COMPLETED),
+                    // so a PENDING booking never has one.
+                    booking.Status = BookingStatus.CANCELLED;
+                    await _context.SaveChangesAsync();
+                    // No email: a pending booking never got a confirmation, so there's nothing to walk back.
+                }
+                else
+                {
+                    var outcome = await BookingCanceller.CancelAsync(_context, booking.Id, dueToClosure: true);
+                    if (outcome != BookingCanceller.Outcome.Cancelled)
+                        Console.WriteLine($"Booking {booking.Id}: closure cancellation returned {outcome}, needs manual follow-up.");
+                }
             }
         }
 
@@ -147,7 +235,7 @@ namespace BarberShopAPI.Controllers
         [HttpGet("admin/closures")]
         public async Task<IActionResult> GetAdminClosures()
         {
-            var todayDate = DateOnly.FromDateTime(DateTime.Now);
+            var todayDate = ShopClock.Today;
             try
             {
                 var shopClosures = await _context.ShopClosures.Where(c => c.StartDate >= todayDate && c.IsActive == true)
@@ -175,7 +263,7 @@ namespace BarberShopAPI.Controllers
         [HttpGet("barber/{barberId}/closures")]
         public async Task<IActionResult> GetBarberClosures(int barberId)
         {
-            var todayDate = DateOnly.FromDateTime(DateTime.Now);
+            var todayDate = ShopClock.Today;
             try
             {
                 var shopClosures = await _context.ShopClosures.Where(c => c.IsActive == true && c.StartDate >= todayDate && c.BarberId == barberId)
@@ -232,10 +320,10 @@ $"{(existing.IsFullDay ? "full day" : $"{existing.StartTime}-{existing.EndTime}"
 
 ---
 
-### Example 1 — Partial overlapping partial (shop-wide)
+### Example 1 ï¿½ Partial overlapping partial (shop-wide)
 ```
-Existing : BarberId = null | 09:00–12:00 | Mar 20
-New      : BarberId = null | 11:00–14:00 | Mar 20
+Existing : BarberId = null | 09:00ï¿½12:00 | Mar 20
+New      : BarberId = null | 11:00ï¿½14:00 | Mar 20
 ```
 ```
 "The closure on 2026-03-20 overlaps with an existing partial-day closure (shop-wide, 09:00-12:00)."
@@ -243,9 +331,9 @@ New      : BarberId = null | 11:00–14:00 | Mar 20
 
 ---
 
-### Example 2 — New full-day over existing partial (shop-wide)
+### Example 2 ï¿½ New full-day over existing partial (shop-wide)
 ```
-Existing : BarberId = null | 09:00–12:00 | Mar 20
+Existing : BarberId = null | 09:00ï¿½12:00 | Mar 20
 New      : BarberId = null | Full-day    | Mar 20
 ```
 ```
@@ -254,7 +342,7 @@ New      : BarberId = null | Full-day    | Mar 20
 
 ---
 
-### Example 3 — Full-day already exists (barber-specific)
+### Example 3 ï¿½ Full-day already exists (barber-specific)
 ```
 Existing : BarberId = 3 | Full-day | Mar 20
 New      : BarberId = 3 | anything | Mar 20
@@ -265,10 +353,10 @@ New      : BarberId = 3 | anything | Mar 20
 
 ---
 
-### Example 4 — Partial overlapping partial (barber-specific)
+### Example 4 ï¿½ Partial overlapping partial (barber-specific)
 ```
-Existing : BarberId = 2 | 14:00–17:00 | Mar 20
-New      : BarberId = 2 | 16:00–18:00 | Mar 20
+Existing : BarberId = 2 | 14:00ï¿½17:00 | Mar 20
+New      : BarberId = 2 | 16:00ï¿½18:00 | Mar 20
 ```
 ```
 "The closure on 2026-03-20 overlaps with an existing partial-day closure (barber 2, 14:00-17:00)." */

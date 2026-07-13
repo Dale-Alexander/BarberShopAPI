@@ -4,6 +4,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BarberShopAPI.Models.Enums;
 using Stripe;
+using Hangfire;
+using BarberShopAPI.Services;
+using BarberShopAPI.Common;
 
 
 namespace BarberShopAPI.Controllers
@@ -70,13 +73,14 @@ namespace BarberShopAPI.Controllers
                 return BadRequest($"Webhook error, {ex.Message}");
             }
             var paymentIntent = stripeEvent.Data.Object as PaymentIntent;
-            if (paymentIntent == null) return BadRequest(new { message = "Invalid event data" });
+            if (paymentIntent == null) return Ok(new { message = "Invalid event data" });
             //you can change the above to Ok("Event ignored"); That is for when a charge object gets received and not a payment intent. PaymentIntent and charge objects gets
             //sent every time you make a payment. You can do Ok(...) so you stop seeing it as an error everytime you recieve an object(which is every time).
             var metadata = paymentIntent.Metadata ?? new Dictionary<string, string>();
             if (!metadata.TryGetValue("BookingId", out var bookingIdStr) ||
                 !metadata.TryGetValue("Phone", out var phone) ||
                 !metadata.TryGetValue("FullName", out var fullName) ||
+                !metadata.TryGetValue("Email", out var email) ||
                 !int.TryParse(bookingIdStr, out var bookingId))
 
             /* stripeEvent.Data.Object is typed as a generic object because a Stripe Event could
@@ -95,57 +99,14 @@ namespace BarberShopAPI.Controllers
             Remember that the metadata were all sent as string in a string dictionary in startbookingcardflow. */
             {
                 Console.WriteLine("Missing required metadata");
-                return BadRequest(new { message = "Missing metadata" });
-                /* so the whole block is saying - if any of these four things are missing or invalid, return
+                return Ok(new { message = "Missing metadata" });
+                /* so the whole block is saying - if any of these five things are missing or invalid, return
                  * a 400 and stop processing*/
             }
             try
             {
                 var booking = await _context.Bookings.FindAsync(bookingId);
-                if (booking == null) return BadRequest(new { message = "Booking not found" });
-                if (booking.UserId == null)
-                /* this if statement might seem unnecessary but one case
-                 * worth keeping in mind is Stripe Retries. If your server
-                 returns a 500, Stripe will resend the webhook and hit this code
-                again. By that point the user may already exist(found by phone) so 
-                FirstOrDefaultAsync() handles that safely. The booking however might also
-                already be linked and that is where this if statement comes in because if 
-                thats the case, then you avoid having to write the following again
-                "booking.UserId = user.Id;
-                await _context.SaveChangesAsync();"
-                */
-                {
-                    var user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == phone);
-                    if (user == null)
-                    {
-                        var nameParts = fullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                        if(nameParts.Length == 0)
-                        {
-                            Console.WriteLine("Invalid fullName in metadata");
-                            return BadRequest(new { message = "Invalid metadata" });
-                        }
-                        var firstName = nameParts[0];
-                        var lastName = nameParts.Length > 1 ? string.Join(" ", nameParts.Skip(1)) : null;
-                        user = new User
-                        {
-                            Name = firstName,
-                            Surname = lastName,
-                            Phone = phone
-                        };
-                        _context.Users.Add(user);
-                        await _context.SaveChangesAsync();
-                        Console.WriteLine($"Created new user: {user.Id}");
-                    }
-                    booking.UserId = user.Id;
-                    await _context.SaveChangesAsync();
-                    Console.WriteLine($"Linked booking {bookingId} to user {user.Id}");
-                }
-                else
-                {
-                    Console.WriteLine($"Booking already linked to user, skipping: {bookingId}");
-                }
-
-
+                if (booking == null) return Ok(new { message = "Booking not found" });
 
                 switch (stripeEvent.Type)
                 {
@@ -173,10 +134,135 @@ namespace BarberShopAPI.Controllers
                                 return Ok(new { message = "Booking already paid" });
                             }
 
+                            // Only reachable once we know this specific PaymentIntent was never recorded before
+                            // and this booking has no completed payment yet. If the booking still isn't PENDING
+                            // at this point, it means it expired (or was completed some other way, e.g. cash)
+                            // while this PaymentIntent was still alive - most likely a stray PaymentIntent from
+                            // an earlier page load/refresh that the cron job's expiry cancel never caught up with.
+                            // The card was genuinely charged, so this needs a manual refund/follow-up.
+                            if (booking.Status != BookingStatus.PENDING)
+                            {
+                                Console.WriteLine($"Booking {bookingId} is no longer pending (status: {booking.Status}), ignoring webhook. Payment intent {paymentIntent.Id} was charged but this booking can't be confirmed - needs a refund/manual follow-up.");
+                                return Ok(new { message = "Booking can no longer be confirmed" });
+                            }
+
+                            //This slot is for when the admin creates a closure between the PENDING -> COMPLETED stage of a booking
+                            // A shop closure can be created for this slot after the customer started paying.
+                            // PENDING -> COMPLETED must never happen on a closed slot, so we re-check closures
+                            // here at the moment of confirmation - this is the point that actually resolves the
+                            // race, no matter which happened first. The status guards above run first so this only
+                            // ever fires on a genuine, first-time, still-pending confirmation (never a Stripe retry).
+                            // The card has already been charged, so we refund it, record the money in-and-out, and
+                            // cancel instead of confirming. Same query the booking-create paths use to block new bookings.
+                            var appointmentDate = DateOnly.FromDateTime(booking.StartDateTime);
+                            var appointmentTime = TimeOnly.FromDateTime(booking.StartDateTime);
+                            var endTime = TimeOnly.FromDateTime(booking.StartDateTime.AddMinutes(booking.DurationMin));
+                            var closure = await _context.ShopClosures.FirstOrDefaultAsync(s =>
+                                s.IsActive == true && (s.BarberId == null || s.BarberId == booking.BarberId) &&
+                                ((s.EndDate == null && s.StartDate == appointmentDate) ||
+                                 (s.EndDate != null && s.StartDate <= appointmentDate && s.EndDate >= appointmentDate)) &&
+                                (s.IsFullDay || (s.StartTime < endTime && s.EndTime > appointmentTime)));
+                            if (closure != null)
+                            {
+                                // Refund first, outside the DB transaction: cancelling before the money is
+                                // confirmed back would risk the "booking dead but money kept" state. The
+                                // idempotency key (keyed to the PaymentIntent) means a Stripe retry after a
+                                // failed DB write below replays the same refund as a success instead of
+                                // refunding twice - so the retry can get past this and finish recording the
+                                // cancellation it couldn't complete last time.
+                                try
+                                {
+                                    var refundService = new RefundService();
+                                    await refundService.CreateAsync(new RefundCreateOptions { PaymentIntent = paymentIntent.Id },
+                                        new RequestOptions { IdempotencyKey = $"refund-{paymentIntent.Id}" });
+                                }
+                                catch (StripeException ex) when (ex.StripeError?.Code == "charge_already_refunded")
+                                {
+                                    // Already refunded on a previous attempt (whose DB write failed) or after the
+                                    // 24h idempotency window - nothing left to refund, so fall through and record
+                                    // the cancellation rather than looping on a refund that can't happen again.
+                                    Console.WriteLine($"Booking {bookingId}: PaymentIntent {paymentIntent.Id} already refunded, proceeding to cancel.");
+                                }
+                                catch (StripeException ex)
+                                {
+                                    Console.WriteLine($"Booking {bookingId} fell on a closure but the refund failed for PaymentIntent {paymentIntent.Id}: {ex.Message}. Needs manual refund/follow-up.");
+                                    return StatusCode(500, "Refund failed");
+                                }
+
+                                await using var closureTx = await _context.Database.BeginTransactionAsync();
+                                try
+                                {
+                                    // Record the charge-and-refund so there's a financial trail, the closure email
+                                    // knows a refund happened (it checks Payment.Status == REFUNDED), and Stripe's
+                                    // retry short-circuits on the existingPayment guard above instead of re-refunding.
+                                    _context.Payments.Add(new Payment
+                                    {
+                                        BookingId = bookingId,
+                                        StripePaymentIntentId = paymentIntent.Id,
+                                        Amount = amountReceived / 100m,
+                                        Status = PaymentStatus.REFUNDED,
+                                        Method = Models.Enums.PaymentMethod.CARD,
+                                        PaidAt = DateTime.UtcNow
+                                    });
+                                    booking.Status = BookingStatus.CANCELLED;
+                                    await _context.SaveChangesAsync();
+                                    await closureTx.CommitAsync();
+                                }
+                                catch (Exception ex)
+                                {
+                                    await closureTx.RollbackAsync();
+                                    Console.WriteLine($"Error cancelling closure-conflicting booking {bookingId} after refund: {ex.Message}");
+                                    return StatusCode(500, "Server error");
+                                }
+
+                                BackgroundJob.Enqueue<IEmailService>(service => service.sendBookingCancelledDueToClosureEmailAsync(bookingId));
+                                /* The reason we send an email is because Stripe is the caller of this endpoint not the customer, meaning that our 
+                                 * responses get seen by Stripe not the customer, therefore the only way we can notify the person is through email. 
+                                 On the other hand in /confirm-cash, we just send a response because that is sufficient enough to inform the user what 
+                                happened.*/
+                                return Ok(new { message = "Slot was closed after payment - refunded and cancelled" });
+                            }
 
                             await using var transaction = await _context.Database.BeginTransactionAsync();
                             try
                             {
+                                if (booking.UserId == null)
+                                /* this if statement might seem unnecessary but one case
+                                 * worth keeping in mind is Stripe Retries. If your server
+                                 returns a 500, Stripe will resend the webhook and hit this code
+                                again. By that point the user may already exist(found by phone) so 
+                                FirstOrDefaultAsync() handles that safely. The booking however might also
+                                already be linked and that is where this if statement comes in because if 
+                                thats the case, then you avoid having to write the following again
+                                "booking.User = user;
+                                await _context.SaveChangesAsync();"
+                                */
+                                {
+                                    var user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == phone);
+                                    if (user == null)
+                                    {
+                                        var nameParts = fullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                                        if (nameParts.Length == 0)
+                                        {
+                                            Console.WriteLine("Invalid fullName in metadata");
+                                            await transaction.RollbackAsync();
+                                            return Ok(new { message = "Invalid metadata" });
+                                        }
+                                        var firstName = nameParts[0];
+                                        var lastName = nameParts.Length > 1 ? string.Join(" ", nameParts.Skip(1)) : null;
+                                        user = new User
+                                        {
+                                            Name = firstName,
+                                            Surname = lastName,
+                                            Phone = phone
+                                        };
+                                        _context.Users.Add(user);
+                                        Console.WriteLine($"Created new user");
+                                    }
+                                    booking.User = user;
+                                    Console.WriteLine($"Linked booking {bookingId} to user ");
+                                }
+                                booking.ContactEmail = email;
                                 _context.Payments.Add(new Payment
                                 {
                                     BookingId = bookingId,
@@ -184,13 +270,21 @@ namespace BarberShopAPI.Controllers
                                     Amount = amountReceived / 100m,//the m suffix makies it a decimal division instead of integer division meaning it doesnt get truncated
                                     Status = PaymentStatus.COMPLETED,
                                     Method = Models.Enums.PaymentMethod.CARD,//PaymentMethod conflicted with Stripe's PaymentMethod
-                                    PaidAt = DateTime.Now
+                                    PaidAt = DateTime.UtcNow
                                 });
                                 booking.Status = BookingStatus.COMPLETED;
+
+                                var reminderTime = booking.StartDateTime.AddHours(-2);
+                                var delay = ShopClock.ToUtc(reminderTime) - DateTime.UtcNow;
+                                if(delay > TimeSpan.Zero)
+                                {
+                                    var jobId = BackgroundJob.Schedule<IEmailService>(service => service.sendBookingReminderEmailAsync(bookingId), delay);
+                                    booking.ReminderJobId = jobId;
+                                }
                                 await _context.SaveChangesAsync();
                                 await transaction.CommitAsync();
                                 Console.WriteLine($"Payment succeeded, booking updated:{bookingId}");
-                                return Ok("Payment intent succeeded");
+                                
                             }
                             catch (DbUpdateException ex)
                             {
@@ -204,6 +298,8 @@ namespace BarberShopAPI.Controllers
                                 Console.WriteLine($"Unexpected error during payment processing:{ex.Message}");
                                 return StatusCode(500, "Server error");
                             }
+                            BackgroundJob.Enqueue<IEmailService>(service => service.sendBookingConfirmationEmailAsync(bookingId));
+                            return Ok("Payment intent succeeded");
                         }
                         catch (Exception ex)
                         {
@@ -220,6 +316,35 @@ namespace BarberShopAPI.Controllers
                 Console.WriteLine($"Failed to link booking to user:{ex.Message}");
                 return StatusCode(500, "Server error");
             }
+
+            /* The reason Schedule is inside the transaction and Enqueue is not is because
+             * if you want to delete the booking later on, you need to jobID to delete it. So the jobID and
+             * the booking must be consistent. Lets say Schedule is moved outide the transaction
+             var jobId = BackgroundJob.Schedule<IEmailService>(..., delay);
+booking.ReminderJobId = jobId;
+await _context.SaveChangesAsync(); 
+            Now consider failure modes: 
+            Transaction commits -> Schedule runs, creates job -> Second SaveChangesAsync fails
+            Result: Hangire has a job, but the booking doesnt know about it. Orphan job. Cant cancel it later
+            Or:
+            Transaction commits -> Schedule throws
+            Result: Booking is confirmed but no reminder scheduled and customer may miss appointment
+
+            But wait, Hangire's job cant actually be rolled back - it's in its own storage. So if the transaction rolls back after Schedule succeeded, you'd have
+            an orphan job.
+            This is a real edge case, but it's much smaller than the alternative.
+            The window where the job would be created but the transaction fails is tiny(milliseconds), whereas the
+            "second SaveChanges fails" window in the alternative is larger. Plus my defensive check in the 
+            email service(if booking == null -> return) handles the orphan job, no booking found, silent skip.
+
+            Enqueue: This jobId isnt stored anywhere in the booking. You dont care what it is. 
+            You'll never need to cancel it, never need to reference it. It's fire and forget
+            So there's no reason to include this in the transaction. Doing so would only make the transaction longer 
+            for no benefit. What if Enqueue throws:
+            Transaction committed -> Payment recorded, booking confirmed, enqueue fauls
+            Result: Booking confirmed, no confirmation email.
+            But this is fine. It is a minor inconvenience
+             */
         }
     }
 }

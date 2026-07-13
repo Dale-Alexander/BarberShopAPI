@@ -298,3 +298,75 @@
             display: flex;
         }
 }
+
+/* ── Cancel confirmation modal (refund policy) ── */
+.cancel-confirm-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 1rem;
+}
+
+.cancel-confirm-modal {
+    background-color: var(--primary-400);
+    border-radius: 0.5rem;
+    padding: 1.5rem;
+    width: 100%;
+    max-width: 26rem;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+
+.cancel-confirm-title {
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 1.1rem;
+    margin: 0 0 0.75rem;
+}
+
+.cancel-confirm-text {
+    color: #d7dbe6;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    margin: 0 0 1rem;
+}
+
+.cancel-refund-override {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #ffffff;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+    cursor: pointer;
+}
+
+.cancel-confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+}
+
+.cancel-confirm-keep,
+.cancel-confirm-go {
+    border: none;
+    border-radius: 0.4rem;
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.cancel-confirm-keep {
+    background: transparent;
+    color: #d7dbe6;
+    border: 1px solid hsl(228, 17%, 40%);
+}
+
+.cancel-confirm-go {
+    background: #e5484d;
+    color: #ffffff;
+}

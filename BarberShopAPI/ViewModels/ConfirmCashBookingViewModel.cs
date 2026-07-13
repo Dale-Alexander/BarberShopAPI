@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using Resend;
 
 namespace BarberShopAPI.ViewModels
 {
@@ -7,6 +8,7 @@ namespace BarberShopAPI.ViewModels
         public string FullName { get; set; }
         public string Phone { get; set; }
         public int BookingId { get; set; }
-        public decimal? Amount { get; set; }
+        public decimal Amount { get; set; }
+        public string Email { get; set; }
     }
 }

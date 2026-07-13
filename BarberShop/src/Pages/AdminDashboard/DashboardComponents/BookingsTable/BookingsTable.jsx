@@ -5,11 +5,28 @@ import { format } from "date-fns";
 import FilterModal from "../Filter/Filter.jsx";
 import "./BookingsTable.css";
 import { adminAxios } from "../../../../Hooks/AxiosInterceptor";
+
+/* Cancelling within this many hours of the appointment forfeits the customer's refund (mirrors the
+ * backend RefundCutoff in BookingCanceller). Compared against Malta wall-clock, since startDateTime is
+ * stored in Malta time - see getMaltaNow. */
+const REFUND_CUTOFF_HOURS = 24;
+const getMaltaNow = () =>
+    new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Malta" }));
+
 const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filters}) => {
     const [openMenuId, setOpenMenuId] = useState(null);
     const [searchInput, setSearchInput] = useState("");
     const [filterModalOpen, setFilterModalOpen] = useState(false);
+    const [cancelTarget, setCancelTarget] = useState(null);
+    const [refundAnyway, setRefundAnyway] = useState(false);
     const navigate = useNavigate();
+
+    /* startDateTime is Malta wall-clock (parsed as local) and getMaltaNow() is Malta's clock as local, so
+     * this difference is a true Malta-vs-Malta comparison regardless of the admin's own timezone. */
+    const isWithinRefundCutoff = (booking) => {
+        const diffHours = (new Date(booking.startDateTime) - getMaltaNow()) / (1000 * 60 * 60);
+        return diffHours < REFUND_CUTOFF_HOURS;
+    };
     useEffect(() => {
         const handleClickOutside = () => {
             setOpenMenuId(null);
@@ -20,14 +37,22 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
         return () => document.removeEventListener("click", handleClickOutside);
     }, [openMenuId])
 
-    const onCancel = async (bookingId) => {
+    const onCancel = async (bookingId, forceRefund = false) => {
         try {
-            await adminAxios.patch(`/api/bookings/cancel/${bookingId}`);
+            await adminAxios.patch(`/api/bookings/cancel/${bookingId}${forceRefund ? "?refundAnyway=true" : ""}`);
             setBookings(prev => prev.filter(b => b.id !== bookingId));
         }
         catch (err) {
             console.error(err.response?.data?.message || err.response?.data);
         }
+    }
+
+    const confirmCancel = () => {
+        if (!cancelTarget) return;
+        /* refundAnyway only matters inside the cutoff; outside it a full refund happens automatically. */
+        const force = isWithinRefundCutoff(cancelTarget) && refundAnyway;
+        onCancel(cancelTarget.id, force);
+        setCancelTarget(null);
     }
 
     return (
@@ -102,7 +127,7 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                                                     navigate(`/datetime/${b.id}`); setOpenMenuId(null);
                                                     }}><SquarePen size={14}/> Edit</button>
                                                 <button className="action-dropdown-item cancel-item" onClick={() => {
-                                                    onCancel(b.id); setOpenMenuId(null); 
+                                                    setCancelTarget(b); setRefundAnyway(false); setOpenMenuId(null);
                                                     }}><Trash2 size={14} /> Cancel</button>
                                                 </div>
                                             )}
@@ -117,6 +142,38 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                 <>
                     <FilterModal setFilterModalOpen={setFilterModalOpen} filters={filters} resetFilters={resetFilters} applyFilters={applyFilters} />
                 </>
+            )}
+            {cancelTarget && (
+                <div className="cancel-confirm-overlay" onClick={() => setCancelTarget(null)}>
+                    <div className="cancel-confirm-modal" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="cancel-confirm-title">Cancel booking #{cancelTarget.id}?</h3>
+                        {isWithinRefundCutoff(cancelTarget) ? (
+                            <>
+                                <p className="cancel-confirm-text">
+                                    This appointment is within {REFUND_CUTOFF_HOURS} hours. Per the cancellation
+                                    policy, <strong>no refund</strong> will be issued.
+                                </p>
+                                <label className="cancel-refund-override">
+                                    <input
+                                        type="checkbox"
+                                        checked={refundAnyway}
+                                        onChange={(e) => setRefundAnyway(e.target.checked)}
+                                    />
+                                    Issue a full refund anyway
+                                </label>
+                            </>
+                        ) : (
+                            <p className="cancel-confirm-text">
+                                This appointment is more than {REFUND_CUTOFF_HOURS} hours away. If the customer
+                                paid by card, a <strong>full refund</strong> will be issued.
+                            </p>
+                        )}
+                        <div className="cancel-confirm-actions">
+                            <button className="cancel-confirm-keep" onClick={() => setCancelTarget(null)}>Keep booking</button>
+                            <button className="cancel-confirm-go" onClick={confirmCancel}>Confirm cancel</button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     )
