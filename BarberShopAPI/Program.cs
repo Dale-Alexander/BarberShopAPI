@@ -1,16 +1,17 @@
-﻿using BarberShopAPI.Data;
-using Microsoft.EntityFrameworkCore;
-using System.Text;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.IdentityModel.Tokens;
+﻿using BarberShopAPI.CronJob;
+using BarberShopAPI.Data;
+using BarberShopAPI.Services;
 using BarberShopAPI.Middleware;
-using System.Text.Json.Serialization;
-using Microsoft.Extensions.FileProviders;
-using Microsoft.AspNetCore.StaticFiles;
-using Stripe;
 using Hangfire;
-using Hangfire.MemoryStorage;
-using BarberShopAPI.CronJob;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.StaticFiles;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.IdentityModel.Tokens;
+using Resend;
+using Stripe;
+using System.Text;
+using System.Text.Json.Serialization;
 
 
 DotNetEnv.Env.Load();
@@ -20,6 +21,19 @@ builder.Services.AddDbContext<BarberShopContext>(options => options.UseSqlServer
 
 var stripeKey = Environment.GetEnvironmentVariable("STRIPE_SECRET_KEY");
 StripeConfiguration.ApiKey = stripeKey;
+
+
+var resendKey = Environment.GetEnvironmentVariable("RESEND_API_KEY");
+
+builder.Services.AddOptions();
+builder.Services.AddHttpClient<ResendClient>();
+builder.Services.Configure<ResendClientOptions>(o =>
+{
+    o.ApiToken = resendKey!;
+});
+builder.Services.AddTransient<IResend, ResendClient>();
+builder.Services.AddScoped<IEmailService, EmailService>();
+
 
 var key = Encoding.ASCII.GetBytes(Environment.GetEnvironmentVariable("JWT_SECRET"));
 /* The above is the same secret you used to sign the JWT during /login.
@@ -127,12 +141,19 @@ options.AddPolicy("AllowReactDev", policy =>
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
-builder.Services.AddHangfire(config => config.UseMemoryStorage());
+builder.Services.AddHangfire(config => config.UseSqlServerStorage(connectionString));
 builder.Services.AddHangfireServer();
 builder.Services.AddScoped<BookingExpiryJob>();
 
 var app = builder.Build();
 
+if (args.Contains("--seed-admin"))
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<BarberShopContext>();
+    BarberShopAPI.Seed.SeedAdmin.Run(db);
+    return; // one-shot maintenance command - never starts the web server
+}
 
 app.Use(async (context, next) =>
 {
@@ -184,11 +205,19 @@ so the web client can load images.*/
 // Configure the HTTP request pipeline.
 
 
-RecurringJob.AddOrUpdate<BookingExpiryJob>(
-    "cancel-pending-bookings",
-    job => job.CancelExpiredBookingsAsync(),
-    "*/15 * * * *"
-);
+// Register the recurring job via the DI-resolved IRecurringJobManager rather than the static
+// RecurringJob API. The static API relies on JobStorage.Current, which isn't initialized at this
+// point (with AddHangfire the storage lives in DI and the global is only set once the Hangfire
+// server hosted service starts), so it throws "JobStorage instance has not been initialized yet".
+using (var scope = app.Services.CreateScope())
+{
+    var recurringJobs = scope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
+    recurringJobs.AddOrUpdate<BookingExpiryJob>(
+        "cancel-pending-bookings",
+        job => job.CancelExpiredBookingsAsync(),
+        "*/15 * * * *"
+    );
+}
 
 
 
