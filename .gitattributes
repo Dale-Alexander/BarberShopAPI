@@ -1,0 +1,29 @@
+# Normalize line endings. Text files are stored as LF in the repository and
+# checked out with each platform's native endings, so Windows (CRLF) and
+# macOS/Linux (LF) working copies stop churning against each other.
+* text=auto
+
+# Source / text files -> treated as text (stored LF)
+*.cs    text
+*.csproj text
+*.js    text
+*.jsx   text
+*.ts    text
+*.tsx   text
+*.css   text
+*.html  text
+*.json  text
+*.md    text
+*.txt   text
+*.env   text
+
+# Binary assets -> never modified
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.avif  binary
+*.webp  binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
