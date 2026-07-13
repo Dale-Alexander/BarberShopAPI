@@ -15,6 +15,7 @@ import {
     isSameDay,
     isSameMonth,
     isBefore,
+    isAfter,
     startOfDay,
     parse,
     addMinutes
@@ -36,9 +37,30 @@ const TIME_SLOTS = [
     "17:00", "17:30",
 ];
 
+/* Customer-only booking window, mirroring the backend's ValidateBookingTime (BookingsController.cs):
+ * customers must book at least 90 min ahead and at most 60 days out. Staff (admin/reschedule) are exempt. */
+const MIN_ADVANCE_MINUTES = 90;
+const MAX_ADVANCE_DAYS = 60;
+/* Shop closing time as minutes-from-midnight, mirroring the backend ShopClose (17:30) in
+ * BookingsController.cs. A customer booking must end by close + grace, so late start slots that
+ * wouldn't fit are hidden (staff are exempt). */
+const SHOP_CLOSE_MINUTES = 17 * 60 + 30;
+
+/* Current time as Malta wall-clock. The slot strings ("09:00") are Malta wall-clock times and the backend
+ * validates them against Malta time (ShopClock), so "now" must be Malta's clock too - otherwise a non-Malta
+ * browser would grey out the wrong slots (e.g. show a morning slot that Malta has already passed). */
+const getMaltaNow = () =>
+    new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Malta" }));
+
 const BarberDateAndTime = () => {
     const [barbers, setBarbers] = useState([]);
     const [shopWideClosures, setShopWideClosures] = useState([]);
+    /* Between-booking buffer (minutes) from the backend, so greyed-out slots match what the
+     * booking-create overlap check will accept. 0 = disabled (back-to-back allowed). */
+    const [bufferMin, setBufferMin] = useState(0);
+    /* Minutes a booking may run past closing, from the backend. Late start slots that wouldn't
+     * finish by close + this are hidden from customers. 0 = must finish by closing. */
+    const [graceMinutesAfterClose, setGraceMinutesAfterClose] = useState(0);
     const [calendarMonth, setCalendarMonth] = useState(new Date());
     const { bookingId } = useParams();
     const isEditMode = !!bookingId;
@@ -57,7 +79,16 @@ const BarberDateAndTime = () => {
         selectedDate, setSelectedDate,
         selectedTime, setSelectedTime,
         chosenServiceIds,
+        chosenServicesDurationMin,
     } = useContext(BookingDetailsContext);
+    /* Admin bookings aren't tied to services, so the admin picks a duration on this page. Seeded
+     * from the shop-wide default (ShopSettings) and editable live so the slot picker greys
+     * accurately before the details modal.
+     * Two states on purpose: `adminDurationInput` is the raw text in the box (can be "" mid-edit),
+     * while `adminDurationMin` is the last VALID number and only updates on valid input - so
+     * clearing the field to retype doesn't drop the greying back to the default. */
+    const [adminDurationMin, setAdminDurationMin] = useState(30);
+    const [adminDurationInput, setAdminDurationInput] = useState("30");
     //if the admin forgets to logout and manually set adminBooking to be true
     //then it still could be so that when he makes a booking as a normal user
     //he doesnt get the normal experience. Just validate on backend then.
@@ -68,6 +99,9 @@ const BarberDateAndTime = () => {
     const { data: barberBookings, loading: barberBookingsloading } = useFetch(`/api/Barbers/barbers-with-bookings`, isEditMode);
     //this will fetch dates where barbers are booked, when they are closed and when the whole shop is closed
     const { data: editBooking, loading: editBookingloading } = useFetch(bookingId ? `/api/Bookings/admin/${bookingId}` : null, isEditMode);
+    /* Admin-only: pull the default booking duration so the on-page duration control starts at the
+     * shop's configured default (admin auth is required, so this uses adminAxios via isProtected). */
+    const { data: shopSettings } = useFetch(isAdminMode ? `/api/Settings` : null, true);
 
 
 
@@ -80,6 +114,8 @@ const BarberDateAndTime = () => {
         console.log(barberBookings);
         setBarbers(barberBookings?.barbers);
         setShopWideClosures(barberBookings?.shopClosures);
+        setBufferMin(barberBookings?.bufferMin ?? 0);
+        setGraceMinutesAfterClose(barberBookings?.graceMinutesAfterClose ?? 0);
         if (bookingId && editBooking) {
             const selectedBarber = barberBookings?.barbers.find(b => b?.barberId == editBooking?.barberId);
             setSelectedBarberId(selectedBarber?.barberId ?? null);
@@ -93,9 +129,37 @@ const BarberDateAndTime = () => {
     }, [barberBookings, editBooking, bookingId])
 
 
+    useEffect(() => {
+        if (shopSettings?.defaultAdminBookingDurationMin) {
+            setAdminDurationMin(shopSettings.defaultAdminBookingDurationMin);
+            setAdminDurationInput(String(shopSettings.defaultAdminBookingDurationMin));
+        }
+    }, [shopSettings]);
+
+    /* The length of the booking being placed, used to grey slots by the real appointment length.
+     * Edit: the existing booking's duration. Admin: the on-page control. Customer: the chosen
+     * services' total (falls back to 30 until the Services page populates it). */
+    const DEFAULT_SLOT_MIN = 30;
+    const slotDurationMin =
+        isEditMode ? (editBooking?.durationMin ?? DEFAULT_SLOT_MIN)
+        // Uses the last VALID admin duration, so greying stays put (e.g. at 60) while the field is
+        // temporarily empty during editing rather than snapping to the default.
+        : isAdminMode ? (adminDurationMin || DEFAULT_SLOT_MIN)
+        : (chosenServicesDurationMin || DEFAULT_SLOT_MIN);
+
+    /* Suggested values for the admin duration input's datalist. The field is a free number input,
+     * so the admin can also type any value (e.g. a one-off 75) - these are just quick picks. */
+    const DURATION_PRESETS = [15, 30, 45, 60, 90];
+
     const capitalize = (str) => str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
 
-    const today = startOfDay(new Date());
+    const today = startOfDay(getMaltaNow());
+
+    /* The 90-min buffer and 60-day horizon are a customer-only rule; staff booking (admin mode) and staff
+     * rescheduling (edit mode) are only blocked from picking a past slot - matching the backend. */
+    const isCustomer = !isAdminMode && !isEditMode;
+    const maxCustomerDate = isCustomer ? addDays(today, MAX_ADVANCE_DAYS) : null;
+    const isDateBeyondHorizon = (day) => !!maxCustomerDate && isAfter(startOfDay(day), maxCustomerDate);
 
     /*const isBarberAvailable = (barber, selectedDate, selectedTime) => {
         if (!selectedDate || !selectedTime) return true; // no date and time yet, show all
@@ -164,14 +228,18 @@ const BarberDateAndTime = () => {
         if (selectedBarberId === "All") {
             return TIME_SLOTS.filter(slot => {
                 const slotStart = parse(slot, "HH:mm", date);
-                const slotEnd = addMinutes(slotStart, 30);
+                const slotEnd = addMinutes(slotStart, slotDurationMin);
 
                 return barbers.some(b => {
                     const bookingsOnDay = b?.bookings?.filter(bk => isSameDay(new Date(bk.startDateTime), date));
                     return !bookingsOnDay.some(bk => {
                         const bkStart = new Date(bk.startDateTime);
-                        const bkEnd = addMinutes(bkStart, bk.durationMin);
-                        return slotStart < bkEnd && slotEnd > bkStart;
+                        /* Expand each booking's blocked window by the buffer on both sides so a slot
+                         * within `bufferMin` of a booking's start or end is greyed out, mirroring the
+                         * backend overlap check. */
+                        const bkBlockStart = addMinutes(bkStart, -bufferMin);
+                        const bkEnd = addMinutes(bkStart, bk.durationMin + bufferMin);
+                        return slotStart < bkEnd && slotEnd > bkBlockStart;
                     });
                 });
             });
@@ -187,14 +255,17 @@ const BarberDateAndTime = () => {
             The format part tells parse how to read the string. Without it,
             parse wouldnt know what each part of the string means.
             For example: "9:00 AM" -> h = hour(9), mm = minutes(00), aa = AM*/
-            const slotEnd = addMinutes(slotStart, 30);
+            const slotEnd = addMinutes(slotStart, slotDurationMin);
 
             return !barberBookingsOnDay.some(bk => {
                 /* This is the filter's return. It returns true or false accordingly
                 */
                 const bkStart = new Date(bk.startDateTime);
-                const bkEnd = addMinutes(bkStart, bk.durationMin);
-                return slotStart < bkEnd && slotEnd > bkStart
+                /* Blocked window expanded by the buffer on both sides (see the "All" branch above)
+                 * so the picker matches the backend's between-booking gap. */
+                const bkBlockStart = addMinutes(bkStart, -bufferMin);
+                const bkEnd = addMinutes(bkStart, bk.durationMin + bufferMin);
+                return slotStart < bkEnd && slotEnd > bkBlockStart
                 /* This is the some's return. For each booking, it returns true or false.
                 If any booking returns true this means there is an overlap*/
 
@@ -207,12 +278,33 @@ const BarberDateAndTime = () => {
         })
     }
 
-    const isTimeSlotInPast = (time, date = selectedDate) => {
-        if (!date) return false;
+    /* Both the slot time and getMaltaNow() are built as browser-local Dates holding Malta wall-clock values,
+     * so comparing them is a pure Malta-vs-Malta wall-clock comparison (see getMaltaNow's note). */
+    const slotDateTimeOf = (time, date) => {
         const [hours, minutes] = time.split(":").map(Number);
         const slotDateTime = new Date(date);
         slotDateTime.setHours(hours, minutes, 0, 0);
-        return slotDateTime < new Date();
+        return slotDateTime;
+    };
+
+    const isTimeSlotInPast = (time, date = selectedDate) => {
+        if (!date) return false;
+        return slotDateTimeOf(time, date) < getMaltaNow();
+    };
+
+    /* Customer-only: within the 90-min lead time. This also covers "in the past" (past is < now < now+90),
+     * so for customers it fully subsumes isTimeSlotInPast. */
+    const isTimeSlotTooSoon = (time, date = selectedDate) => {
+        if (!date) return false;
+        return slotDateTimeOf(time, date) < addMinutes(getMaltaNow(), MIN_ADVANCE_MINUTES);
+    };
+
+    /* Customer-only: the booking must finish by close + grace (mirrors the backend WithinWorkingHours).
+     * Staff (admin/edit) can book past close, so they're exempt. Uses slotDurationMin (duration-aware). */
+    const isTimeSlotAfterClose = (time) => {
+        if (!isCustomer) return false;
+        const [hours, minutes] = time.split(":").map(Number);
+        return hours * 60 + minutes + slotDurationMin > SHOP_CLOSE_MINUTES + graceMinutesAfterClose;
     };
 
     const isTimeSlotClosed = (time, date = selectedDate) => {
@@ -247,7 +339,9 @@ const BarberDateAndTime = () => {
                 if (!isSameDay(selectedDate, originalDate)) setSelectedDate(null);
             }
         }
-    }, [selectedBarberId]);
+        // slotDurationMin included so changing the (admin) duration re-checks the selected slot and
+        // clears it if the longer appointment no longer fits.
+    }, [selectedBarberId, slotDurationMin]);
 
     /*const bookedSlots = useMemo(() => {
         if (!selectedBarberId || !selectedDate) return new Set();
@@ -283,8 +377,14 @@ const BarberDateAndTime = () => {
             console.error(err.response?.data?.message || "Something went wrong");
         }
     }
-    const handleAdminCreate = async ({ name, phone, duration }) => {
+    const handleAdminCreate = async ({ name, phone }) => {
         if (loading || bookingLoading) return;
+        // Validate the raw text (not the last-valid number) so an empty/blank box is still blocked.
+        const durationToSend = Number(adminDurationInput);
+        if (!Number.isInteger(durationToSend) || durationToSend < 5 || durationToSend > 240) {
+            showToast("Booking Failed", "Please enter a booking duration between 5 and 240 minutes");
+            return;
+        }
         const newDateFormatted = format(selectedDate, "yyyy-MM-dd");
         console.log(`${newDateFormatted}T${selectedTime}:00`);
 
@@ -293,7 +393,9 @@ const BarberDateAndTime = () => {
             const booking = await adminAxios.post('/api/bookings/create-admin-booking', {
                 BarberId: selectedBarberId,
                 StartDateTime: `${newDateFormatted}T${selectedTime}:00`,
-                DefaultDurationMin: parseInt(duration),
+                // Duration is now chosen on this page (adminDurationMin) rather than in the modal,
+                // so the slot picker and the submitted booking always agree.
+                DefaultDurationMin: durationToSend,
                 FullName: name || null,
                 Phone: phone,
             });
@@ -443,6 +545,34 @@ const BarberDateAndTime = () => {
                                 <h2 className="bp-section-title">Pick a Date & Time</h2>
                                 <p className="bp-section-sub">Choose your preferred appointment slot</p>
 
+                                {isAdminMode && (
+                                    <div className="bp-admin-duration">
+                                        <label htmlFor="bp-admin-duration-input">Booking duration (minutes)</label>
+                                        <input
+                                            id="bp-admin-duration-input"
+                                            type="number"
+                                            min={5}
+                                            max={240}
+                                            step={5}
+                                            list="bp-duration-presets"
+                                            value={adminDurationInput}
+                                            onChange={(e) => {
+                                                const raw = e.target.value;
+                                                setAdminDurationInput(raw);
+                                                // Only commit the parsed value on valid input, so an
+                                                // empty box keeps the previous duration for greying.
+                                                const n = Number(raw);
+                                                if (raw !== "" && Number.isFinite(n)) setAdminDurationMin(n);
+                                            }}
+                                        />
+                                        <datalist id="bp-duration-presets">
+                                            {DURATION_PRESETS.map((min) => (
+                                                <option key={min} value={min} />
+                                            ))}
+                                        </datalist>
+                                    </div>
+                                )}
+
                                 <div className="bp-datetime-grid">
                                     {/* Calendar */}
                                     <div className="bp-calendar-card">
@@ -467,19 +597,20 @@ const BarberDateAndTime = () => {
                                                 const isToday = isSameDay(day, today);
                                                 const isSelected = selectedDate && isSameDay(day, selectedDate);
                                                 const isPast = isBefore(day, today);
+                                                const isBeyondHorizon = isDateBeyondHorizon(day);
                                                 const isThisDayClosed = isDateClosed(day);
                                                 const isThisDayFullyBooked = isDateBooked(day);
                                                 return (
                                                     <button
                                                         key={i}
-                                                        className={`bp-cal-day 
-                                                        ${!inMonth  || (isThisDayClosed || (isThisDayFullyBooked && !isSameDay(day, originalDate)))? "outside" : ""} 
-                                                        ${isToday ? "today" : ""} 
-                                                        ${isSelected ? "selected" : ""} 
+                                                        className={`bp-cal-day
+                                                        ${!inMonth  || isBeyondHorizon || (isThisDayClosed || (isThisDayFullyBooked && !isSameDay(day, originalDate)))? "outside" : ""}
+                                                        ${isToday ? "today" : ""}
+                                                        ${isSelected ? "selected" : ""}
                                                         ${isPast && !isToday ? "past" : ""}
                                                     `}
                                                         onClick={() => {
-                                                            if (inMonth && !isPast && !isThisDayClosed && (!isThisDayFullyBooked || isSameDay(day, originalDate))) {
+                                                            if (inMonth && !isPast && !isBeyondHorizon && !isThisDayClosed && (!isThisDayFullyBooked || isSameDay(day, originalDate))) {
                                                                 setSelectedDate(day);
                                                                 if (selectedTime && selectedTime !== originalTime) {
                                                                     const isFree = getAvailableSlots(day).includes(selectedTime);
@@ -491,7 +622,7 @@ const BarberDateAndTime = () => {
                                                                 }
                                                             }
                                                         }}
-                                                        disabled={!inMonth || isPast || isThisDayClosed || (isThisDayFullyBooked && !isSameDay(day, originalDate))}
+                                                        disabled={!inMonth || isPast || isBeyondHorizon || isThisDayClosed || (isThisDayFullyBooked && !isSameDay(day, originalDate))}
                                                     >
                                                         {format(day, "d")}
                                                     </button>
@@ -516,10 +647,15 @@ const BarberDateAndTime = () => {
                                                         const isFree = getAvailableSlots(selectedDate).includes(time);
                                                         const isClosed = isTimeSlotClosed(time);
                                                         const isPast = isTimeSlotInPast(time);
+                                                        /* Customers also can't pick a slot inside the 90-min lead time; staff (admin/edit) only past. */
+                                                        const isTooSoon = isCustomer && isTimeSlotTooSoon(time);
+                                                        /* Customers can't pick a slot that would run past close + grace (staff exempt). */
+                                                        const isAfterClose = isTimeSlotAfterClose(time);
                                                         const isOnOriginalDate = selectedDate && originalDate && isSameDay(selectedDate, originalDate);
+                                                        const blocked = !isFree || isClosed || isPast || isTooSoon || isAfterClose;
                                                         const isDisabled = isEditMode
-                                                            ? (!(isOnOriginalDate && time === originalTime) && (!isFree || isClosed || isPast))
-                                                            : (!isFree || isClosed || isPast);
+                                                            ? (!(isOnOriginalDate && time === originalTime) && blocked)
+                                                            : blocked;
                                                         return (
                                                             <button
                                                                 key={time}

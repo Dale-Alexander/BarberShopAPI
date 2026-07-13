@@ -4,6 +4,7 @@ using BarberShopAPI.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace BarberShopAPI.Migrations
 {
     [DbContext(typeof(BarberShopContext))]
-    partial class BarberShopContextModelSnapshot : ModelSnapshot
+    [Migration("20260713132114_AddDefaultAdminBookingDuration")]
+    partial class AddDefaultAdminBookingDuration
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -314,9 +317,6 @@ namespace BarberShopAPI.Migrations
                     b.Property<int>("DefaultAdminBookingDurationMin")
                         .HasColumnType("int");
 
-                    b.Property<int>("GraceMinutesAfterClose")
-                        .HasColumnType("int");
-
                     b.HasKey("Id");
 
                     b.ToTable("ShopSettings");
@@ -326,8 +326,7 @@ namespace BarberShopAPI.Migrations
                         {
                             Id = 1,
                             BufferMin = 0,
-                            DefaultAdminBookingDurationMin = 30,
-                            GraceMinutesAfterClose = 0
+                            DefaultAdminBookingDurationMin = 30
                         });
                 });
 

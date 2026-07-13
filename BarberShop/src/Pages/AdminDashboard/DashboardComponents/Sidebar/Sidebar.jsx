@@ -13,6 +13,7 @@ import ContactsOutlinedIcon from "@mui/icons-material/ContactsOutlined";
 import ReceiptOutlinedIcon from "@mui/icons-material/ReceiptOutlined";
 import PersonOutlinedIcon from "@mui/icons-material/PersonOutlined";
 import CalendarTodayOutlinedIcon from "@mui/icons-material/CalendarTodayOutlined";
+import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import HelpOutlineOutlinedIcon from "@mui/icons-material/HelpOutlineOutlined";
 import MenuOutlinedIcon from "@mui/icons-material/MenuOutlined";
 import LogoutIcon from '@mui/icons-material/Logout';
@@ -168,6 +169,13 @@ const SidebarContent = ({ collapsed, isCollapsed, setIsCollapsed, selected, setS
                             setSelected={setSelected}
                         />
                         <Item
+                            title="Settings"
+                            to="/admin/settings"
+                            icon={<SettingsOutlinedIcon />}
+                            selected={selected}
+                            setSelected={setSelected}
+                        />
+                        <Item
                             title="FAQ Page"
                             to="/faq"
                             icon={<HelpOutlineOutlinedIcon />}
@@ -205,7 +213,8 @@ const Sidebar = () => {
     const titleRoutes = {
         "/admin": "Dashboard",
         "/admin/team": "Manage Team",
-        "/admin/calendar": "Calendar"
+        "/admin/calendar": "Calendar",
+        "/admin/settings": "Settings"
     };
     useEffect(() => {
         const title = titleRoutes[location.pathname] ?? titleRoutes[location.pathname.split("/").slice(0, 3).join("/")];;

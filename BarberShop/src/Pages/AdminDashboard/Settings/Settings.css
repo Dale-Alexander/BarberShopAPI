@@ -1,0 +1,23 @@
+.settings-content-area {
+    padding: 0 20px;
+}
+
+.settings-card {
+    max-width: 480px;
+    background: var(--card-bg, #1f2a40);
+    border-radius: 10px;
+    padding: 24px;
+}
+
+.settings-hint {
+    margin: 4px 0 12px 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--muted-fg, #a0a0a0);
+}
+
+.settings-actions {
+    margin-top: 20px;
+    display: flex;
+    justify-content: flex-end;
+}

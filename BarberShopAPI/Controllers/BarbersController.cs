@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using SixLabors.ImageSharp;
+using BarberShopAPI.Common;
 namespace BarberShopAPI.Controllers
 {
     [Route("api/[controller]")]
@@ -26,8 +27,9 @@ namespace BarberShopAPI.Controllers
         {
             try
             {
-                var todayDate = DateOnly.FromDateTime(DateTime.Now);
-                var currentTime = TimeOnly.FromDateTime(DateTime.Now);
+                var todayDate = ShopClock.Today;
+                var currentTime = ShopClock.TimeOfDay;
+                var nowMalta = ShopClock.Now;
                 /* it is important that these are declared outside because EF Core cant
                  * translate them*/
                 var barbers = await _context.Barbers.Where(b => b.isActive == true)
@@ -38,7 +40,7 @@ namespace BarberShopAPI.Controllers
                     BarberSurname = b.User.Surname,
                     ImageUrl = b.ImageUrl,
                     Bookings = b.Bookings.Where(b => b.Status != BookingStatus.CANCELLED
-                    && b.StartDateTime >= DateTime.Now)
+                    && b.StartDateTime >= nowMalta)
                     .Select(bk => new BookingsDateAndTimeViewModel
                     {
                         BookingId = bk.Id,
@@ -81,7 +83,19 @@ namespace BarberShopAPI.Controllers
                         IsFullDay = c.IsFullDay
                     }).ToListAsync();
                 
-                return Ok(new {barbers, shopClosures});
+                // Expose the between-booking buffer and grace-after-close so the customer slot picker
+                // greys out the same slots the backend will reject (see ShopSettings).
+                var settings = await _context.ShopSettings
+                    .Select(s => new { s.BufferMin, s.GraceMinutesAfterClose })
+                    .FirstAsync();
+
+                return Ok(new
+                {
+                    barbers,
+                    shopClosures,
+                    bufferMin = settings.BufferMin,
+                    graceMinutesAfterClose = settings.GraceMinutesAfterClose
+                });
             }
             catch(Exception ex)
             {

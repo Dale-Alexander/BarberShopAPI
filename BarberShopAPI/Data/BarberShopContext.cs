@@ -28,6 +28,7 @@ namespace BarberShopAPI.Data
         public DbSet<BookingService> BookingServices { get; set; }
         public DbSet<Payment> Payments { get; set; }
         public DbSet<ShopClosure> ShopClosures { get; set; }
+        public DbSet<ShopSettings> ShopSettings { get; set; }
 
         /* 
          *Each DbSet corresponds to a table in the database. EF Core will
@@ -169,6 +170,12 @@ namespace BarberShopAPI.Data
                    .HasDefaultValueSql("GETUTCDATE()");
             barber.Property(b => b.UpdatedAt)
                    .HasDefaultValueSql("GETUTCDATE()");
+
+            // Seed the single shop-settings row. Buffer defaults to 0 so behaviour is unchanged
+            // until an admin sets it from the dashboard; admin bookings default to 30 min; grace of
+            // 0 keeps the strict "must finish by closing" rule.
+            modelBuilder.Entity<ShopSettings>().HasData(
+                new ShopSettings { Id = 1, BufferMin = 0, DefaultAdminBookingDurationMin = 30, GraceMinutesAfterClose = 0 });
 
             base.OnModelCreating(modelBuilder);
         }

@@ -6,10 +6,12 @@ import AdminDashboard from "./Pages/AdminDashboard/AdminDashboard";
 import RequireRole from "./Components/RequireRole/RequireRole";
 import RedirectIfLoggedIn from "./Components/RedirectIfLoggedIn/RedirectIfLoggedIn";
 import ForgotPassword from "./Pages/ForgotPassword/ForgotPassword.jsx";
+import ResetPassword from "./Pages/ResetPassword/ResetPassword.jsx";
 import { useAdminAxios } from "./Hooks/AxiosInterceptor.js";
 import AdminCalendar from "./Pages/AdminDashboard/Calendar/Calendar.jsx";
 import AdminLayout from "./Components/AdminLayout/AdminLayout.jsx";
 import TeamMembers from "./Pages/AdminDashboard/TeamMembers/TeamMembers.jsx";
+import Settings from "./Pages/AdminDashboard/Settings/Settings.jsx";
 import BarberBookings from "./Pages/BarberBookings/BarberBookings";
 import BarberDateAndTime from "./Pages/BarberDateAndTime/BarberDateAndTime.jsx";
 import UserLayout from "./Components/UserLayout/UserLayout.jsx";
@@ -42,12 +44,14 @@ function App() {
                 <Route element={<RedirectIfLoggedIn />}>
                     <Route path="/login" element={<Login />} />
                     <Route path="/forgot-password" element={<ForgotPassword />} />
+                    <Route path="/reset-password" element={<ResetPassword />} />
                 </Route>
                 <Route element={<AdminLayout />}>
                     <Route element={<RequireRole Roles={["ADMIN"]} />}>
                         <Route path="/admin" element={<AdminDashboard />} />
                         <Route path="/admin/calendar" element={<AdminCalendar />} />
                         <Route path="/admin/team" element={<TeamMembers />} />
+                        <Route path="/admin/settings" element={<Settings />} />
                     </Route>
                     <Route element={<RequireRole Roles={["ADMIN", "BARBER"]} />}>
                         <Route path="/admin/team/:id" element={<BarberBookings/> }/>

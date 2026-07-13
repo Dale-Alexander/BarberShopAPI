@@ -1,7 +1,10 @@
 ﻿using BarberShopAPI.Data;
+using BarberShopAPI.Services;
+using BarberShopAPI.Migrations;
 using BarberShopAPI.Models;
 using BarberShopAPI.Models.Enums;
 using BarberShopAPI.ViewModels;
+using Hangfire;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Infrastructure;
 using Microsoft.AspNetCore.Http;
@@ -11,16 +14,45 @@ using Microsoft.EntityFrameworkCore;
 using PhoneNumbers;
 using SixLabors.ImageSharp;
 using Stripe;
+using System.Net.WebSockets;
+using Microsoft.IdentityModel.Tokens;
+using BarberShopAPI.Common;
 namespace BarberShopAPI.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
     public class BookingsController : ControllerBase
     {
+        private static readonly TimeSpan MinAdvanceBooking = TimeSpan.FromMinutes(90);
+        private static readonly TimeSpan MaxAdvanceBooking = TimeSpan.FromDays(60);
+
+        /* Shop working-hours window, kept in sync with the frontend TIME_SLOTS array in
+         * BarberDateAndTime.jsx (09:00 first slot .. 17:30 last slot start). A booking is valid only
+         * if it starts at/after open and ends at/before close + grace - checked against the REAL end
+         * (start + duration), never the buffered end. graceMin lets the last client run past close
+         * (0 = must finish by closing; from ShopSettings.GraceMinutesAfterClose). */
+        private static readonly TimeOnly ShopOpen = new(9, 0);
+        private static readonly TimeOnly ShopClose = new(17, 30);
+
+        private static bool WithinWorkingHours(DateTime start, DateTime end, int graceMin) =>
+            TimeOnly.FromDateTime(start) >= ShopOpen && TimeOnly.FromDateTime(end) <= ShopClose.AddMinutes(graceMin);
+
+        private static (bool IsValid, string? Error) ValidateBookingTime(DateTime startDateTime)
+        {
+            DateTime now = ShopClock.Now;
+            if (startDateTime < now) return (false, "Cannot book slots in the past");
+            if (startDateTime < now.Add(MinAdvanceBooking)) return (false, $"Bookings must be made at least {MinAdvanceBooking.TotalMinutes} minutes in advance");
+            if (startDateTime > now.Add(MaxAdvanceBooking)) return (false, $"Bookings cannot be made more than {MaxAdvanceBooking.TotalDays} days in advance");
+            return (true, null);
+        }
+
+
         private readonly BarberShopContext _context;
-        public BookingsController(BarberShopContext context)
+        private readonly IEmailService _emailService;
+        public BookingsController(BarberShopContext context, IEmailService emailService)
         {
             _context = context;
+            _emailService = emailService;
         }
 
         private bool IsValidPhoneNumber(string phone)
@@ -62,7 +94,7 @@ namespace BarberShopAPI.Controllers
                 FullName = b.User.Name + " " + b.User.Surname
             }).FirstOrDefaultAsync();
             if (barber == null) return BadRequest(new { message = "Barber was not found" });
-            if (model.StartDateTime < DateTime.Now) return BadRequest(new { message = "Cannot book slots in the past" });
+            if (model.StartDateTime < ShopClock.Now) return BadRequest(new { message = "Cannot book slots in the past" });
             int durationMinutes = model.DefaultDurationMin;
 
             var endDateTime = model.StartDateTime.AddMinutes(durationMinutes);
@@ -76,14 +108,18 @@ namespace BarberShopAPI.Controllers
             );
             if (closureDate != null) return BadRequest(new { message = "The chosen slot falls on an unavailable slot" });
 
+            // Staff booking is exempt from working hours (like the lead-time/horizon rules), but the
+            // between-booking buffer still applies so staff can't wedge a client into another's gap.
+            var buffer = await _context.ShopSettings.Select(s => s.BufferMin).FirstAsync();
+
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
                 var overlap = await _context.Bookings.AnyAsync(b =>
                 b.BarberId == model.BarberId &&
                 b.Status != BookingStatus.CANCELLED &&
-                b.StartDateTime < endDateTime &&
-                b.StartDateTime.AddMinutes(b.DurationMin) > model.StartDateTime);
+                b.StartDateTime < endDateTime.AddMinutes(buffer) &&
+                b.StartDateTime.AddMinutes(b.DurationMin + buffer) > model.StartDateTime);
                 if (overlap) return BadRequest(new { message = "The chosen slot overlaps with an existing booking" });
 
 
@@ -123,8 +159,9 @@ namespace BarberShopAPI.Controllers
                 };
 
 
-            _context.Payments.Add(payment);
+                _context.Payments.Add(payment);
                 await _context.SaveChangesAsync();
+
                 await transaction.CommitAsync();
                 return Ok(new
                 {
@@ -158,7 +195,8 @@ namespace BarberShopAPI.Controllers
                 b.Id, FullName = b.User.Name + " " + b.User.Surname
             }).FirstOrDefaultAsync();
             if (barber == null) return BadRequest(new { message = "Barber was not found" });
-            if (model.StartDateTime < DateTime.Now) return BadRequest(new { message = "Cannot book slots in the past" });
+            var (isValid, error) = ValidateBookingTime(model.StartDateTime);
+            if (!isValid) return BadRequest(new { message = error });
             var services = await _context.Services.Where(s => s.IsActive == true && model.ServicesIds.Contains(s.Id)).ToListAsync();
             if (services.Count == 0) return BadRequest(new { message = "The chosen services do not exist" });
             if (services.Count != model.ServicesIds.Count) return BadRequest(new { message = "One or more services were not found or are inactive" });
@@ -169,6 +207,12 @@ namespace BarberShopAPI.Controllers
             }*/
 
             var endDateTime = model.StartDateTime.AddMinutes(durationMinutes);
+            // Load the shop settings once - used for the working-hours grace and the between-booking buffer.
+            var settings = await _context.ShopSettings.FirstAsync();
+            // Customer-facing path: the whole appointment must fall inside shop working hours
+            // (allowing up to GraceMinutesAfterClose past closing).
+            if (!WithinWorkingHours(model.StartDateTime, endDateTime, settings.GraceMinutesAfterClose))
+                return BadRequest(new { message = "Outside shop working hours" });
             var appointmentDate = DateOnly.FromDateTime(model.StartDateTime);
             var appointmentTime = TimeOnly.FromDateTime(model.StartDateTime);
             var endTime = TimeOnly.FromDateTime(endDateTime);
@@ -179,11 +223,15 @@ namespace BarberShopAPI.Controllers
             );
             if (closureDate != null) return BadRequest(new { message = "The chosen slot falls on an unavailable slot" });
 
+            // Require a `buffer`-minute gap between consecutive bookings (see ShopSettings.BufferMin).
+            // Adding buffer to both interval ends enforces exactly one gap regardless of order; an
+            // exactly-buffer gap is allowed.
+            var buffer = settings.BufferMin;
             var overlap = await _context.Bookings.AnyAsync(b =>
             b.BarberId == model.BarberId &&
             b.Status != BookingStatus.CANCELLED &&
-            b.StartDateTime < endDateTime &&
-            b.StartDateTime.AddMinutes(b.DurationMin) > model.StartDateTime);
+            b.StartDateTime < endDateTime.AddMinutes(buffer) &&
+            b.StartDateTime.AddMinutes(b.DurationMin + buffer) > model.StartDateTime);
             if (overlap) return BadRequest(new { message = "The chosen slot overlaps with an existing booking" });
             var booking = new Booking
             {
@@ -200,6 +248,7 @@ namespace BarberShopAPI.Controllers
 
             _context.Bookings.Add(booking);
             await _context.SaveChangesAsync();
+
             return Ok(new
             {
                 booking.Id,
@@ -254,6 +303,22 @@ namespace BarberShopAPI.Controllers
             {
                 var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.Id == model.BookingId);
                 if (booking == null) return BadRequest(new { message = "Booking not found" });
+                if (booking.Status != BookingStatus.PENDING) return BadRequest(new { message = "Only Pending Bookings can be confirmed" });
+
+                // Same closure re-check as the webhook: a PENDING booking must never be confirmed to
+                // COMPLETED on a slot a closure now covers. Unlike the card path, no money has moved and
+                // the admin is here, so we just refuse and let them handle it - nothing to refund.
+                var appointmentDate = DateOnly.FromDateTime(booking.StartDateTime);
+                var appointmentTime = TimeOnly.FromDateTime(booking.StartDateTime);
+                var endTime = TimeOnly.FromDateTime(booking.StartDateTime.AddMinutes(booking.DurationMin));
+                var closure = await _context.ShopClosures.FirstOrDefaultAsync(s =>
+                    s.IsActive == true && (s.BarberId == null || s.BarberId == booking.BarberId) &&
+                    ((s.EndDate == null && s.StartDate == appointmentDate) ||
+                     (s.EndDate != null && s.StartDate <= appointmentDate && s.EndDate >= appointmentDate)) &&
+                    (s.IsFullDay || (s.StartTime < endTime && s.EndTime > appointmentTime)));
+
+                if (closure != null) return BadRequest(new { message = "This slot now falls on a shop closure and can no longer be confirmed" });
+                //The closure checks is for when the admin created a closure between PENDING and COMPLETED stage
                 var existingPayment = await _context.Payments.FirstOrDefaultAsync(p => p.BookingId == model.BookingId);
                 if (existingPayment != null) return BadRequest(new { message = "A payment already exists for this booking" });
 
@@ -261,6 +326,10 @@ namespace BarberShopAPI.Controllers
                     return BadRequest(new { message = "Please enter a valid full name" });
                 if (!IsValidPhoneNumber(model.Phone))
                     return BadRequest(new { message = "Invalid phone number" });
+                if (!isValidEmail(model.Email))
+                {
+                    return BadRequest(new { message = "Invalid email address"});
+                }
                 var user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == model.Phone);
                 if (user == null)
                 {
@@ -279,14 +348,33 @@ namespace BarberShopAPI.Controllers
                 }
                 booking.UserId = user.Id;
                 booking.Status = BookingStatus.COMPLETED;
+                booking.ContactEmail = model.Email;
+
+                    var reminderTime = booking.StartDateTime.AddHours(-2);
+                    var delay = ShopClock.ToUtc(reminderTime) - DateTime.UtcNow;
+                    if(delay > TimeSpan.Zero)
+                    {
+                        var jobId = BackgroundJob.Schedule<IEmailService>(service => service.sendBookingReminderEmailAsync(booking.Id), delay);
+                        booking.ReminderJobId = jobId;
+                    }
+
+
                 var payment = new Payment
                 {
                     BookingId = booking.Id,
-                    Amount = model.Amount// might be null if accessedByAdmin is true because it might not be passed from the frontend
+                    Amount = model.Amount
                 };
                 _context.Payments.Add(payment);
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
+
+                    BackgroundJob.Enqueue<IEmailService>(
+                        service => service.sendBookingConfirmationEmailAsync(booking.Id));
+                
+                /* 
+                 *there is a reason why the schedule is inside the and the enqueue is outside 
+                 *the transaction
+                 */
                 return Ok(new
                 {
                     bookingId = booking.Id,
@@ -298,7 +386,37 @@ namespace BarberShopAPI.Controllers
             catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                return StatusCode(500, new { message = "An error occurred while processing the payment", ex.Message });
+                return StatusCode(500, new { message = "An error occurred while processing the payment"});
+            }
+        }
+        [Authorize(Roles = "ADMIN,BARBER")]
+        [HttpPatch("mark-cash-paid/{bookingId}")]
+        public async Task<IActionResult> MarkCashPaymentAsPaid(int bookingId)
+        {
+            try
+            {
+                var payment = await _context.Payments.FirstOrDefaultAsync(p => p.BookingId == bookingId);
+                if (payment == null) return NotFound(new { message = "Payment not found for this booking" });
+                if (payment.Method != Models.Enums.PaymentMethod.CASH)
+                    return BadRequest(new { message = "Only cash payments can be marked as paid this way" });
+                if (payment.Status == PaymentStatus.COMPLETED)
+                    return BadRequest(new { message = "This payment has already been marked as paid" });
+
+                payment.Status = PaymentStatus.COMPLETED;
+                payment.PaidAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+
+                return Ok(new
+                {
+                    message = "Payment marked as paid",
+                    paymentId = payment.Id,
+                    paidAt = payment.PaidAt
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500, new { message = "Unexpected server error occurred" });
             }
         }
         [HttpPost("payment-intent")]
@@ -307,24 +425,55 @@ namespace BarberShopAPI.Controllers
             Console.WriteLine($"{request.BookingId}, {request.Amount}, {request.FullName}, {request.Phone}");
             try
             {
+                var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.Id == request.BookingId);
+                if (booking == null) return BadRequest(new { message = "Booking not found" });
+                if (booking.Status != BookingStatus.PENDING)
+                    return BadRequest(new { message = "This booking can no longer be paid for" });
 
                 if (!IsValidName(request.FullName))
                     return BadRequest(new { message = "Please enter a valid full name" });
                 if (!IsValidPhoneNumber(request.Phone))
                     return BadRequest(new { message = "Invalid phone number" });
+                if (!isValidEmail(request.Email))
+                    return BadRequest(new { message = "Invalid Email Address" });
                 var paymentIntentOptions = new PaymentIntentCreateOptions
                 {
                     Amount = request.Amount,
                     Currency = "eur",
                     PaymentMethodTypes = new List<string> { "card" },
-                    Metadata = new Dictionary<string, string> {                        
+                    Metadata = new Dictionary<string, string> {
                             {"BookingId", request.BookingId.ToString() },
                             {"FullName", request.FullName },
-                            {"Phone", request.Phone }
+                            {"Phone", request.Phone },
+                            {"Email", request.Email }
                         }
                 };
+
                 var service = new PaymentIntentService();
+
+                if (!string.IsNullOrWhiteSpace(booking.StripePaymentIntentId))
+                {
+                    try
+                    {
+                        // Void whatever PaymentIntent was created for this booking last time
+                        // (e.g. the customer refreshed mid-checkout) so it can never succeed later
+                        // and become an orphaned charge nothing in the system is tracking anymore.
+                        await service.CancelAsync(booking.StripePaymentIntentId);
+                    }
+                    catch (StripeException)
+                    {
+                        // Couldn't cancel it - most likely it already succeeded or is mid-processing.
+                        // Don't create a second PaymentIntent on top of an unresolved one; that risks
+                        // charging the customer twice. Let the existing attempt run its course instead.
+                        return BadRequest(new { message = "A payment is already being processed for this booking" });
+                    }
+                }
+
                 var paymentIntent = await service.CreateAsync(paymentIntentOptions);
+
+                booking.StripePaymentIntentId = paymentIntent.Id;
+                await _context.SaveChangesAsync();
+
                 return StatusCode(201, new
                 {
                     message = "finish payment via Stripe",
@@ -348,8 +497,8 @@ namespace BarberShopAPI.Controllers
             [FromQuery] string? status,
             int barberId)
         {
-            var from = fromDate?.ToLocalTime();
-            var to = toDate?.ToLocalTime();
+            var from = fromDate.HasValue ? ShopClock.FromUtc(fromDate.Value) : (DateTime?)null;
+            var to = toDate.HasValue ? ShopClock.FromUtc(toDate.Value) : (DateTime?)null;
             var barber = await _context.Barbers.Where(b => b.Id == barberId && b.isActive == true)
                 .Select(b => new { b.Id, b.User.Name, b.User.Surname, b.ImageUrl }).FirstOrDefaultAsync();
             if (barber == null) return NotFound(new { message = "Barber not found" });
@@ -406,8 +555,8 @@ namespace BarberShopAPI.Controllers
         {
             try
             {
-                var from = fromDate?.ToLocalTime();
-                var to = toDate?.ToLocalTime();
+                var from = fromDate.HasValue ? ShopClock.FromUtc(fromDate.Value) : (DateTime?)null;
+                var to = toDate.HasValue ? ShopClock.FromUtc(toDate.Value) : (DateTime?)null;
                 Console.WriteLine($"Status is {status}, FromDate is{from}, toDate is {to}");
                 if (from.HasValue != to.HasValue) return BadRequest(new { message = "Both From Date and To Date must be provided or left empty" });
                 if (from.HasValue && to.HasValue && from.Value > to.Value) return BadRequest(new { message = "From Date cannot be after To Date" });
@@ -476,12 +625,13 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 if (booking == null) return NotFound("The booking to edit was not found");
                 if (booking.Status == BookingStatus.PENDING) return BadRequest(new { message = "Cannot edit a pending booking"});
                 if (booking.Status == BookingStatus.CANCELLED) return BadRequest(new { message = "Cannot edit a cancelled booking"});
-                if (booking.StartDateTime <= DateTime.Now) return BadRequest(new {message = "Cannot edit a booking that has passed"});
+                if (booking.StartDateTime <= ShopClock.Now) return BadRequest(new {message = "Cannot edit a booking that has passed"});
 
                 return Ok(new EditBookingViewModel
                 {
                     BarberId = booking.BarberId,
                     StartDateTime = booking.StartDateTime,
+                    DurationMin = booking.DurationMin,
                 });
             }
             catch(Exception ex)
@@ -531,27 +681,28 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 return StatusCode(500, new { message = "Unexpected Server error occurred" });
             }
         }
+        /* refundAnyway lets staff override the 24h no-refund policy and force a full refund - for goodwill,
+         * or a shop-side cancel (e.g. barber off sick) that isn't a formal ShopClosure. Defaults to false,
+         * so a normal cancel inside 24h withholds the refund. */
         [Authorize(Roles = "ADMIN,BARBER")]
         [HttpPatch("cancel/{bookingId}")]
-        public async Task<IActionResult>CancelBooking(int bookingId)
+        public async Task<IActionResult>CancelBooking(int bookingId, [FromQuery] bool refundAnyway = false)
         {
             try
             {
-                var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.Id == bookingId);
-                /* You might be wondering why dont we do .Where() and .Select to return the id and status instead of the entire booking.
-                 * The reason is that when you do .Select(b => new { b.Id, b.Status }), you are 
-                 projecting the result into an anonymous object meaning that EF Core just
-                returns  aplain C# object - it has no idea it came from the database. It is not 
-                tracking it at all so when you change the status EF Core doesnt see it and 
-                SaveChangesAsync has nothing to save. EF Core's change tracker only tracks
-                full entities*/
-
-                if (booking == null) return NotFound(new { message = "This booking was not found" });
-                if (booking.Status == BookingStatus.CANCELLED) return BadRequest(new { message = "Booking is already cancelled" });
-                if (booking.Status == BookingStatus.PENDING) return BadRequest(new {message =  "Cannot cancel a pending booking"});
-                booking.Status = BookingStatus.CANCELLED;
-                await _context.SaveChangesAsync();
-                return Ok($"Booking with id {bookingId} was cancelled succefully");
+                /* The refund + reminder-job-delete + cancel + email logic lives in BookingCanceller so
+                 * the shop-closure flow (which cancels the same way) shares one code path. We just map
+                 * its Outcome to the right HTTP response here.*/
+                var outcome = await BookingCanceller.CancelAsync(_context, bookingId, dueToClosure: false, forceRefund: refundAnyway);
+                return outcome switch
+                {
+                    BookingCanceller.Outcome.NotFound => NotFound(new { message = "This booking was not found" }),
+                    BookingCanceller.Outcome.AlreadyCancelled => BadRequest(new { message = "Booking is already cancelled" }),
+                    BookingCanceller.Outcome.Pending => BadRequest(new { message = "Cannot cancel a pending booking" }),
+                    BookingCanceller.Outcome.RefundFailed => StatusCode(502, new { message = "Could not process the refund with Stripe. The booking was not cancelled - please try again." }),
+                    BookingCanceller.Outcome.CancelledNoRefund => Ok(new { message = "Booking cancelled. No refund was issued as it is within 24 hours of the appointment." }),
+                    _ => Ok(new { message = "Booking cancelled successfully." })
+                };
             }
             catch(DbUpdateException ex)
             {
@@ -574,6 +725,8 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.Id == bookingId);
                 if (booking == null) return NotFound(new {message = "Booking not found"});
                 if (booking.Status != BookingStatus.COMPLETED) return BadRequest(new { message = "Only confirmed bookings can be updated" });
+
+
                 int barberId = request.BarberId ?? booking.BarberId;
                 DateTime startDateTime = request.StartDateTime ?? booking.StartDateTime;
                 if(request.BarberId != null)
@@ -582,7 +735,10 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                     if (barber == null) return NotFound(new {message =  "Barber not found"});
                     if (!barber.isActive) return BadRequest(new {message =  "This barber is no longer active"});
                 }
-                if(request.StartDateTime != null && request.StartDateTime < DateTime.Now)
+                /* Reschedule is staff-only (ADMIN/BARBER), so the 90-min lead-time buffer and 60-day horizon
+                 * that ValidateBookingTime enforces on customers don't apply here - staff can move a booking
+                 * to any future slot. We only guard against moving it into the past. */
+                if(request.StartDateTime.HasValue && request.StartDateTime.Value < ShopClock.Now)
                 {
                     return BadRequest(new { message = "Cannot book slots in the past" });
                 }
@@ -599,15 +755,47 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 );
                 if (closureDate != null) return BadRequest(new { message = "The chosen slot falls on an unavailable date" });
 
+                // Staff reschedule is exempt from working hours (as with the create paths) but must
+                // still honour the between-booking buffer (see ShopSettings.BufferMin).
+                var buffer = await _context.ShopSettings.Select(s => s.BufferMin).FirstAsync();
                 var overlap = await _context.Bookings.AnyAsync(b =>
                 b.Id != bookingId &&//exclude current booking
                 b.BarberId == barberId &&
                 b.Status != BookingStatus.CANCELLED &&
-                b.StartDateTime < endDateTime && b.StartDateTime.AddMinutes(b.DurationMin) > startDateTime
+                b.StartDateTime < endDateTime.AddMinutes(buffer) && b.StartDateTime.AddMinutes(b.DurationMin + buffer) > startDateTime
                 );
                 if (overlap) return BadRequest(new { message = "The chosen slot overlaps with an existing booking" });
+
+                var oldStartDateTime = booking.StartDateTime;
+
                 booking.StartDateTime = startDateTime;
                 booking.BarberId = barberId;
+
+                var timeChanged = request.StartDateTime.HasValue;
+                if (timeChanged)
+                {
+                    //cancel existing reminder if any
+                    if (!string.IsNullOrWhiteSpace(booking.ReminderJobId))
+                    {
+                        BackgroundJob.Delete(booking.ReminderJobId);
+                        booking.ReminderJobId = null;
+                        booking.ReminderSentAt = null;
+                    }
+                    //schedule new reminder if the booking has a contact email and new time is >2h away
+                    if (!string.IsNullOrWhiteSpace(booking.ContactEmail))
+                    {
+                        var reminderTime = startDateTime.AddHours(-2);
+                        var delay = ShopClock.ToUtc(reminderTime) - DateTime.UtcNow;
+                        if (delay > TimeSpan.Zero)
+                        {
+                            var jobId = BackgroundJob.Schedule<IEmailService>(service => service.sendBookingReminderEmailAsync(bookingId), delay);
+                            booking.ReminderJobId = jobId;
+                        }
+
+                        BackgroundJob.Enqueue<IEmailService>(service => service.sendBookingRescheduledEmailAsync(bookingId, oldStartDateTime));
+                    }
+                    
+                }
                 await _context.SaveChangesAsync();
                 /* you might be thinking that you have to set the booking record
                  * inside the right barber record so that the original booking will be 
@@ -648,6 +836,22 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 return StatusCode(500, new {message = "Unexpected Server error occurred"});
             }
         }
+        private bool isValidEmail(string email)
+        {
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                return false;
+            }
+            try
+            {
+                var addr = new System.Net.Mail.MailAddress(email);
+                return addr.Address == email;
+            }
+            catch(Exception ex)
+            {
+                return false;
+            }
         }
     }
+}
 
