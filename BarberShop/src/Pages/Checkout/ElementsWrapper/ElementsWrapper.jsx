@@ -67,7 +67,7 @@ clientSecret here allows Stripe.js to know how much to charge, what currency and
 "Stripe, here's the payment we are working on. Use this secret to connect the card form to that paymentIntent"
 Why clientSecret is needed in <Elements>: Because Elements must know which PaymentIntent it's displaying and confirming. 
 Without it Stripe.js doesnt know the amount, the currency, the methods allowed or even what payment it's supposed to confirm. Stripe instenally uses that client secret
-to link the data entered in your <PaymentElement/> directly to that specific payment.So, the PaymentElement is not just a form — it’s a live, preconfigured interface tied to the exact payment session that your backend created.
+to link the data entered in your <PaymentElement/> directly to that specific payment.So, the PaymentElement is not just a form â€” itâ€™s a live, preconfigured interface tied to the exact payment session that your backend created.
  When you do <Elements>,
 Stripe creates an Elements instance - think of it as a controller object that manages all your individual components(like card number, expiry, CVC etc). That instance keeps track
 of which payment fields exist,(<PaymentElement/> or <CardElement/>) handles all input validation, encryption etc. Then when you do
@@ -77,7 +77,7 @@ getElement: fn,    // lets you access PaymentElement, CardElement, etc
 submit: fn,        // can trigger validation/submission
 update: fn,        // can update appearance or options
 ...other internal methods
-The clientSecret is not passed into confirmPayment({}) — it’s already embedded in the elements(const elements = useElements()) instance when <Elements> was created.
+The clientSecret is not passed into confirmPayment({}) â€” itâ€™s already embedded in the elements(const elements = useElements()) instance when <Elements> was created.
 }
 When you call: stripe.confirmPayment({ elements });, Stripe looks inside elements to find the paymentElement, extracts the inputted card data, combines that data with the PaymentIntent(via its clientSecret).
 "<Elements stripe={stripePromise} options={{ clientSecret }}>" - It is the point where stripe says "Alright, im setting up the secure from for the paymentIntent that belongs to this clientSecret",

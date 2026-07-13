@@ -6,7 +6,7 @@ StripePaymentSection solves this by:
 
 Living inside <Elements> so it can safely call useStripe() and useElements()
 Exposing confirmPayment() and isReady() upward to PaymentForm via the ref
-Rendering <PaymentElement /> — the actual card input UI
+Rendering <PaymentElement /> â€” the actual card input UI
 
 asically this component is used to render useStripe() and useElements() inside
 <Elements>. Remmeber that when clientSecret doesnt exist we render<>children</> without the <Elements> wrapped around the children.

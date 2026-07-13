@@ -114,7 +114,7 @@ const FancyPhoneInput = ({ value, onChange }) => {
                             onChange={e => setSearch(e.target.value)}
                         />
                         {search && (
-                            <button className="fpi-search-clear" onClick={() => setSearch("")}>×</button>
+                            <button className="fpi-search-clear" onClick={() => setSearch("")}>Ã—</button>
                         )}
                     </div>
 
