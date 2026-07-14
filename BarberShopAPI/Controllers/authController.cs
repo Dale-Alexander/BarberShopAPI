@@ -21,10 +21,12 @@ namespace BarberShopAPI.Controllers
     {
         private readonly BarberShopContext _context;
         private readonly IEmailService _emailService;
-        public authController(BarberShopContext context, IEmailService emailService)
+        private readonly IWebHostEnvironment _env;
+        public authController(BarberShopContext context, IEmailService emailService, IWebHostEnvironment env)
         {
             _context = context;
             _emailService = emailService;
+            _env = env;
         }
         [HttpPost("login")]
         public async Task <IActionResult> Login([FromBody] LoginEmailPasswordViewModel request)
@@ -127,7 +129,24 @@ namespace BarberShopAPI.Controllers
                 Response.Cookies.Append("jwt", jwt, new CookieOptions
                 {
                     HttpOnly = true,
-                    Secure = false,
+                    // Secure = only send the cookie over HTTPS. Dev runs on plain
+                    // http://localhost so it MUST be false there; production runs on HTTPS
+                    // so it MUST be true. Driven off the environment (ASPNETCORE_ENVIRONMENT)
+                    // so we never accidentally ship the insecure setting to production.
+                    Secure = !_env.IsDevelopment(),
+                    // SameSite=Lax is correct AS LONG AS the frontend and this API are the
+                    // SAME SITE (same registrable domain) -- e.g. app.yourshop.com +
+                    // api.yourshop.com via subdomains, which is the recommended production
+                    // setup (see the CORS comment in Program.cs). If you instead deploy the
+                    // frontend and backend on DIFFERENT domains (e.g. myapp.vercel.app +
+                    // myapi.azurewebsites.net) the browser treats them as cross-site and will
+                    // NOT send this cookie under Lax -- you would have to change this to
+                    // SameSiteMode.None, which additionally REQUIRES Secure=true. Prefer the
+                    // subdomain setup so you can keep Lax and avoid cross-site cookie blocking.
+                    //NOTE: The frontend and backend on production are going to be completely different
+                    //but they will be reated as the same origin because i am using a proxy.
+                    //I am not using CORS because it is redundant since both origins are the same and not corss-origin
+                    //The current set up still works
                     SameSite = SameSiteMode.Lax,
                     Expires = DateTime.UtcNow.AddDays(1)
                 });

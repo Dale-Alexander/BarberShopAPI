@@ -7,19 +7,17 @@ Look at BarberController of old project and look how capitalize is used. It retu
 
 #What happens when a barber or an admin try to make a booking. 
 
-Check if i really truly need withCredentials:true in the interceptor since i am running a proxy
-which treats the frontend and the backend as the same origin and therefore check if i really need
-to use the following that is on the server: "builder.Services.AddCors(options =>
-{
-options.AddPolicy("AllowReactDev", policy =>
-{
-    policy.WithOrigins("http://localhost:5173")
-          .AllowAnyHeader()
-          .AllowAnyMethod()
-          .AllowCredentials();
-});
-});
-"
+  No need to change vite.config.js. That is only used in development and not production
+  VITE_BASE_URL needs changing to my backend domain
+  VITE_STRIPE_PUBLISHABLE_KEY needs changing
+  FRONTEND_BASE_URL still needs changing even though it is not used for CORS but it is used in Program.cs because it feeds my email links
+  My config files (either netlify or vercel) to set up the proxy so that requests are silently sent to my backend, meaning the browser still thinks it is on
+  the same origin, sending requests to itself
+  Frontend URL and Backend URL can be entirely different, they dont have to use sub-domains. Example: https://dalesbarbershop.com, https://barbershop-api.azurewebsites.net,
+  just make sure you set up the config files or set them up on the hosting website itself so the proxy is set up meaning requests that begin with /api are silently
+  sent to the backend
+  VITE_BASE_URL and STRIPE_PUBLISHABLE_KEY that are used in development should stay in .env (already done) but the ones used in production should be written
+  in .env.production(already set up, you just have to replace the values).
 
 Check if you the filtered index and not just a normal index.  see what happens when creating a barber, deleting it and creating 
 it with the same email and how that relates to the amount of people. I dont think you even have a statcard in the dashboard showing the amount of different people. 

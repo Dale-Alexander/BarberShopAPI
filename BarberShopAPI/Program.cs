@@ -127,16 +127,20 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
     });
 
+var frontendOrigin = Environment.GetEnvironmentVariable("FRONTEND_BASE_URL") ?? "http://localhost:5173";
+
 builder.Services.AddCors(options =>
 {
 options.AddPolicy("AllowReactDev", policy =>
 {
-    policy.WithOrigins("http://localhost:5173")
+    policy.WithOrigins(frontendOrigin)
           .AllowAnyHeader()
           .AllowAnyMethod()
           .AllowCredentials();
 });
 });
+//using CORS is redundant because i am going to use a proxy which treats the frontend and backend as the same origin. Im using proxy in both produ and dev. 
+//Claude told me to keep it as a safety net
 
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
