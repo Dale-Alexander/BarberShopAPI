@@ -90,12 +90,15 @@ const AlreadyPaid = () => {
                             {[
                                 { icon: <User size={14} color="#888" />, label: "Customer", value: bookingDetails?.customerName },
                                 { icon: <Scissors size={14} color="#888" />, label: "Barber", value: bookingDetails?.barberName },
-                                { icon: <Star size={14} color="#888" />, label: bookingDetails?.serviceNames.length > 1 ? "Services" : "Service", value: bookingDetails?.serviceNames?.join(", ") },
+                                { icon: <Star size={14} color="#888" />, label: bookingDetails?.serviceNames?.length > 1 ? "Services" : "Service", value: bookingDetails?.serviceNames?.join(", ") },
                                 { icon: <CalendarDays size={14} color="#888" />, label: "Date", value: bookingDetails?.date },
                                 { icon: <Clock size={14} color="#888" />, label: "Time", value: bookingDetails?.time },
                                 { icon: <CreditCard size={14} color="#888" />, label: "Payment Method", value: bookingDetails?.paymentMethod },
                                 { icon: <Hash size={14} color="#888" />, label: "Booking ID", value: bookingDetails?.bookingId, mono: true },
-                            ].map(({ icon, label, value, mono }) => (
+                            ]
+                            // A booking cancelled while still pending has no customer/payment - drop those blank rows.
+                            .filter(({ value }) => value != null && value !== "")
+                            .map(({ icon, label, value, mono }) => (
                                 <div className="ap-receipt__row" key={label}>
                                     <div className="ap-receipt__row-icon">{icon}</div>
                                     <div className="ap-receipt__row-info">
@@ -107,10 +110,12 @@ const AlreadyPaid = () => {
                         </div>
 
                         <div className="ap-receipt__footer">
-                            <div>
-                                <p className="ap-receipt__footer-label">Amount</p>
-                                <p className="ap-receipt__footer-amount">&euro;{bookingDetails?.amountPaid}</p>
-                            </div>
+                            {bookingDetails?.paymentMethod && (
+                                <div>
+                                    <p className="ap-receipt__footer-label">Amount</p>
+                                    <p className="ap-receipt__footer-amount">&euro;{bookingDetails?.amountPaid}</p>
+                                </div>
+                            )}
                             <div className={`ap-receipt__footer-badge ${isCancelled ? "ap-receipt__footer-badge--cancelled" : "ap-receipt__footer-badge--paid"}`}>
                                 <ShieldCheck size={14} color={isCancelled ? "#e74c3c" : "#34a853"} />
                                 <span>{isCancelled ? "Booking Cancelled" : "Transaction Complete"}</span>

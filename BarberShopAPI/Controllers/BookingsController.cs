@@ -269,13 +269,15 @@ namespace BarberShopAPI.Controllers
                     .Select(b => new
                     {
                         b.Status,
-                        CustomerName = b.User.Name + " " + b.User.Surname,
+                        // A booking cancelled while still PENDING never got a linked user or a payment,
+                        // so User/Payment can be null here - keep these null-safe or the projection 500s.
+                        CustomerName = b.User != null ? b.User.Name + " " + b.User.Surname : null,
                         BarberName = b.Barber.User.Name + " " + b.Barber.User.Surname,
                         ServiceNames = b.Services.Select(bs => bs.Service.Name).ToList(),
                         AmountPaid = b.Services.Sum(bs => bs.Service.Price),
                         Date = b.StartDateTime.ToString("dddd, MMMM d, yyyy"),
                         Time = b.StartDateTime.ToString("h:mm tt"),
-                        PaymentMethod = b.Payment.Method.ToString(),
+                        PaymentMethod = b.Payment != null ? b.Payment.Method.ToString() : null,
                         BookingId = b.Id
                     })
                     .FirstOrDefaultAsync();
@@ -345,6 +347,19 @@ namespace BarberShopAPI.Controllers
                     };
                     _context.Users.Add(user);
                     await _context.SaveChangesAsync();
+                }
+                // The customer may have started a card payment earlier (clicked Pay Online) without finishing,
+                // leaving a live PaymentIntent on this booking. Switching to cash doesn't void it, so if we
+                // complete as cash without cancelling it, that card attempt could still succeed later (e.g. a
+                // slow 3-D Secure or a dropped success response) and double-charge them. Cancel it now; if
+                // Stripe won't (it's already succeeding), the webhook's orphaned-charge guard refunds it.
+                if (!string.IsNullOrWhiteSpace(booking.StripePaymentIntentId))
+                {
+                    try { await new PaymentIntentService().CancelAsync(booking.StripePaymentIntentId); }
+                    catch (StripeException ex)
+                    {
+                        Console.WriteLine($"Booking {booking.Id}: couldn't cancel PaymentIntent {booking.StripePaymentIntentId} on cash confirm (likely already succeeding); webhook will refund if it lands: {ex.Message}");
+                    }
                 }
                 booking.UserId = user.Id;
                 booking.Status = BookingStatus.COMPLETED;

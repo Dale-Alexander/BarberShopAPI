@@ -136,14 +136,65 @@ namespace BarberShopAPI.Controllers
 
                             // Only reachable once we know this specific PaymentIntent was never recorded before
                             // and this booking has no completed payment yet. If the booking still isn't PENDING
-                            // at this point, it means it expired (or was completed some other way, e.g. cash)
-                            // while this PaymentIntent was still alive - most likely a stray PaymentIntent from
-                            // an earlier page load/refresh that the cron job's expiry cancel never caught up with.
-                            // The card was genuinely charged, so this needs a manual refund/follow-up.
+                            // at this point, it means it expired, was cancelled by a closure, or was completed
+                            // some other way (e.g. cash) while this PaymentIntent was still alive - a stray charge
+                            // with no confirmable booking to attach it to. The card was genuinely charged, so we
+                            // refund it automatically and tell the customer instead of leaving a stuck charge.
                             if (booking.Status != BookingStatus.PENDING)
                             {
-                                Console.WriteLine($"Booking {bookingId} is no longer pending (status: {booking.Status}), ignoring webhook. Payment intent {paymentIntent.Id} was charged but this booking can't be confirmed - needs a refund/manual follow-up.");
-                                return Ok(new { message = "Booking can no longer be confirmed" });
+                                Console.WriteLine($"Booking {bookingId} is no longer pending (status: {booking.Status}); refunding orphaned PaymentIntent {paymentIntent.Id}.");
+
+                                if (amountReceived > 0)
+                                {
+                                    var orphanRefund = await StripeRefunds.RefundIdempotentlyAsync(paymentIntent.Id);
+                                    if (orphanRefund == StripeRefunds.Outcome.Failed)
+                                        return StatusCode(500, "Refund failed"); // non-2xx => Stripe retries later
+                                }
+
+                                // Record the refund for a financial trail - but only when this booking has no
+                                // Payment row yet (UX_Payment_BookingId is unique). The cash-completed case already
+                                // has a row, so we skip it there and lean on the refund idempotency key for safety.
+                                var hasPayment = await _context.Payments.AnyAsync(p => p.BookingId == bookingId);
+                                if (!hasPayment)
+                                {
+                                    _context.Payments.Add(new Payment
+                                    {
+                                        BookingId = bookingId,
+                                        StripePaymentIntentId = paymentIntent.Id,
+                                        Amount = amountReceived / 100m,
+                                        Status = PaymentStatus.REFUNDED,
+                                        Method = Models.Enums.PaymentMethod.CARD,
+                                        PaidAt = DateTime.UtcNow
+                                    });
+
+                                    // A booking cancelled from PENDING never had a user/email linked, so pull the
+                                    // contact details from the metadata to give the refund email somewhere to go.
+                                    if (booking.UserId == null)
+                                    {
+                                        var user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == phone);
+                                        if (user == null)
+                                        {
+                                            var nameParts = fullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                                            if (nameParts.Length > 0)
+                                            {
+                                                user = new User
+                                                {
+                                                    Name = nameParts[0],
+                                                    Surname = nameParts.Length > 1 ? string.Join(" ", nameParts.Skip(1)) : null,
+                                                    Phone = phone
+                                                };
+                                                _context.Users.Add(user);
+                                            }
+                                        }
+                                        if (user != null) booking.User = user;
+                                    }
+                                    if (string.IsNullOrWhiteSpace(booking.ContactEmail)) booking.ContactEmail = email;
+                                    await _context.SaveChangesAsync();
+                                }
+
+                                // We return Ok below, so Stripe won't retry this event - one refund, one email.
+                                BackgroundJob.Enqueue<IEmailService>(service => service.sendPaymentRefundedUnconfirmedEmailAsync(bookingId));
+                                return Ok(new { message = "Payment for an unconfirmable booking was refunded" });
                             }
 
                             //This slot is for when the admin creates a closure between the PENDING -> COMPLETED stage of a booking
@@ -170,22 +221,10 @@ namespace BarberShopAPI.Controllers
                                 // failed DB write below replays the same refund as a success instead of
                                 // refunding twice - so the retry can get past this and finish recording the
                                 // cancellation it couldn't complete last time.
-                                try
+                                var closureRefund = await StripeRefunds.RefundIdempotentlyAsync(paymentIntent.Id);
+                                if (closureRefund == StripeRefunds.Outcome.Failed)
                                 {
-                                    var refundService = new RefundService();
-                                    await refundService.CreateAsync(new RefundCreateOptions { PaymentIntent = paymentIntent.Id },
-                                        new RequestOptions { IdempotencyKey = $"refund-{paymentIntent.Id}" });
-                                }
-                                catch (StripeException ex) when (ex.StripeError?.Code == "charge_already_refunded")
-                                {
-                                    // Already refunded on a previous attempt (whose DB write failed) or after the
-                                    // 24h idempotency window - nothing left to refund, so fall through and record
-                                    // the cancellation rather than looping on a refund that can't happen again.
-                                    Console.WriteLine($"Booking {bookingId}: PaymentIntent {paymentIntent.Id} already refunded, proceeding to cancel.");
-                                }
-                                catch (StripeException ex)
-                                {
-                                    Console.WriteLine($"Booking {bookingId} fell on a closure but the refund failed for PaymentIntent {paymentIntent.Id}: {ex.Message}. Needs manual refund/follow-up.");
+                                    Console.WriteLine($"Booking {bookingId} fell on a closure but the refund failed for PaymentIntent {paymentIntent.Id}. Needs manual refund/follow-up.");
                                     return StatusCode(500, "Refund failed");
                                 }
 
@@ -204,6 +243,37 @@ namespace BarberShopAPI.Controllers
                                         Method = Models.Enums.PaymentMethod.CARD,
                                         PaidAt = DateTime.UtcNow
                                     });
+
+                                    // Link the user and set ContactEmail from the metadata just like the
+                                    // success path does - without this the cancellation email below silently
+                                    // no-ops (sendBookingCancelledDueToClosureEmailAsync bails when ContactEmail
+                                    // is blank, and would NPE on booking.User.Name). This customer was charged
+                                    // and refunded, so they must actually be told.
+                                    if (booking.UserId == null)
+                                    {
+                                        var user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == phone);
+                                        if (user == null)
+                                        {
+                                            var nameParts = fullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                                            if (nameParts.Length == 0)
+                                            {
+                                                Console.WriteLine("Invalid fullName in metadata");
+                                                await closureTx.RollbackAsync();
+                                                return Ok(new { message = "Invalid metadata" });
+                                            }
+                                            var firstName = nameParts[0];
+                                            var lastName = nameParts.Length > 1 ? string.Join(" ", nameParts.Skip(1)) : null;
+                                            user = new User
+                                            {
+                                                Name = firstName,
+                                                Surname = lastName,
+                                                Phone = phone
+                                            };
+                                            _context.Users.Add(user);
+                                        }
+                                        booking.User = user;
+                                    }
+                                    booking.ContactEmail = email;
                                     booking.Status = BookingStatus.CANCELLED;
                                     await _context.SaveChangesAsync();
                                     await closureTx.CommitAsync();

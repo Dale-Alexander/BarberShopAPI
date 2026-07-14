@@ -3,7 +3,6 @@ using BarberShopAPI.Models.Enums;
 using BarberShopAPI.Services;
 using Hangfire;
 using Microsoft.EntityFrameworkCore;
-using Stripe;
 
 namespace BarberShopAPI.Common
 {
@@ -48,37 +47,18 @@ namespace BarberShopAPI.Common
 
             if (refundAllowed && hadRefundablePayment)
             {
-                try
-                {
-                    var refundService = new RefundService();
-                    /* Idempotency key keyed to the PaymentIntent being refunded: if this call has to be
-                     * retried (e.g. the SaveChanges below failed last time and the admin re-clicks cancel),
-                     * Stripe replays the original refund as a success instead of refunding a second time.
-                     * That lets the retry get past this line and finish the cancellation it couldn't complete. */
-                    await refundService.CreateAsync(new RefundCreateOptions
-                    {
-                        PaymentIntent = payment.StripePaymentIntentId
-                    }, new RequestOptions { IdempotencyKey = $"refund-{payment.StripePaymentIntentId}" });
-                    payment.Status = PaymentStatus.REFUNDED;
-                    refundIssued = true;
-                }
-                catch (StripeException ex) when (ex.StripeError?.Code == "charge_already_refunded")
-                {
-                    /* The money is already back with the customer - e.g. a refund from a previous attempt
-                     * whose DB write failed, or an idempotency key that expired (Stripe only keeps them 24h).
-                     * There's nothing left to refund, so treat this as success and carry on with the
-                     * cancellation rather than getting stuck re-refunding something already refunded. */
-                    Console.WriteLine($"Booking {bookingId}: charge already refunded on Stripe, proceeding with cancellation.");
-                    payment.Status = PaymentStatus.REFUNDED;
-                    refundIssued = true;
-                }
-                catch (StripeException ex)
+                /* Shared idempotent refund: a retry (SaveChanges below failed last time and the admin re-clicks
+                 * cancel) replays the original refund as a success instead of refunding twice. Refunded and
+                 * AlreadyRefunded both mean the money is back, so we mark it REFUNDED and carry on. */
+                var refundOutcome = await StripeRefunds.RefundIdempotentlyAsync(payment.StripePaymentIntentId);
+                if (refundOutcome == StripeRefunds.Outcome.Failed)
                 {
                     /* Don't cancel while the money is still with us - surface it so the caller can retry
                      * / follow up manually rather than silently keeping the customer's payment. */
-                    Console.WriteLine($"Refund failed for booking {bookingId}, not cancelling: {ex.Message}");
                     return Outcome.RefundFailed;
                 }
+                payment.Status = PaymentStatus.REFUNDED;
+                refundIssued = true;
             }
 
             if (!string.IsNullOrWhiteSpace(booking.ReminderJobId))

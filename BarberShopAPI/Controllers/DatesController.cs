@@ -63,18 +63,39 @@ namespace BarberShopAPI.Controllers
                 // can decide. They re-submit with ConfirmCancelBookings = true to go ahead.
                 if (conflicts.Count > 0 && !newClosure.ConfirmCancelBookings)
                 {
+                    // Tell the admin exactly who the automatic cancellation email can reach and who it can't.
+                    // A booking is only actually emailed on cancel when it's COMPLETED *and* has a ContactEmail:
+                    // PENDING conflicts are never emailed (they were never confirmed - see CancelConflictingBookingsAsync),
+                    // and admin-created bookings carry only a phone, no email. Everyone else must be reached by phone.
+                    var conflictDetails = conflicts.Select(b => new
+                    {
+                        b.Id,
+                        Date = b.StartDateTime.ToString("dddd, MMMM d, yyyy"),
+                        Time = b.StartDateTime.ToString("h:mm tt"),
+                        Customer = b.User != null ? $"{b.User.Name} {b.User.Surname}".Trim() : null,
+                        Status = b.Status.ToString(),
+                        Email = b.ContactEmail,
+                        Phone = b.User != null ? b.User.Phone : null,
+                        WillBeEmailed = b.Status == BookingStatus.COMPLETED && !string.IsNullOrWhiteSpace(b.ContactEmail)
+                    }).ToList();
+
+                    var emailedCount = conflictDetails.Count(c => c.WillBeEmailed);
+                    var phoneOnlyCount = conflictDetails.Count - emailedCount;
+
+                    var message = $"This closure overlaps {conflictDetails.Count} existing booking(s). "
+                        + "Confirming will cancel and refund them. "
+                        + (emailedCount > 0
+                            ? $"{emailedCount} customer(s) with an email on file will be notified automatically. "
+                            : "")
+                        + (phoneOnlyCount > 0
+                            ? $"{phoneOnlyCount} have no email and must be contacted by phone."
+                            : "");
+
                     return Conflict(new
                     {
                         requiresConfirmation = true,
-                        message = "This closure overlaps existing bookings. Confirm to cancel and refund them.",
-                        conflicts = conflicts.Select(b => new
-                        {
-                            b.Id,
-                            Date = b.StartDateTime.ToString("dddd, MMMM d, yyyy"),
-                            Time = b.StartDateTime.ToString("h:mm tt"),
-                            Customer = b.User != null ? $"{b.User.Name} {b.User.Surname}".Trim() : null,
-                            Status = b.Status.ToString()
-                        })
+                        message,
+                        conflicts = conflictDetails
                     });
                 }
 

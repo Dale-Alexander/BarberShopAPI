@@ -11,6 +11,9 @@ import usePhone from "../../../Hooks/usePhone";
 const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, setClientSecret, paymentMethod, setPaymentMethod, phone, setPhone, fullName, setFullName }) => {
     const stripeRef = useRef(null);
     const [loadingPayment, setLoadingPayment] = useState(false);
+    // Set when the backend says a card payment for this booking is already in flight (from another tab /
+    // session) that we can't render a form for. We keep the customer on CARD and show a wait message.
+    const [paymentInProgress, setPaymentInProgress] = useState(false);
     const { showToast } = useContext(ToastContext);
     const [hasClickedConfirm, setHasClickedConfirm] = useState(false);
     const navigate = useNavigate();
@@ -25,6 +28,27 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
         if (!value?.trim()) return false;
         return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
     }
+
+    /* The slot can vanish from under the customer while they sit on this page: the 15-min hold expires
+       (cron) or an admin closes the slot. Both cancel the still-PENDING booking on the server, so the
+       backend starts rejecting confirm/pay with a 400. Instead of a cryptic toast, send them to the
+       cancelled screen (which offers "Book Another Appointment"). clearBooking() drops the stale hold. */
+    const goToCancelledScreen = () => {
+        clearBooking();
+        setClientSecret(null);
+        navigate(`/cancelledorcompleted/${bookingId}`, { replace: true });
+    };
+
+    /* True when a 400 means the booking itself is no longer usable (expired hold, cancelled, or the slot
+       was closed) rather than a fixable input problem - matches the server messages from confirm-cash and
+       payment-intent ("Only Pending Bookings...", "no longer be paid for", "shop closure", "not found"). */
+    const isBookingNoLongerPending = (err) => {
+        if (err.response?.status !== 400) return false;
+        const msg = (err.response?.data?.message || "").toLowerCase();
+        return /no longer|pending|closure|not found/.test(msg);
+        //the reason we check for the message and not the status is because the backend returns 400 for both "booking is gone" and "your input is valid".
+        //We only want the to redirect for the "gone" ones. For an invalid email, the user should stay on the page and fix it. 
+    };
 
     const isUserDetailsValid = () => {
         if (!fullName.trim()) return false;
@@ -54,13 +78,32 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
                 amount: bookingDetails?.price * 100
             }
             const { data } = await axios.post(`/api/bookings/payment-intent`, payload);
-            console.log("Received clientSecret:", data.clientSecret);
             setClientSecret(data.clientSecret);
+            setPaymentInProgress(false);
             return data.clientSecret;
         }
         catch (err) {
-            if (err.response?.status === 409) console.log(err.response?.data?.message);
-            console.error(err);
+            // Booking is gone (expired / cancelled / slot closed) - redirect; nothing to revert, we're leaving.
+            if (isBookingNoLongerPending(err)) {
+                goToCancelledScreen();
+                return null;
+            }
+            /* The backend returns 400 with this message when a previous PaymentIntent for this booking is
+               still being processed and couldn't be voided. A card payment is genuinely in flight, so we keep
+               the customer on CARD (flipping to cash would invite a second, cash payment on top of it). We
+               can't render a form for that other PaymentIntent, so show a "please wait" state instead. */
+            const message = err.response?.data?.message || "";
+            if (/already being processed/i.test(message)) {
+                setPaymentInProgress(true);
+                showToast("Payment in progress", "A payment is already being processed for this booking. Please wait a moment, then refresh.");
+            } else {
+                // Genuine setup failure with no payment in flight - drop back to cash so the customer isn't
+                // stranded on a card form that can't load.
+                console.error(err);
+                setPaymentMethod("CASH");
+                showToast("Unexpected error", "Something went wrong setting up the payment form. Please try again.");
+            }
+            return null;
         }
     }
 
@@ -82,6 +125,7 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
         }
         catch (err) {
             console.error(err);
+            if (isBookingNoLongerPending(err)) return goToCancelledScreen();
             showToast("Error Confirming Payment", err.response?.data?.message);
             setHasClickedConfirm(false);
         }
@@ -98,8 +142,19 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
         if (success) {
             clearBooking();
             setClientSecret(null);
+            return;
         }
-        else setHasClickedConfirm(false);
+        /* Payment failed. That's usually just a declined card (booking still PENDING - let them retry),
+           but it's also what happens when the hold expired or the slot was closed, which voids the
+           PaymentIntent server-side. Re-check the booking: if it's no longer pending, send them to the
+           cancelled screen rather than leaving them stuck on a form they can never submit. */
+        try {
+            await axios.get(`/api/bookings/checkout/${bookingId}`);
+            setHasClickedConfirm(false); // still payable - the payment error was already toasted, allow retry
+        }
+        catch {
+            goToCancelledScreen();
+        }
     }
 
 
@@ -109,12 +164,11 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
             return;
         }
         setPaymentMethod("CARD");
+        setPaymentInProgress(false);
         setLoadingPayment(true);
-        const secret = await startCardFlow();
-        if (!secret) {
-            setPaymentMethod("CASH");
-            showToast("Unexpected error", "Error setting up payment form");
-        }
+        // startCardFlow owns the outcome: it renders the form on success, redirects if the booking is gone,
+        // keeps CARD + a wait message if a payment is already in flight, or falls back to cash on a hard error.
+        await startCardFlow();
         setLoadingPayment(false);
     }
 
@@ -198,9 +252,13 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
                                 <span>256-bit SSL encrypted - your card info is safe</span>
                             </div>
                             {clientSecret && !loadingPayment ? (
-                                <StripePaymentSection ref={stripeRef} bookingId={bookingId} onPaymentError={(msg) => 
+                                <StripePaymentSection ref={stripeRef} bookingId={bookingId} onPaymentError={(msg) =>
                                     showToast("Payment Error", msg)
                                 }/>
+                            ) : paymentInProgress ? (/* ▎ The customer opens the checkout for a booking in a different browser or tab than the one where they already started a card payment — and that earlier payment is already going through (processing or completed) on Stripe's side.
+
+In plain terms: they tried to pay by card somewhere else, that payment is already in motion, and now they've come back on a fresh device/tab that doesn't remember it. */
+                                <p className="checkout-card__subtitle">A payment is already being processed for this booking. Please wait a moment, then refresh the page to continue.</p>
                             ) : (
 <LoadingSpinner message="Loading Payment Form" color="#000000" inline />
                             )}

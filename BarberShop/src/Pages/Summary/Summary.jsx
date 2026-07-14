@@ -4,6 +4,7 @@ import {
 }
     from "lucide-react";
 import useFetch from "../../Hooks/useFetch";
+import axios from "axios";
 import { useParams, useNavigate } from "react-router-dom";
 import { useState, useEffect, useContext } from "react";
 import LoadingSpinner from "../../Components/LoadingSpinner/LoadingSpinner";
@@ -28,8 +29,46 @@ const AlreadyPaid = () => {
             }
         }
         if (!data) return;
+        /* The card can succeed but the booking still end up CANCELLED: a closure landed on the slot in the
+           payment window, so the webhook refunded and cancelled it (see WebHookController closure guard).
+           Stripe still redirects here on success, so without this check we'd wrongly show "Booking Confirmed"
+           for a booking that was cancelled and refunded. Send them to the cancelled screen instead. */
+        if (data.status === "CANCELLED") {
+            navigate(`/cancelledorcompleted/${bookingId}`, { replace: true });
+            return;
+        }
         setBookingDetails(data);
     }, [bookingId, data, error])
+
+    /* The check above only catches a booking that was ALREADY cancelled when the page first loaded. But the
+       webhook that cancels+refunds a closure-conflicted booking runs asynchronously, and Stripe redirects us
+       here the instant the card succeeds - so the webhook can finish a beat later. Poll a few times to catch
+       that late flip and redirect. We hit the endpoint directly (not useFetch) so re-fetching doesn't churn
+       component state. Can't fully close the window - the webhook is inherently async - but shrinks it to a
+       couple of seconds; either way the booking is cancelled server-side and the customer gets the email. */
+    useEffect(() => {
+        if (!data || data.status !== "COMPLETED") return;
+        let stopped = false;
+        const poll = async () => {
+            for (let tries = 0; tries < 4 && !stopped; tries++) {
+                await new Promise((r) => setTimeout(r, 2000));//polls the backend every 2 seconds
+                if (stopped) return;//navigate doesnt terminate current JS running, it just changes the react component. If we dont return the still-alive
+                //loop would wake up 2 seconds later and keep hitting the request
+                try {
+                    const res = await axios.get(`/api/bookings/alreadypaid/${bookingId}`);
+                    if (res.data?.status === "CANCELLED") {
+                        navigate(`/cancelledorcompleted/${bookingId}`, { replace: true });
+                        return;
+                    }
+                } catch {
+                    // transient - keep polling
+                }
+            }
+        };
+        poll();
+        return () => { stopped = true; };//hit when component unmounts, not when we navigate. For example React StrictMode remounts the component in dev
+        //or the other effect redirects(eg: booking was already cancelled on load)
+    }, [bookingId, data, navigate])
 
     //early returns after all hooks. Loading after useEffect
     if (loading) return <LoadingSpinner message="Loading Booking Details" color="#000000" />

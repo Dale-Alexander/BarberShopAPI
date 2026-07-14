@@ -15,6 +15,7 @@ namespace BarberShopAPI.Services
         Task sendBookingConfirmationEmailAsync(int bookingId);
         Task sendBookingCancellationEmailAsync(int bookingId, bool refundIssued);
         Task sendBookingCancelledDueToClosureEmailAsync(int bookingId);
+        Task sendPaymentRefundedUnconfirmedEmailAsync(int bookingId);
         Task sendBookingRescheduledEmailAsync(int bookingId, DateTime oldStartDateTime);
         Task sendPasswordResetEmailAsync(int userId, string rawToken);
     }
@@ -185,6 +186,58 @@ namespace BarberShopAPI.Services
                        $"so your appointment for that time has been cancelled.\n\n" +
                        refundText +
                        $"We apologise for the inconvenience. Please visit our website to book another time.";
+
+            await _resend.EmailSendAsync(message);
+        }
+
+        /* Sent when a card payment succeeded but there was no confirmable booking to attach it to, so the
+         * webhook refunded it (see WebHookController's orphaned-charge guard). Two shapes, because the same
+         * refund means different things: if the booking is COMPLETED it still stands (it was settled another
+         * way, e.g. cash) and we only clawed back a duplicate card charge; otherwise the booking couldn't be
+         * confirmed at all and this is their only notice that the money is on its way back. */
+        public async Task sendPaymentRefundedUnconfirmedEmailAsync(int bookingId)
+        {
+            var booking = await _context.Bookings.Include(b => b.User).FirstOrDefaultAsync(b => b.Id == bookingId);
+            if (booking == null) return;
+            if (string.IsNullOrWhiteSpace(booking.ContactEmail)) return;
+
+            var safeName = WebUtility.HtmlEncode(booking.User?.Name);
+            var whenText = booking.StartDateTime.ToString("dddd, MMMM d 'at' h:mm tt");
+            var bookingStillStands = booking.Status == BookingStatus.COMPLETED;
+
+            var message = new EmailMessage
+            {
+                From = "Dale's Barbershop <onboarding@resend.dev>",
+                Subject = bookingStillStands ? "A duplicate payment has been refunded" : "Your payment has been refunded"
+            };
+            message.To.Add(booking.ContactEmail);
+
+            if (bookingStillStands)
+            {
+                message.HtmlBody = $@"
+                <h2>Hi {safeName},</h2>
+                <p>We noticed a duplicate card payment for your appointment on
+                <strong>{whenText}</strong> and have refunded it in full. It should appear on your original
+                payment method within a few business days.</p>
+                <p>Your appointment is unaffected - we'll see you then!</p>";
+                message.TextBody = $"Hi {booking.User?.Name},\n\n" +
+                    $"We noticed a duplicate card payment for your appointment on {whenText} and have refunded it in full. " +
+                    $"It should appear on your original payment method within a few business days.\n\n" +
+                    $"Your appointment is unaffected - we'll see you then!";
+            }
+            else
+            {
+                message.HtmlBody = $@"
+                <h2>Hi {safeName},</h2>
+                <p>We're sorry - we weren't able to confirm your booking for
+                <strong>{whenText}</strong>, so your card payment has been refunded in full. It should appear
+                on your original payment method within a few business days.</p>
+                <p>Please visit our website to book another time.</p>";
+                message.TextBody = $"Hi {booking.User?.Name},\n\n" +
+                    $"We're sorry - we weren't able to confirm your booking for {whenText}, so your card payment " +
+                    $"has been refunded in full. It should appear on your original payment method within a few business days.\n\n" +
+                    $"Please visit our website to book another time.";
+            }
 
             await _resend.EmailSendAsync(message);
         }
