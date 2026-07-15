@@ -31,6 +31,11 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
         const diffHours = (new Date(booking.startDateTime) - getMaltaNow()) / (1000 * 60 * 60);
         return diffHours < REFUND_CUTOFF_HOURS;
     };
+
+    /* A booking that has already passed can't be rescheduled or cancelled - the backend rejects both
+     * (UpdateBooking / GetBooking guard on ShopClock.Now), so we grey the actions out instead of letting
+     * the admin click through to an error. Malta-vs-Malta comparison, same as isWithinRefundCutoff. */
+    const isPast = (booking) => new Date(booking.startDateTime) < getMaltaNow();
     useEffect(() => {
         const handleClickOutside = () => {
             setOpenMenuId(null);
@@ -190,10 +195,10 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                                         </button>
                                             {openMenuId === b.id && (
                                                 <div className="action-dropdown-menu">
-                                                    <button className="action-dropdown-item edit-item" onClick={() => {
+                                                    <button className="action-dropdown-item edit-item" disabled={isPast(b)} title={isPast(b) ? "This booking has already passed" : undefined} onClick={() => {
                                                     navigate(`/datetime/${b.id}`); setOpenMenuId(null);
                                                     }}><SquarePen size={14}/> Edit</button>
-                                                <button className="action-dropdown-item cancel-item" onClick={() => {
+                                                <button className="action-dropdown-item cancel-item" disabled={isPast(b)} title={isPast(b) ? "This booking has already passed" : undefined} onClick={() => {
                                                     setCancelTarget(b); setRefundAnyway(false); setOpenMenuId(null);
                                                     }}><Trash2 size={14} /> Cancel</button>
                                                 {b.needsReview && (

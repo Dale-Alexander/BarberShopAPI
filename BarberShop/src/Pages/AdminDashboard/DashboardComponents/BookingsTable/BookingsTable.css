@@ -243,6 +243,15 @@
         background: hsl(228, 17%, 24%);
     }
 
+.action-dropdown-item:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+    .action-dropdown-item:disabled:hover {
+        background: none;
+    }
+
 .edit-item {
     color: hsl(220, 15%, 88%);
 }

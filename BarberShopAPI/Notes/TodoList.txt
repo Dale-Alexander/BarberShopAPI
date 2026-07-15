@@ -27,11 +27,6 @@ Also when making creating a booking. Make sure you do this:
 catch (DbUpdateException ex) when (ex.InnerException?.Message.Contains("unique") == true)
 
 
-
-when fetching a barber first to see if he exists or is active, select only the necessary columns you want because if you want to check the isActive status of the barber 
-when you have 100s and 1000s of bookings, you will be fetching all of the unnecessary columns which will take a lot of time so select only the barber Id and isActive column
-probably. Do the same for other stuff. This is probably true for update-booking and delete/:id in barbers controller
-
 When going to production you need to toggle off test mode for stripe and then the
 live keys will be revealed pk_live sk_live... . You then need to change your env variables
 
@@ -58,7 +53,6 @@ Decide whether bookings created by the admin can be marked as paid since their a
 Dpnt forget that the githib repo is private and not public
 
 When you have the admin's email and password, re run dotnet run -- --seed-admin in the terminal with the new values in the .env file
-
 
 
 Should I include a page in the dashboard that takes him to the Stripe Dashboard? 
