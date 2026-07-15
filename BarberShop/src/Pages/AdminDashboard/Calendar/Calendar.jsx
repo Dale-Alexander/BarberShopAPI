@@ -9,12 +9,14 @@ import "./Calendar.css";
 import useFetch from "../../../Hooks/useFetch.js";
 import { Box, List, ListItem, ListItemText, Typography } from "@mui/material";
 import { startOfDay, addDays } from "date-fns";
-import { Trash2, X, Menu } from "lucide-react";
+import { Trash2, X, Menu, Mail, Phone } from "lucide-react";
 import { AuthContext } from "../../../Context/AuthContext.jsx";
+import { ToastContext } from "../../../Context/ToastContext.jsx";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
 
 const AdminCalendar = () => {
     const { user } = useContext(AuthContext);
+    const { showToast } = useContext(ToastContext);
     const closuresUrl = user?.role === 'BARBER'
         ? `/api/dates/barber/${user?.id}/closures`
         : '/api/dates/admin/closures';
@@ -22,6 +24,11 @@ const AdminCalendar = () => {
     const [deleteSelectedEvent, setDeleteSelectedEvent] = useState(null);
     const [events, setEvents] = useState([]);
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    /* Set when a closure POST comes back 409 because it overlaps existing bookings: holds the backend's
+     * { message, conflicts } plus the original payload (closureData) so the admin can review who'd be
+     * cancelled and re-submit with confirmCancelBookings. submitting guards the confirm button. */
+    const [conflictData, setConflictData] = useState(null);
+    const [submitting, setSubmitting] = useState(false);
     useEffect(() => {
         if (!data) return;
         setEvents(data.map(closure => ({      
@@ -124,8 +131,7 @@ const AdminCalendar = () => {
       }
     }
 
-    const createDateClosure = async (selected) => {
-        console.log("Start", selected.startStr, "End", selected.endStr);
+    const buildClosurePayload = (selected) => {
         const shopClosureData = {
             startDate: selected.allDay ? selected.startStr : selected.startStr.split('T')[0],
             isFullDay: selected.allDay,
@@ -151,25 +157,63 @@ const AdminCalendar = () => {
         if (shopClosureData.startDate !== endDate) {
             shopClosureData.endDate = endDate;
         }
+        return shopClosureData;
+    }
+
+    const appendClosureEvent = (data) => {
+        setEvents(prev => [{
+            id: data.id,
+            title: user?.role === 'ADMIN' && data.barberName
+                ? `${data.barberName} - ${data.reason}`
+                : data.reason,
+            start: data.isFullDay ? data.startDate : `${data.startDate}T${data.startTime}`,
+            end: data.isFullDay
+                ? data.endDate
+                    ? addDays(data.endDate, 1)  // multi-day: make end exclusive
+                    : data.startDate             // single day: just use startDate, FullCalendar handles it
+                : `${data.endDate ?? data.startDate}T${data.endTime}`,
+            allDay: data.isFullDay
+        }, ...prev]);
+    }
+
+    /* Posts a closure. When it overlaps existing bookings the backend replies 409 with
+     * { requiresConfirmation, message, conflicts[] } instead of creating it; we surface those bookings to
+     * the admin (who's emailed vs. who needs a call) and re-post with confirmCancelBookings once they OK it.
+     * Any other error becomes a toast rather than a silent console.log. */
+    const submitClosure = async (payload) => {
+        setSubmitting(true);
         try {
-            const shopClosure = await adminAxios.post(`/api/dates`, shopClosureData);
-            setEvents(prev => [{
-                id: shopClosure.data.id,
-                title: user?.role === 'ADMIN' && shopClosure.data.barberName
-                    ? `${shopClosure.data.barberName} - ${shopClosure.data.reason}`
-                    : shopClosure.data.reason,
-                start: shopClosure.data.isFullDay ? shopClosure.data.startDate : `${shopClosure.data.startDate}T${shopClosure.data.startTime}`,
-                end: shopClosure.data.isFullDay
-                    ? shopClosure.data.endDate
-                        ? addDays(shopClosure.data.endDate, 1)  // multi-day: make end exclusive
-                        : shopClosure.data.startDate             // single day: just use startDate, FullCalendar handles it
-                    : `${shopClosure.data.endDate ?? shopClosure.data.startDate}T${shopClosure.data.endTime}`,
-                allDay:shopClosure.data.isFullDay
-            }, ...prev]);
+            const res = await adminAxios.post(`/api/dates`, payload);
+            appendClosureEvent(res.data);
+            if (payload.confirmCancelBookings && conflictData) {
+                // Remind the admin about the ones the automatic email can't reach.
+                const callList = conflictData.conflicts.filter(c => !c.willBeEmailed);
+                showToast(
+                    "Closure created",
+                    callList.length > 0
+                        ? `${conflictData.conflicts.length} booking(s) cancelled. Please phone the ${callList.length} customer(s) with no email on file.`
+                        : `${conflictData.conflicts.length} booking(s) cancelled and those customers emailed.`
+                );
+            }
+            setConflictData(null);
         }
         catch (err) {
-            console.log(err);
+            if (err.response?.status === 409 && err.response.data?.requiresConfirmation) {
+                setConflictData({ ...err.response.data, closureData: payload });
+            } else {
+                showToast("Couldn't create closure", err.response?.data?.message || "An unexpected error occurred. Please try again.");
+            }
         }
+        finally {
+            setSubmitting(false);
+        }
+    }
+
+    const createDateClosure = (selected) => submitClosure(buildClosurePayload(selected));
+
+    const confirmClosureWithCancellations = () => {
+        if (!conflictData) return;
+        submitClosure({ ...conflictData.closureData, confirmCancelBookings: true });
     }
 
     const handleClosureDelete = async (eventId) => {
@@ -352,6 +396,87 @@ const AdminCalendar = () => {
                                     ))}
                                 </List>
                             )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Closure Conflict Modal ── */}
+            {conflictData && (
+                <div
+                    className="modal-overlay"
+                    onClick={() => !submitting && setConflictData(null)}
+                >
+                    <div
+                        className="modal-content modal-content--wide"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="modal-header">
+                            <h2>Bookings affected by this closure</h2>
+                            <button
+                                className="modal-close"
+                                onClick={() => !submitting && setConflictData(null)}
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            <p className="closure-conflict-message">{conflictData.message}</p>
+
+                            <ul className="closure-conflict-list">
+                                {conflictData.conflicts.map((c) => (
+                                    <li key={c.id} className="closure-conflict-item">
+                                        <div className="closure-conflict-main">
+                                            <span className="closure-conflict-when">
+                                                {c.date} · {c.time}
+                                            </span>
+                                            {c.customer && (
+                                                <span className="closure-conflict-name">{c.customer}</span>
+                                            )}
+                                        </div>
+                                        {c.willBeEmailed ? (
+                                            <span className="closure-conflict-badge emailed">
+                                                <Mail size={14} />
+                                                Will be emailed{c.email ? ` · ${c.email}` : ""}
+                                            </span>
+                                        ) : (
+                                            <span className="closure-conflict-badge call">
+                                                <Phone size={14} />
+                                                {c.phone
+                                                    ? `Call: ${c.phone}`
+                                                    : c.email
+                                                        ? `No phone on file — email ${c.email}`
+                                                        : "No contact on file"}
+                                            </span>
+                                        )}
+                                    </li>
+                                ))}
+                            </ul>
+
+                            <p className="closure-conflict-note">
+                                Confirming cancels and refunds these bookings. Customers with an email are
+                                notified automatically; if an email fails to send, that booking appears in your{" "}
+                                <strong>Needs Review</strong> list so you can phone them by hand.
+                            </p>
+                        </div>
+                        <div className="modal-footer">
+                            <button
+                                className="btn-secondary"
+                                disabled={submitting}
+                                onClick={() => setConflictData(null)}
+                            >
+                                Keep bookings
+                            </button>
+                            <button
+                                className="btn-primary"
+                                style={{ background: "#e74c3c" }}
+                                disabled={submitting}
+                                onClick={confirmClosureWithCancellations}
+                            >
+                                {submitting
+                                    ? "Cancelling…"
+                                    : `Cancel ${conflictData.conflicts.length} booking(s) & close`}
+                            </button>
                         </div>
                     </div>
                 </div>

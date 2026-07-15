@@ -1,4 +1,5 @@
-import { useEffect, useState, useContext } from "react";
+import { useEffect, useState, useContext, useCallback } from "react";
+import { adminAxios } from "../../Hooks/AxiosInterceptor.js";
 import "./DashboardComponents/StatCard/StatCard";
 import BookmarkIcon from '@mui/icons-material/Bookmark';
 import AttachMoneyIcon from "@mui/icons-material/AttachMoney";
@@ -28,7 +29,22 @@ const AdminDashboard = () => {
     const [isRevenue, setIsRevenue] = useState(true);
     const [yearOpen, setYearOpen] = useState(false);
     const { load, loading } = useFetchBookings();
+    const [needsReviewCount, setNeedsReviewCount] = useState(0);
 
+    /* Standalone count so the "Needs Review" alert badge stays accurate no matter which date/status
+     * filter the table currently has applied. Refreshed after a booking is marked reviewed. */
+    const refreshNeedsReviewCount = useCallback(async () => {
+        try {
+            const res = await adminAxios.get("/api/bookings/needs-review-count");
+            setNeedsReviewCount(res.data?.count ?? 0);
+        }
+        catch (err) {
+            // Non-critical badge - don't toast, just leave it as-is.
+            console.error(err.response?.data?.message || err);
+        }
+    }, []);
+
+    useEffect(() => { refreshNeedsReviewCount(); }, [refreshNeedsReviewCount]);
 
 
     useEffect(() => {
@@ -206,7 +222,7 @@ const AdminDashboard = () => {
                     </div>
                 </div>
                 <div className="bookings-table-container">
-                    <BookingsTable bookings={bookings} setBookings={setBookings} filters={filters} resetFilters={resetFilters} applyFilters={applyFilters} />
+                    <BookingsTable bookings={bookings} setBookings={setBookings} filters={filters} resetFilters={resetFilters} applyFilters={applyFilters} needsReviewCount={needsReviewCount} refreshNeedsReviewCount={refreshNeedsReviewCount} />
                 </div>
             </div>
         </div>

@@ -133,7 +133,7 @@ namespace BarberShopAPI.Controllers
                     // http://localhost so it MUST be false there; production runs on HTTPS
                     // so it MUST be true. Driven off the environment (ASPNETCORE_ENVIRONMENT)
                     // so we never accidentally ship the insecure setting to production.
-                    Secure = !_env.IsDevelopment(),
+                    Secure = !_env.IsDevelopment(),//automatically changed
                     // SameSite=Lax is correct AS LONG AS the frontend and this API are the
                     // SAME SITE (same registrable domain) -- e.g. app.yourshop.com +
                     // api.yourshop.com via subdomains, which is the recommended production

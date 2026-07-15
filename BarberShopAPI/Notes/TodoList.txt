@@ -46,8 +46,7 @@ Also check if keys expire after 90 days
 
 Add some validation on names in Services and maybe other attributes which need validation in all controllers
 
-When confirming the booking, make sure the form has an email form to fill in
-and next to it say something like "A reminder will be sent by email 2 hours before appointment"
+
 
 IDempotencyCheck when sending a reminder and maybe even when sending a confirmation email
 To do this add another field to the booking schema named ReminderSentAt
@@ -74,17 +73,14 @@ When you have the admin's email and password, re run dotnet run -- --seed-admin 
 
 
 
-Check for Strip exceptions and general exceptions in webhoook, confirm-cash, DatesController and the BookingCanceller
-
 From Claude: "- Known caveat (unchanged from the webhook discussion): if a Stripe refund succeeds but the DB write then fails, that one booking needs manual follow-up — logged, money never at risk."
 
 Implement the closure/booking collision on the frontend. When making a closure, if the closure conflicts with some bookings, return those bookings(already done
 in the Dates controller) and ask the user if he is sure he wants to create a closure. If he clicks yes, then those bookings are cancelled. Everything is done on
 the backend, the frontend is what needs work. 
 
-If a booking extends beyond the closing hour, is it allowed. 
 
-If a booking ends at 10:00, and a closure starts at that time, is that considered a conflict? Does it take into consideration the buffer after the booking? 
+Should I include a page in the dashboard that takes him to the Stripe Dashboard? 
 
-Hangfire not initialized in Program.cs and encoding issues in FancyPhoneInput and somewhere else.
+Check how the booking-needs-review flow works and see if everything works as you like, especially on frontend. 
 

@@ -66,6 +66,14 @@ namespace BarberShopAPI.Models
         public string? ContactEmail { get; set; }
         public string? StripePaymentIntentId { get; set; }
 
+        /* Set when an automated money-vs-booking reconciliation couldn't complete on its own and a human
+         * has to finish it by hand (e.g. a closure landed on a paid booking but the Stripe refund failed,
+         * so the booking is neither properly cancelled nor refunded). ReviewReason carries the same context
+         * the log line does so the admin knows what to check in Stripe. Cleared via the mark-reviewed
+         * endpoint once the money and status have been reconciled. */
+        public bool NeedsReview { get; set; } = false;
+        public string? ReviewReason { get; set; }
+
         /* How to know its a navigation property: 
          *DataType is another model class. For example: Payment, Barber etc
          *Please note that navigation properties are not stored as real

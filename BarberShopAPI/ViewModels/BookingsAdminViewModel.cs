@@ -9,5 +9,7 @@
         public decimal? Amount { get; set; }
         public string PaymentStatus { get; set; }
         public string PaymentMethod { get; set; }
+        public bool NeedsReview { get; set; }
+        public string? ReviewReason { get; set; }
     }
 }

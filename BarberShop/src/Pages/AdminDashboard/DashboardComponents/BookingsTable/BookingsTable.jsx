@@ -1,10 +1,11 @@
-﻿import { useState, useEffect } from "react";
+﻿import { useState, useEffect, useContext } from "react";
 import { useNavigate } from "react-router-dom";
-import { SquarePen, Trash2, Plus, Filter, Search } from "lucide-react";
+import { SquarePen, Trash2, Plus, Filter, Search, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { format } from "date-fns";
 import FilterModal from "../Filter/Filter.jsx";
 import "./BookingsTable.css";
 import { adminAxios } from "../../../../Hooks/AxiosInterceptor";
+import { ToastContext } from "../../../../Context/ToastContext.jsx";
 
 /* Cancelling within this many hours of the appointment forfeits the customer's refund (mirrors the
  * backend RefundCutoff in BookingCanceller). Compared against Malta wall-clock, since startDateTime is
@@ -13,12 +14,14 @@ const REFUND_CUTOFF_HOURS = 24;
 const getMaltaNow = () =>
     new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Malta" }));
 
-const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filters}) => {
+const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filters, needsReviewCount = 0, refreshNeedsReviewCount}) => {
     const [openMenuId, setOpenMenuId] = useState(null);
     const [searchInput, setSearchInput] = useState("");
     const [filterModalOpen, setFilterModalOpen] = useState(false);
     const [cancelTarget, setCancelTarget] = useState(null);
     const [refundAnyway, setRefundAnyway] = useState(false);
+    const [reviewTarget, setReviewTarget] = useState(null);
+    const { showToast } = useContext(ToastContext);
     const navigate = useNavigate();
 
     /* startDateTime is Malta wall-clock (parsed as local) and getMaltaNow() is Malta's clock as local, so
@@ -39,11 +42,14 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
 
     const onCancel = async (bookingId, forceRefund = false) => {
         try {
-            await adminAxios.patch(`/api/bookings/cancel/${bookingId}${forceRefund ? "?refundAnyway=true" : ""}`);
+            const res = await adminAxios.patch(`/api/bookings/cancel/${bookingId}${forceRefund ? "?refundAnyway=true" : ""}`);
             setBookings(prev => prev.filter(b => b.id !== bookingId));
+            showToast("Booking cancelled", res.data?.message || "The booking was cancelled.");
         }
         catch (err) {
-            console.error(err.response?.data?.message || err.response?.data);
+            /* Surface the server's reason (e.g. a failed Stripe refund on a 502) instead of only logging it -
+             * otherwise the admin sees the modal close with the booking still listed and no explanation. */
+            showToast("Cancellation failed", err.response?.data?.message || "An unexpected error occurred. Please try again.");
         }
     }
 
@@ -53,6 +59,40 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
         const force = isWithinRefundCutoff(cancelTarget) && refundAnyway;
         onCancel(cancelTarget.id, force);
         setCancelTarget(null);
+    }
+
+    /* NEEDS_REVIEW isn't a payment status in the filter modal - it's a dedicated worklist toggle. Clicking
+     * the header button switches the table in/out of that view via the same URL-param filter plumbing. */
+    const toggleNeedsReview = () => {
+        applyFilters({
+            status: filters.status === "NEEDS_REVIEW" ? null : "NEEDS_REVIEW",
+            fromDate: null,
+            toDate: null,
+        });
+    }
+
+    const onMarkReviewed = async (bookingId) => {
+        try {
+            await adminAxios.patch(`/api/bookings/mark-reviewed/${bookingId}`);
+            /* In the review view the row no longer belongs, so drop it; in any other view keep the row but
+             * clear the flag so the warning marker disappears. Either way, refresh the badge count. */
+            setBookings(prev =>
+                filters.status === "NEEDS_REVIEW"
+                    ? prev.filter(b => b.id !== bookingId)
+                    : prev.map(b => b.id === bookingId ? { ...b, needsReview: false, reviewReason: null } : b)
+            );
+            refreshNeedsReviewCount?.();
+            showToast("Marked as reviewed", `Booking #${bookingId} was cleared from the review list.`);
+        }
+        catch (err) {
+            showToast("Couldn't mark as reviewed", err.response?.data?.message || "An unexpected error occurred. Please try again.");
+        }
+    }
+
+    const confirmReview = () => {
+        if (!reviewTarget) return;
+        onMarkReviewed(reviewTarget.id);
+        setReviewTarget(null);
     }
 
     return (
@@ -73,6 +113,20 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                             onChange={(e) => setSearchInput(e.target.value)}
                         />
                     </div>
+
+                    {needsReviewCount > 0 && (
+                        <section aria-label="Needs review">
+                            <button
+                                onClick={toggleNeedsReview}
+                                title="Bookings whose money couldn't be reconciled automatically - check Stripe and reconcile by hand"
+                                className={`bookings-admin-table-btn bookings-admin-table-btn-review ${filters.status === "NEEDS_REVIEW" ? "review-active" : ""}`}
+                            >
+                                <span className="bookings-admin-table-btn-icon"><AlertTriangle size={16} /></span>
+                                <span className="btn-label">Needs Review</span>
+                                <span className="review-badge">{needsReviewCount}</span>
+                            </button>
+                        </section>
+                    )}
 
                     <section aria-label="Filter">
                         <button onClick={() => setFilterModalOpen(true)}  className="bookings-admin-table-btn bookings-admin-table-btn-filter">
@@ -105,7 +159,19 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                     <tbody>
                         {bookings.map((b) => (
                             <tr key={b.id} style={{ transition: "background 0.2s" }}>
-                                <td className="table-data" data-label="Booking ID">{b.id}</td>
+                                <td className="table-data" data-label="Booking ID">
+                                    <span className="booking-id-cell">
+                                        {b.id}
+                                        {b.needsReview && (
+                                            <AlertTriangle
+                                                size={14}
+                                                className="needs-review-flag"
+                                                aria-label="Needs review"
+                                                title={b.reviewReason || "Needs manual review"}
+                                            />
+                                        )}
+                                    </span>
+                                </td>
                                 <td className="table-data" data-label="Name">{`${b.firstName}`}</td>
                                 <td className="table-data" data-label="Date & Time">{format(new Date(b.startDateTime), "dd-MM-yyyy")} <br />
                                     {format(new Date(b.startDateTime), "HH:mm")}
@@ -129,6 +195,11 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                                                 <button className="action-dropdown-item cancel-item" onClick={() => {
                                                     setCancelTarget(b); setRefundAnyway(false); setOpenMenuId(null);
                                                     }}><Trash2 size={14} /> Cancel</button>
+                                                {b.needsReview && (
+                                                    <button className="action-dropdown-item review-item" onClick={() => {
+                                                        setReviewTarget(b); setOpenMenuId(null);
+                                                    }}><CheckCircle2 size={14} /> Mark reviewed</button>
+                                                )}
                                                 </div>
                                             )}
                                     </div>
@@ -171,6 +242,24 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                         <div className="cancel-confirm-actions">
                             <button className="cancel-confirm-keep" onClick={() => setCancelTarget(null)}>Keep booking</button>
                             <button className="cancel-confirm-go" onClick={confirmCancel}>Confirm cancel</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {reviewTarget && (
+                <div className="cancel-confirm-overlay" onClick={() => setReviewTarget(null)}>
+                    <div className="cancel-confirm-modal" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="cancel-confirm-title">Mark booking #{reviewTarget.id} as reviewed?</h3>
+                        {reviewTarget.reviewReason && (
+                            <p className="cancel-confirm-text review-reason-text">{reviewTarget.reviewReason}</p>
+                        )}
+                        <p className="cancel-confirm-text">
+                            This only clears the review flag. Make sure you've already refunded / reconciled
+                            this booking in Stripe first &mdash; marking it reviewed does <strong>not</strong> move any money.
+                        </p>
+                        <div className="cancel-confirm-actions">
+                            <button className="cancel-confirm-keep" onClick={() => setReviewTarget(null)}>Cancel</button>
+                            <button className="review-confirm-go" onClick={confirmReview}>Mark reviewed</button>
                         </div>
                     </div>
                 </div>

@@ -577,16 +577,25 @@ namespace BarberShopAPI.Controllers
                 if (from.HasValue && to.HasValue && from.Value > to.Value) return BadRequest(new { message = "From Date cannot be after To Date" });
                 var query = _context.Bookings.AsQueryable();
 
-                // Default to COMPLETED unless bookingStatus is explicitly passed
-                if (status == "CANCELLED")
-                    query = query.Where(b => b.Status == BookingStatus.CANCELLED);
+                // NEEDS_REVIEW is a cross-status worklist (a flagged booking can be any status), so it
+                // bypasses the status/payment defaulting below rather than layering on top of it.
+                if (status == "NEEDS_REVIEW")
+                {
+                    query = query.Where(b => b.NeedsReview);
+                }
                 else
-                    query = query.Where(b => b.Status == BookingStatus.COMPLETED); // default
+                {
+                    // Default to COMPLETED unless bookingStatus is explicitly passed
+                    if (status == "CANCELLED")
+                        query = query.Where(b => b.Status == BookingStatus.CANCELLED);
+                    else
+                        query = query.Where(b => b.Status == BookingStatus.COMPLETED); // default
 
-                if (status == "PAID")
-                    query = query.Where(b => b.Payment.Status == PaymentStatus.COMPLETED);
-                else if (status == "PENDING")
-                    query = query.Where(b => b.Payment.Status == PaymentStatus.PENDING);
+                    if (status == "PAID")
+                        query = query.Where(b => b.Payment.Status == PaymentStatus.COMPLETED);
+                    else if (status == "PENDING")
+                        query = query.Where(b => b.Payment.Status == PaymentStatus.PENDING);
+                }
 
                 if (from.HasValue && to.HasValue)
                 {
@@ -605,7 +614,9 @@ namespace BarberShopAPI.Controllers
                         StartDateTime = b.StartDateTime,
                         Amount = b.Payment.Amount,
                         PaymentMethod = b.Payment.Method.ToString(),//without .ToString the frontend would receive numbers like 0 or 1
-                        PaymentStatus = b.Payment.Status.ToString()
+                        PaymentStatus = b.Payment.Status.ToString(),
+                        NeedsReview = b.NeedsReview,
+                        ReviewReason = b.ReviewReason
                     }).ToListAsync();
                 /* The reason you dont do .Include() for Payment and User is because you are selecting(.Select()).
                  * When you use .Select() EF Core is smart enough to figure out exactly what data it
@@ -623,6 +634,50 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 return Ok(bookings);
             }
             catch(Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500, new { message = "Unexpected Server error occurred" });
+            }
+        }
+
+        // Clears the review flag after a human has reconciled the money/status by hand (refunded in Stripe,
+        // set the booking/payment to match). Purely a bookkeeping toggle - it doesn't touch Stripe or the
+        // booking status, so the admin is responsible for making those right before marking it reviewed.
+        [Authorize(Roles = "ADMIN")]
+        [HttpPatch("mark-reviewed/{bookingId}")]
+        public async Task<IActionResult> MarkBookingReviewed(int bookingId)
+        {
+            try
+            {
+                var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.Id == bookingId);
+                if (booking == null) return NotFound(new { message = "This booking was not found" });
+                if (!booking.NeedsReview) return BadRequest(new { message = "This booking is not flagged for review" });
+
+                booking.NeedsReview = false;
+                booking.ReviewReason = null;
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Booking marked as reviewed" });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500, new { message = "Unexpected Server error occurred" });
+            }
+        }
+
+        // Standalone count so the dashboard can show a "needs review" alert badge that stays accurate no
+        // matter what date/status filter the admin currently has applied to the table.
+        [Authorize(Roles = "ADMIN")]
+        [HttpGet("needs-review-count")]
+        public async Task<IActionResult> GetNeedsReviewCount()
+        {
+            try
+            {
+                var count = await _context.Bookings.CountAsync(b => b.NeedsReview);
+                return Ok(new { count });
+            }
+            catch (Exception ex)
             {
                 Console.WriteLine(ex.Message);
                 return StatusCode(500, new { message = "Unexpected Server error occurred" });

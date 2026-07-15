@@ -70,7 +70,7 @@ namespace BarberShopAPI.Common
             await context.SaveChangesAsync();
 
             if (dueToClosure)
-                BackgroundJob.Enqueue<IEmailService>(s => s.sendBookingCancelledDueToClosureEmailAsync(bookingId));
+                BackgroundJob.Enqueue<IEmailService>(s => s.sendBookingCancelledDueToClosureEmailAsync(bookingId, null));
             else
                 BackgroundJob.Enqueue<IEmailService>(s => s.sendBookingCancellationEmailAsync(bookingId, refundIssued));
 

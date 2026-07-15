@@ -5,17 +5,40 @@ using BarberShopAPI.Models.Enums;
 using System.Net;
 using System.Text.Encodings.Web;
 using BarberShopAPI.Common;
+using Hangfire;
+using Hangfire.Server;
 
 namespace BarberShopAPI.Services
 {
+    /* Retry policy shared between the closure-cancellation email job's [AutomaticRetry] attribute and the
+     * job body, so "how many attempts before we give up" has one source of truth. Attempts is the number of
+     * RETRIES after the first run, so total executions = ClosureCancelRetries + 1. */
+    public static class EmailJobPolicy
+    {
+        public const int ClosureCancelRetries = 5;
+
+        /* Same idea as ClosureCancelRetries, for the "we couldn't confirm your booking, here's your refund"
+         * email: once exhausted we flag the booking so staff phone the customer instead. */
+        public const int RefundNoticeRetries = 5;
+    }
 
     public interface IEmailService
     {
         Task sendBookingReminderEmailAsync(int bookingId);
         Task sendBookingConfirmationEmailAsync(int bookingId);
         Task sendBookingCancellationEmailAsync(int bookingId, bool refundIssued);
-        Task sendBookingCancelledDueToClosureEmailAsync(int bookingId);
-        Task sendPaymentRefundedUnconfirmedEmailAsync(int bookingId);
+
+        /* The [AutomaticRetry] lives on the interface method because that's the MethodInfo Hangfire records
+         * when the job is enqueued via BackgroundJob.Enqueue<IEmailService>(...), so this is where it reads
+         * the filter. context is filled in by Hangfire at run time (callers pass null); the body uses it to
+         * tell a transient failure it should retry from the final attempt where it flags for a manual call. */
+        [AutomaticRetry(Attempts = EmailJobPolicy.ClosureCancelRetries)]
+        Task sendBookingCancelledDueToClosureEmailAsync(int bookingId, PerformContext? context);
+        /* [AutomaticRetry] here for the same reason as the closure email above (Hangfire reads the filter off
+         * the interface method). Only the "booking couldn't be confirmed" shape flags on final failure - the
+         * duplicate-refund shape is a harmless courtesy, so it's left to fail quietly. */
+        [AutomaticRetry(Attempts = EmailJobPolicy.RefundNoticeRetries)]
+        Task sendPaymentRefundedUnconfirmedEmailAsync(int bookingId, PerformContext? context);
         Task sendBookingRescheduledEmailAsync(int bookingId, DateTime oldStartDateTime);
         Task sendPasswordResetEmailAsync(int userId, string rawToken);
     }
@@ -148,7 +171,7 @@ namespace BarberShopAPI.Services
          * We include the Payment so we only promise a refund when one actually happened: CancelBooking
          * sets the payment to REFUNDED after Stripe confirms it, so REFUNDED here means the money is
          * genuinely on its way back. A cash/unpaid booking has nothing to refund, so we omit that line.*/
-        public async Task sendBookingCancelledDueToClosureEmailAsync(int bookingId)
+        public async Task sendBookingCancelledDueToClosureEmailAsync(int bookingId, PerformContext? context)
         {
             var booking = await _context.Bookings
                 .Include(b => b.User)
@@ -187,7 +210,26 @@ namespace BarberShopAPI.Services
                        refundText +
                        $"We apologise for the inconvenience. Please visit our website to book another time.";
 
-            await _resend.EmailSendAsync(message);
+            try
+            {
+                await _resend.EmailSendAsync(message);
+            }
+            catch (Exception ex)
+            {
+                /* This email is the customer's ONLY notice that we cancelled their slot - unlike an admin
+                 * cancel, no one is standing in front of them to tell them. On a transient failure let
+                 * Hangfire keep retrying; only once the retries are exhausted do we give up and flag the
+                 * booking for manual follow-up, so it surfaces in the admin's Needs-Review worklist with an
+                 * instruction to phone the customer instead of vanishing into the failed-jobs list. */
+                var retryCount = context?.GetJobParameter<int>("RetryCount") ?? 0;
+                if (retryCount < EmailJobPolicy.ClosureCancelRetries) throw;
+
+                booking.NeedsReview = true;
+                booking.ReviewReason =
+                    $"Cancellation email to {booking.ContactEmail} failed after {EmailJobPolicy.ClosureCancelRetries + 1} attempts ({ex.Message}). "
+                    + $"Call the customer to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled by the shop closure.";
+                await _context.SaveChangesAsync();
+            }
         }
 
         /* Sent when a card payment succeeded but there was no confirmable booking to attach it to, so the
@@ -195,7 +237,7 @@ namespace BarberShopAPI.Services
          * refund means different things: if the booking is COMPLETED it still stands (it was settled another
          * way, e.g. cash) and we only clawed back a duplicate card charge; otherwise the booking couldn't be
          * confirmed at all and this is their only notice that the money is on its way back. */
-        public async Task sendPaymentRefundedUnconfirmedEmailAsync(int bookingId)
+        public async Task sendPaymentRefundedUnconfirmedEmailAsync(int bookingId, PerformContext? context)
         {
             var booking = await _context.Bookings.Include(b => b.User).FirstOrDefaultAsync(b => b.Id == bookingId);
             if (booking == null) return;
@@ -239,7 +281,29 @@ namespace BarberShopAPI.Services
                     $"Please visit our website to book another time.";
             }
 
-            await _resend.EmailSendAsync(message);
+            try
+            {
+                await _resend.EmailSendAsync(message);
+            }
+            catch (Exception ex)
+            {
+                /* Two shapes, two outcomes. If the booking still stands (a duplicate card charge we clawed
+                 * back), a failed email is a harmless courtesy - the money is back regardless and their
+                 * appointment is fine, so we let it fail quietly. But if the booking couldn't be confirmed,
+                 * this is the customer's only notice that they have no booking and a refund is coming; once
+                 * Hangfire's retries are spent, flag it so staff phone them instead of leaving them guessing
+                 * about a charge on their statement. The refund itself already went out before this email. */
+                if (bookingStillStands) throw;
+
+                var retryCount = context?.GetJobParameter<int>("RetryCount") ?? 0;
+                if (retryCount < EmailJobPolicy.RefundNoticeRetries) throw;
+
+                booking.NeedsReview = true;
+                booking.ReviewReason =
+                    $"Refund notice to {booking.ContactEmail} failed after {EmailJobPolicy.RefundNoticeRetries + 1} attempts ({ex.Message}). "
+                    + $"Call the customer to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} booking couldn't be confirmed and their card payment has been refunded in full.";
+                await _context.SaveChangesAsync();
+            }
         }
 
         public async Task sendBookingRescheduledEmailAsync(int bookingId, DateTime oldStartDateTime)

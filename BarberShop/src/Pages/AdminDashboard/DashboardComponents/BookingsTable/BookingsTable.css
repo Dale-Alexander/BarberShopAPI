@@ -118,6 +118,38 @@
         background: var(--green-600);
     }
 
+/* ── Needs-review alert button + badge ── */
+.bookings-admin-table-btn-review {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.5);
+    color: #fbbf24;
+    font-weight: 600;
+}
+
+    .bookings-admin-table-btn-review:hover {
+        background: rgba(245, 158, 11, 0.25);
+    }
+
+    .bookings-admin-table-btn-review.review-active {
+        background: #f59e0b;
+        color: #0d1b2e;
+    }
+
+.review-badge {
+    background: #e5484d;
+    color: #ffffff;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    min-width: 1.1rem;
+    height: 1.1rem;
+    padding: 0 0.3rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
 /* ── Table – desktop ── */
 .bookings-table {
     width: 100%;
@@ -228,6 +260,28 @@
         color: hsl(0, 75%, 70%);
     }
 
+.review-item {
+    color: #fbbf24;
+}
+
+    .review-item:hover {
+        background: hsl(228, 17%, 24%);
+        color: #fcd34d;
+    }
+
+/* ── Row needs-review marker ── */
+.booking-id-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.needs-review-flag {
+    color: #fbbf24;
+    flex-shrink: 0;
+    cursor: help;
+}
+
 /* ── Table – tablet (hide less important columns) ── */
 @media (max-width: 768px) {
     .bookings-admin-table-container {
@@ -259,7 +313,8 @@
     }
 
     /* icon-only filter button on very small screens */
-    .bookings-admin-table-btn-filter .btn-label {
+    .bookings-admin-table-btn-filter .btn-label,
+    .bookings-admin-table-btn-review .btn-label {
         display: none;
     }
 
@@ -369,4 +424,20 @@
 .cancel-confirm-go {
     background: #e5484d;
     color: #ffffff;
+}
+
+.review-reason-text {
+    color: #fbbf24;
+    font-weight: 600;
+}
+
+.review-confirm-go {
+    border: none;
+    border-radius: 0.4rem;
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    background: #f59e0b;
+    color: #0d1b2e;
 }

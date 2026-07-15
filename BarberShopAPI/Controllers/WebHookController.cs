@@ -148,7 +148,16 @@ namespace BarberShopAPI.Controllers
                                 {
                                     var orphanRefund = await StripeRefunds.RefundIdempotentlyAsync(paymentIntent.Id);
                                     if (orphanRefund == StripeRefunds.Outcome.Failed)
+                                    {
+                                        // Persist the review flag before returning non-2xx. Stripe retries this event and
+                                        // the idempotent refund may succeed on a later attempt (which clears the flag below);
+                                        // if it never does, the booking stays in the admin's review worklist instead of a
+                                        // charge being silently kept once Stripe gives up retrying after ~3 days.
+                                        booking.NeedsReview = true;
+                                        booking.ReviewReason = $"Automatic refund of an orphaned charge failed (PaymentIntent {paymentIntent.Id}) - refund it in Stripe by hand.";
+                                        await _context.SaveChangesAsync();
                                         return StatusCode(500, "Refund failed"); // non-2xx => Stripe retries later
+                                    }
                                 }
 
                                 // Record the refund for a financial trail - but only when this booking has no
@@ -192,8 +201,16 @@ namespace BarberShopAPI.Controllers
                                     await _context.SaveChangesAsync();
                                 }
 
+                                // Refund went through - clear any review flag a previous failed attempt left set.
+                                if (booking.NeedsReview)
+                                {
+                                    booking.NeedsReview = false;
+                                    booking.ReviewReason = null;
+                                    await _context.SaveChangesAsync();
+                                }
+
                                 // We return Ok below, so Stripe won't retry this event - one refund, one email.
-                                BackgroundJob.Enqueue<IEmailService>(service => service.sendPaymentRefundedUnconfirmedEmailAsync(bookingId));
+                                BackgroundJob.Enqueue<IEmailService>(service => service.sendPaymentRefundedUnconfirmedEmailAsync(bookingId, null));
                                 return Ok(new { message = "Payment for an unconfirmable booking was refunded" });
                             }
 
@@ -225,6 +242,11 @@ namespace BarberShopAPI.Controllers
                                 if (closureRefund == StripeRefunds.Outcome.Failed)
                                 {
                                     Console.WriteLine($"Booking {bookingId} fell on a closure but the refund failed for PaymentIntent {paymentIntent.Id}. Needs manual refund/follow-up.");
+                                    // Flag before the non-2xx so this surfaces in the review worklist if Stripe's retries
+                                    // never get the refund through. Cleared inside the transaction below once one succeeds.
+                                    booking.NeedsReview = true;
+                                    booking.ReviewReason = $"Slot was closed after payment but the automatic refund failed (PaymentIntent {paymentIntent.Id}) - refund it in Stripe by hand.";
+                                    await _context.SaveChangesAsync();
                                     return StatusCode(500, "Refund failed");
                                 }
 
@@ -275,6 +297,10 @@ namespace BarberShopAPI.Controllers
                                     }
                                     booking.ContactEmail = email;
                                     booking.Status = BookingStatus.CANCELLED;
+                                    // Refund succeeded and we're committing the cancellation - clear any review flag a
+                                    // previous failed attempt set, atomically with the state change.
+                                    booking.NeedsReview = false;
+                                    booking.ReviewReason = null;
                                     await _context.SaveChangesAsync();
                                     await closureTx.CommitAsync();
                                 }
@@ -285,7 +311,7 @@ namespace BarberShopAPI.Controllers
                                     return StatusCode(500, "Server error");
                                 }
 
-                                BackgroundJob.Enqueue<IEmailService>(service => service.sendBookingCancelledDueToClosureEmailAsync(bookingId));
+                                BackgroundJob.Enqueue<IEmailService>(service => service.sendBookingCancelledDueToClosureEmailAsync(bookingId, null));
                                 /* The reason we send an email is because Stripe is the caller of this endpoint not the customer, meaning that our 
                                  * responses get seen by Stripe not the customer, therefore the only way we can notify the person is through email. 
                                  On the other hand in /confirm-cash, we just send a response because that is sufficient enough to inform the user what 
@@ -351,6 +377,10 @@ namespace BarberShopAPI.Controllers
                                     var jobId = BackgroundJob.Schedule<IEmailService>(service => service.sendBookingReminderEmailAsync(bookingId), delay);
                                     booking.ReminderJobId = jobId;
                                 }
+                                // A successful confirmation is a terminal, resolved state - clear any review flag a
+                                // prior failed attempt set (e.g. the closure that caused it was since removed).
+                                booking.NeedsReview = false;
+                                booking.ReviewReason = null;
                                 await _context.SaveChangesAsync();
                                 await transaction.CommitAsync();
                                 Console.WriteLine($"Payment succeeded, booking updated:{bookingId}");

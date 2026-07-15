@@ -175,7 +175,16 @@ namespace BarberShopAPI.Controllers
                 {
                     var outcome = await BookingCanceller.CancelAsync(_context, booking.Id, dueToClosure: true);
                     if (outcome != BookingCanceller.Outcome.Cancelled)
+                    {
+                        // Nothing here will retry (unlike the webhook's Stripe-retry paths) and there's no
+                        // interactive admin to re-click, so this booking would otherwise be silently stuck:
+                        // the slot is closed but the customer wasn't refunded/cancelled. Flag it so it shows
+                        // up in the admin's review worklist instead of only in the logs.
                         Console.WriteLine($"Booking {booking.Id}: closure cancellation returned {outcome}, needs manual follow-up.");
+                        booking.NeedsReview = true;
+                        booking.ReviewReason = $"Closure cancellation returned {outcome} - check Stripe for a charge on this booking and refund/reconcile by hand.";
+                        await _context.SaveChangesAsync();
+                    }
                 }
             }
         }
