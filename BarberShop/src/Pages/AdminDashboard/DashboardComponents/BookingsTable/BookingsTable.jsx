@@ -6,6 +6,7 @@ import FilterModal from "../Filter/Filter.jsx";
 import "./BookingsTable.css";
 import { adminAxios } from "../../../../Hooks/AxiosInterceptor";
 import { ToastContext } from "../../../../Context/ToastContext.jsx";
+import Pagination from "../../../../Components/Pagination/Pagination.jsx";
 
 /* Cancelling within this many hours of the appointment forfeits the customer's refund (mirrors the
  * backend RefundCutoff in BookingCanceller). Compared against Malta wall-clock, since startDateTime is
@@ -14,7 +15,7 @@ const REFUND_CUTOFF_HOURS = 24;
 const getMaltaNow = () =>
     new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Malta" }));
 
-const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filters, needsReviewCount = 0, refreshNeedsReviewCount}) => {
+const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filters, needsReviewCount = 0, refreshNeedsReviewCount, page = 1, totalPages = 1, onPageChange }) => {
     const [openMenuId, setOpenMenuId] = useState(null);
     const [searchInput, setSearchInput] = useState("");
     const [filterModalOpen, setFilterModalOpen] = useState(false);
@@ -209,6 +210,7 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                     </tbody>
                 </table>
             </div>
+            <Pagination page={page} totalPages={totalPages} onChange={onPageChange} />
             {filterModalOpen && (
                 <>
                     <FilterModal setFilterModalOpen={setFilterModalOpen} filters={filters} resetFilters={resetFilters} applyFilters={applyFilters} />

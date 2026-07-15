@@ -22,13 +22,6 @@ Look at BarberController of old project and look how capitalize is used. It retu
 Check if you the filtered index and not just a normal index.  see what happens when creating a barber, deleting it and creating 
 it with the same email and how that relates to the amount of people. I dont think you even have a statcard in the dashboard showing the amount of different people. 
 
-When making a closure check if it conflicts with any existing bookings. 
-If so tell the admin what date the booking is and maybe what the user's details are and maybe if he has an email, then send him an email saying, your booking was
-cancelled because the shop will be closing on that day. Regardless of whether he has an email or not, show the user's telephoone number incase the admin wants 
-to call him informing him on the matter. Most of this part is done and the booking's infor is sent back but the mob number and the email aren't sent from the backend,
-only his name and other information. Im not sure if this is done on the frontend but i dont think it is.
-
-
 
 Also when making creating a booking. Make sure you do this:
 catch (DbUpdateException ex) when (ex.InnerException?.Message.Contains("unique") == true)
@@ -46,11 +39,6 @@ Also check if keys expire after 90 days
 
 Add some validation on names in Services and maybe other attributes which need validation in all controllers
 
-
-
-IDempotencyCheck when sending a reminder and maybe even when sending a confirmation email
-To do this add another field to the booking schema named ReminderSentAt
-and in the email service check if it is not null. If this is the case then return
 
 
 In production change the from email you use when sending emails, change it to the 
@@ -73,14 +61,13 @@ When you have the admin's email and password, re run dotnet run -- --seed-admin 
 
 
 
-From Claude: "- Known caveat (unchanged from the webhook discussion): if a Stripe refund succeeds but the DB write then fails, that one booking needs manual follow-up — logged, money never at risk."
-
-Implement the closure/booking collision on the frontend. When making a closure, if the closure conflicts with some bookings, return those bookings(already done
-in the Dates controller) and ask the user if he is sure he wants to create a closure. If he clicks yes, then those bookings are cancelled. Everything is done on
-the backend, the frontend is what needs work. 
-
-
 Should I include a page in the dashboard that takes him to the Stripe Dashboard? 
 
 Check how the booking-needs-review flow works and see if everything works as you like, especially on frontend. 
+
+Check if the stats/chart on the dashboard and the booking table with pagination work well with both admin and barber
+
+Time between each slot(not buffer) as a setting
+
+Different shop schedules per day as a setting and each barber can implement their own schedule 
 

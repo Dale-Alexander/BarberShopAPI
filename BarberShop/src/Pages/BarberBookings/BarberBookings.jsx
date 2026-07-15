@@ -1,4 +1,4 @@
-﻿import { useParams, useNavigate} from "react-router-dom";
+import { useParams, useNavigate} from "react-router-dom";
 import { format } from "date-fns";
 import { useContext, useState, useEffect } from "react";
 import { usePersistentFilters } from "../../Hooks/UsePersistentFilters.js";
@@ -7,6 +7,8 @@ import "./BarberBookings.css";
 import { ArrowLeft, UserX, Filter } from "lucide-react";
 import LoadingSpinner from "../../Components/LoadingSpinner/LoadingSpinner";
 import useFetchBarberBookings from "../../Hooks/UseFetchBarberBookings.js";
+import { fetchBarberSummary } from "../../utils/FetchBarberSummary.js";
+import Pagination from "../../Components/Pagination/Pagination.jsx";
 import FilterModal from "../AdminDashboard/DashboardComponents/Filter/Filter.jsx";
 const BarberBookings = () => {
     const { id } = useParams();
@@ -14,31 +16,60 @@ const BarberBookings = () => {
     const { filters, applyFilters, resetFilters } = usePersistentFilters();
     const { viewBookingsBarber } = useContext(BarberBookingsContext);
     const navigate = useNavigate();
-   
-    /*const { data, loading } = useFetch(`/api/barbers/${id}/bookings`, true);*/
+
     const [barberBookings, setBarberBookings] = useState(null);
+    // Tiles (total bookings / distinct clients / distinct services) now come from the server-side
+    // barber-summary endpoint, computed over the full filtered set rather than the current page.
+    const [summary, setSummary] = useState(null);
+    const [page, setPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(1);
     const [filterModalOpen, setFilterModalOpen] = useState(false);
 
+    // A filter or barber change restarts paging at page 1.
+    useEffect(() => { setPage(1); }, [filters.fromDate, filters.toDate, filters.status, id]);
+
     useEffect(() => {
-        console.log("fromDate", filters.fromDate, "toDate", filters.toDate, "status", filters.status);
         const loadBookings = async () => {
             const data = await load({
                 fromDate: filters.fromDate,
-                toDate: filters.toDate, 
+                toDate: filters.toDate,
                 status: filters.status,
-                barberId:Number(id)
+                barberId: Number(id),
+                page,
             })
-            if (data) setBarberBookings(data);
-            console.log("response is", data);
+            if (data) {
+                setBarberBookings(data);
+                setTotalPages(data.totalPages ?? 1);
+            }
         }
         loadBookings();
+    }, [filters.fromDate, filters.toDate, filters.status, id, page]);
+
+    useEffect(() => {
+        const loadSummary = async () => {
+            try {
+                const data = await fetchBarberSummary({
+                    barberId: Number(id),
+                    fromDate: filters.fromDate,
+                    toDate: filters.toDate,
+                    status: filters.status,
+                });
+                setSummary(data);
+            }
+            catch (err) {
+                // Non-critical tiles - leave them as-is rather than blocking the page on a toast.
+                console.error(err.response?.data?.message || err);
+            }
+        };
+        loadSummary();
     }, [filters.fromDate, filters.toDate, filters.status, id]);
 
     useEffect(() => {
         console.log(viewBookingsBarber);
     }, [viewBookingsBarber])
 
-    if (loading) {
+    // Only blank the whole page on the very first load; page changes keep the table in place.
+    if (loading && !barberBookings) {
         return <LoadingSpinner message={"Loading Barber Data"} color="#e0e0e0"/>
     }
 
@@ -94,19 +125,15 @@ const BarberBookings = () => {
                     </div>
                     <div className="barber-detail-stats">
                         <div className="barber-stat">
-                            <span className="barber-stat-value">{barberBookings?.bookings?.length}</span>
+                            <span className="barber-stat-value">{summary?.totalBookings ?? 0}</span>
                             <span className="barber-stat-label">Bookings</span>
                         </div>
                         <div className="barber-stat">
-                            <span className="barber-stat-value">
-                                {new Set(barberBookings?.bookings?.map((b) => b.userId)).size}
-                            </span>
+                            <span className="barber-stat-value">{summary?.distinctClients ?? 0}</span>
                             <span className="barber-stat-label">Clients</span>
                         </div>
                         <div className="barber-stat">
-                            <span className="barber-stat-value">
-                                {new Set(barberBookings?.bookings?.flatMap((b) => b.services.map((s) => s.serviceName))).size}
-                            </span>
+                            <span className="barber-stat-value">{summary?.distinctServices ?? 0}</span>
                             <span className="barber-stat-label">Services</span>
                         </div>
                     </div>
@@ -151,6 +178,7 @@ const BarberBookings = () => {
                         </table>
                     </div>
                 )}
+                <Pagination page={page} totalPages={totalPages} onChange={setPage} />
             </div>
             {filterModalOpen && (
                 <>

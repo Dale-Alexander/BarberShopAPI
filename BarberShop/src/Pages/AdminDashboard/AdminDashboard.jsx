@@ -3,7 +3,6 @@ import { adminAxios } from "../../Hooks/AxiosInterceptor.js";
 import "./DashboardComponents/StatCard/StatCard";
 import BookmarkIcon from '@mui/icons-material/Bookmark';
 import AttachMoneyIcon from "@mui/icons-material/AttachMoney";
-import { startOfMonth, endOfMonth, isWithinInterval, subMonths, parseISO } from "date-fns";
 import "./AdminDashboard.css";
 import { usePersistentFilters } from "../../Hooks/UsePersistentFilters.js";
 import StatCard from "./DashboardComponents/StatCard/StatCard";
@@ -12,23 +11,26 @@ import LoadingSpinner from "../../Components/LoadingSpinner/LoadingSpinner.jsx";
 import BookingsTable from "./DashboardComponents/BookingsTable/BookingsTable.jsx";
 import { ChevronRight } from 'lucide-react';
 import useFetchBookings from "../../Hooks/UseFetchBookings.js";
+import { fetchAdminSummary } from "../../utils/FetchAdminSummary.js";
+import { ToastContext } from "../../Context/ToastContext.jsx";
 
 
 const AdminDashboard = () => {
-   /* const { data = [], loading, error, reFetch } = useFetch("/api/bookings/admin-filter", true);*/
     const [bookings, setBookings] = useState([]);
+    const [page, setPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(1);
     const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
     const [selectedMonth, setSelectedMonth] = useState(null);
-    const [revenueValue, setRevenueValue] = useState(0);
-    const [bookingValue, setBookingValue] = useState(0);
-    const [bookingIncreaseOrDecrease, setBookingIncreaseOrDecrease] = useState("");
-    const [revenueIncreaseOrDecrease, setRevenueIncreaseOrDecrease] = useState("");
-    const [bookingPercentage, setBookingPercentage] = useState("");
-    const [revenuePercentage, setRevenuePercentage] = useState("");
+    /* Stat cards + performance chart now come from the server-side admin-summary endpoint (aggregated in
+     * SQL) instead of being recomputed in the browser over the whole booking list - that full list is
+     * exactly what pagination removed. */
+    const [summary, setSummary] = useState(null);
+    const [summaryLoading, setSummaryLoading] = useState(false);
     const { filters, applyFilters, resetFilters } = usePersistentFilters();
     const [isRevenue, setIsRevenue] = useState(true);
     const [yearOpen, setYearOpen] = useState(false);
     const { load, loading } = useFetchBookings();
+    const { showToast } = useContext(ToastContext);
     const [needsReviewCount, setNeedsReviewCount] = useState(0);
 
     /* Standalone count so the "Needs Review" alert badge stays accurate no matter which date/status
@@ -46,98 +48,78 @@ const AdminDashboard = () => {
 
     useEffect(() => { refreshNeedsReviewCount(); }, [refreshNeedsReviewCount]);
 
-
+    // Stat cards + chart. Driven by the year/month the admin is viewing, independent of the table's filters.
+    // A selected month (chart drill-down) asks the server for that month's daily series (month is 1-based).
     useEffect(() => {
-        console.log(filters);
+        const loadSummary = async () => {
+            setSummaryLoading(true);
+            try {
+                const data = await fetchAdminSummary({
+                    year: selectedYear,
+                    month: selectedMonth != null ? selectedMonth + 1 : null,
+                });
+                setSummary(data);
+            }
+            catch (err) {
+                if (err.response?.status !== 401) {
+                    showToast("Couldn't load dashboard stats", err.response?.data?.message || "An unexpected error occurred");
+                }
+            }
+            finally {
+                setSummaryLoading(false);
+            }
+        };
+        loadSummary();
+    }, [selectedYear, selectedMonth]);
+
+    // A filter change starts the table back at page 1; the fetch effect below picks it up.
+    useEffect(() => { setPage(1); }, [filters.fromDate, filters.toDate, filters.status]);
+
+    // Paginated table rows only.
+    useEffect(() => {
         const loadBookings = async () => {
             const data = await load({
                 fromDate: filters.fromDate,
                 toDate: filters.toDate,
-                status: filters.status
+                status: filters.status,
+                page,
             });
-
-            if ( data) setBookings(data);
-            console.log("Data is ", data);
+            if (data) {
+                setBookings(data.bookings ?? []);
+                setTotalPages(data.totalPages ?? 1);
+            }
         };
         loadBookings();
-
-        //whenever you call controller.abort(), any request that has signal attached
-        //to it gets immediately cancelled and throws CanceledError
-    }, [filters.fromDate, filters.toDate, filters.status]);
+    }, [filters.fromDate, filters.toDate, filters.status, page]);
 
     const getIncreaseOrDecreaseSign = (current, previous) => {
         if (current > previous) return "+";
         if (previous > current) return "-";
         return "";
     }
+    const percentChange = (current, previous) =>
+        (previous === 0 ? 100 : (Math.abs(current - previous) / previous) * 100).toFixed(1);
 
-    useEffect(() => {
-        const now = new Date();
-        const calculateStatCardInfo = () => {
-            // Month ranges
-            const currentMonthStart = startOfMonth(now);
-            const currentMonthEnd = endOfMonth(now);
+    const stats = summary?.stats;
+    const thisMonthRevenue = stats?.thisMonthRevenue ?? 0;
+    const thisMonthBookings = stats?.thisMonthBookings ?? 0;
+    const lastMonthRevenue = stats?.lastMonthRevenue ?? 0;
+    const lastMonthBookings = stats?.lastMonthBookings ?? 0;
 
-            const lastMonthStart = startOfMonth(subMonths(now, 1));
-            const lastMonthEnd = endOfMonth(subMonths(now, 1));
+    const revenuePercentage = percentChange(thisMonthRevenue, lastMonthRevenue);
+    const revenueIncreaseOrDecrease = getIncreaseOrDecreaseSign(thisMonthRevenue, lastMonthRevenue);
+    const bookingPercentage = percentChange(thisMonthBookings, lastMonthBookings);
+    const bookingIncreaseOrDecrease = getIncreaseOrDecreaseSign(thisMonthBookings, lastMonthBookings);
 
-            // Initialize counters
-            let thisMonthTotalBookings = 0;
-            let thisMonthTotalRevenue = 0;
-            let lastMonthTotalBookings = 0;
-            let lastMonthTotalRevenue = 0;
-
-            // Single pass over data
-            bookings.forEach(b => {
-                const date = parseISO(b.startDateTime);
-
-                if (isWithinInterval(date, { start: currentMonthStart, end: currentMonthEnd })) {
-                    thisMonthTotalBookings += 1;
-                    thisMonthTotalRevenue += b.amount;
-                } else if (isWithinInterval(date, { start: lastMonthStart, end: lastMonthEnd })) {
-                    lastMonthTotalBookings += 1;
-                    lastMonthTotalRevenue += b.amount;
-                }
-            });
-
-            // Update state
-            setBookingValue(thisMonthTotalBookings);
-            setRevenueValue(thisMonthTotalRevenue);
-
-            /* Calculating Percentages*/
-            const RevenuePercentage = lastMonthTotalRevenue === 0
-                ? 100
-                : (Math.abs(thisMonthTotalRevenue - lastMonthTotalRevenue) / lastMonthTotalRevenue) * 100;
-            setRevenuePercentage(RevenuePercentage.toFixed(1));
-            setRevenueIncreaseOrDecrease(getIncreaseOrDecreaseSign(thisMonthTotalRevenue, lastMonthTotalRevenue));
-
-
-            const BookingPercentage = lastMonthTotalBookings === 0
-                ? 100
-                : (Math.abs(thisMonthTotalBookings - lastMonthTotalBookings) / lastMonthTotalBookings) * 100;
-            setBookingPercentage(BookingPercentage.toFixed(1));
-            setBookingIncreaseOrDecrease(getIncreaseOrDecreaseSign(thisMonthTotalBookings, lastMonthTotalBookings));
-        }
-        calculateStatCardInfo();
-    }, [bookings])
-
-    /* calculate which years to display to the admin so he can filter his graph data accordingly */
+    // Years to offer in the graph dropdown - whatever years actually have bookings, falling back to this year.
     const now = new Date();
-    let years = [
-        now.getFullYear(),
-    ]
-    if (now.getMonth() >= 9) {
-        years.push(now.getFullYear() + 1);
-    }
+    const years = summary?.availableYears?.length ? summary.availableYears : [now.getFullYear()];
 
 
 
     return (
 
         <div className="home-page-content">
-            {/* isLoading ? (
-                    <LoadingSpinner/>
-                    ) :(*/}
             <div className="home-page-sections">
                 <div className="home-page-welcome">
                     <div className="home-page-welcome-text">
@@ -146,15 +128,15 @@ const AdminDashboard = () => {
                     </div>
                 </div>
                 <div className="home-page-stats-grid">
-                    <StatCard title={"Revenue"} value={revenueValue} increase={`${revenueIncreaseOrDecrease}${revenuePercentage}%`} icon={<AttachMoneyIcon />} progress={revenuePercentage} />
-                    <StatCard title={"Bookings"} value={bookingValue} increase={`${bookingIncreaseOrDecrease}${bookingPercentage}%`} icon={<BookmarkIcon />} progress={bookingPercentage} />
+                    <StatCard title={"Revenue"} value={thisMonthRevenue} increase={`${revenueIncreaseOrDecrease}${revenuePercentage}%`} icon={<AttachMoneyIcon />} progress={revenuePercentage} />
+                    <StatCard title={"Bookings"} value={thisMonthBookings} increase={`${bookingIncreaseOrDecrease}${bookingPercentage}%`} icon={<BookmarkIcon />} progress={bookingPercentage} />
                 </div>
                 < div className="home-page-middle-grid">
                     <div className="home-page-card home-page-graph-card">
                         <div className="graph-header">
                             <div className="graph-title">
                                 <h3> Performance Analytics</h3>
-                                <p>{revenueValue}</p>
+                                <p>{thisMonthRevenue}</p>
                             </div>
                             <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                                 <div style={{ position: "relative" }}>
@@ -191,7 +173,7 @@ const AdminDashboard = () => {
                                             {years.map((y) => (
                                                 <button className="year-option"
                                                     key={y}
-                                                    onClick={() => { setSelectedYear(y); setYearOpen(false); }}
+                                                    onClick={() => { setSelectedYear(y); setSelectedMonth(null); setYearOpen(false); }}
                                                     style={{
                                                         fontWeight: y === selectedYear ? 700 : 500,
                                                         background: y === selectedYear ? "var(--primary-500)" : "transparent",
@@ -210,11 +192,18 @@ const AdminDashboard = () => {
                             </div>
                         </div>
                         <div className="linechart-wrapper">
-                            {loading ? (
+                            {summaryLoading ? (
                                 <LoadingSpinner message={"Loading Chart Information"} color="#e0e0e0"/>
                             ) : (
                                 <div className="graph-container">
-                                    <LineChart data={bookings} loading={loading} selectedYear={selectedYear} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} showRevenue={isRevenue} />
+                                    <LineChart
+                                        monthly={summary?.monthly}
+                                        daily={summary?.daily}
+                                        selectedYear={selectedYear}
+                                        selectedMonth={selectedMonth}
+                                        setSelectedMonth={setSelectedMonth}
+                                        showRevenue={isRevenue}
+                                    />
                                 </div>
                             )}
                         </div>
@@ -222,7 +211,7 @@ const AdminDashboard = () => {
                     </div>
                 </div>
                 <div className="bookings-table-container">
-                    <BookingsTable bookings={bookings} setBookings={setBookings} filters={filters} resetFilters={resetFilters} applyFilters={applyFilters} needsReviewCount={needsReviewCount} refreshNeedsReviewCount={refreshNeedsReviewCount} />
+                    <BookingsTable bookings={bookings} setBookings={setBookings} filters={filters} resetFilters={resetFilters} applyFilters={applyFilters} needsReviewCount={needsReviewCount} refreshNeedsReviewCount={refreshNeedsReviewCount} page={page} totalPages={totalPages} onPageChange={setPage} loading={loading} />
                 </div>
             </div>
         </div>

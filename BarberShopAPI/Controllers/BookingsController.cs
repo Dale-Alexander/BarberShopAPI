@@ -505,23 +505,13 @@ namespace BarberShopAPI.Controllers
             }
         }
 
-        [Authorize(Roles ="ADMIN,BARBER")]
-        [HttpGet("barber-fetch/{barberId}")]
-        public async Task<IActionResult> GetBarberBookings([FromQuery] DateTime? fromDate,
-            [FromQuery] DateTime? toDate,
-            [FromQuery] string? status,
-            int barberId)
+        /* Shared filter for a single barber's bookings so the paginated list (barber-fetch) and the summary
+         * tiles (barber-summary) always agree on which bookings they're describing. Mirrors the admin filter:
+         * defaults to COMPLETED unless CANCELLED is asked for, with optional PAID/PENDING payment narrowing
+         * and an optional date window. */
+        private IQueryable<Booking> BuildBarberBookingsQuery(int barberId, DateTime? from, DateTime? to, string? status)
         {
-            var from = fromDate.HasValue ? ShopClock.FromUtc(fromDate.Value) : (DateTime?)null;
-            var to = toDate.HasValue ? ShopClock.FromUtc(toDate.Value) : (DateTime?)null;
-            var barber = await _context.Barbers.Where(b => b.Id == barberId && b.isActive == true)
-                .Select(b => new { b.Id, b.User.Name, b.User.Surname, b.ImageUrl }).FirstOrDefaultAsync();
-            if (barber == null) return NotFound(new { message = "Barber not found" });
-
-            if (from.HasValue != to.HasValue) return BadRequest(new { message = "Both From Date and To Date must be provided or left empty" });
-            if (from.HasValue && to.HasValue && from.Value > to.Value) return BadRequest(new { message = "From Date cannot be after To Date" });
-
-            var query = _context.Bookings.Where(b => b.BarberId == barberId).AsQueryable();
+            var query = _context.Bookings.Where(b => b.BarberId == barberId);
             if (status == "CANCELLED")
                 query = query.Where(b => b.Status == BookingStatus.CANCELLED);
             else
@@ -531,34 +521,112 @@ namespace BarberShopAPI.Controllers
                 query = query.Where(b => b.Payment.Status == PaymentStatus.COMPLETED);
             else if (status == "PENDING")
                 query = query.Where(b => b.Payment.Status == PaymentStatus.PENDING);
+
             if (from.HasValue && to.HasValue)
-            {
-                query = query.Where(b =>
-                    b.StartDateTime >= from.Value &&
-                    b.StartDateTime <= to.Value
-                );
-            }
-            var bookings = await query.Select(b => new
-            {
-                b.Id,
-                b.StartDateTime,
-                UserId = b.User.Id,
-                Name = b.User.Name,
-                Surname = b.User.Surname,
-                Phone = b.User.Phone,
-                Services = b.Services.Select(bs => new
+                query = query.Where(b => b.StartDateTime >= from.Value && b.StartDateTime <= to.Value);
+
+            return query;
+        }
+
+        /* Clamp paging so a bad/hostile query string can't ask for page 0 or a 100k-row page. */
+        private static (int page, int pageSize) NormalisePaging(int page, int pageSize)
+        {
+            if (page < 1) page = 1;
+            if (pageSize < 1) pageSize = 20;
+            if (pageSize > 100) pageSize = 100;
+            return (page, pageSize);
+        }
+
+        /* Filter dates come from a date-only picker, so treat them as a full Malta day window: the From date
+         * from its 00:00 through the To date's 23:59:59.999. Without this a same-day filter (e.g. the "Today"
+         * shortcut, which sends the same date for both) collapses to a single instant and matches nothing.
+         * Week/Month shortcuts are unaffected - they already send start-of-day / end-of-day. */
+        private static (DateTime? from, DateTime? to) ToMaltaDayWindow(DateTime? fromDateUtc, DateTime? toDateUtc)
+        {
+            var from = fromDateUtc.HasValue ? ShopClock.FromUtc(fromDateUtc.Value).Date : (DateTime?)null;
+            var to = toDateUtc.HasValue ? ShopClock.FromUtc(toDateUtc.Value).Date.AddDays(1).AddTicks(-1) : (DateTime?)null;
+            return (from, to);
+        }
+
+        [Authorize(Roles ="ADMIN,BARBER")]
+        [HttpGet("barber-fetch/{barberId}")]
+        public async Task<IActionResult> GetBarberBookings([FromQuery] DateTime? fromDate,
+            [FromQuery] DateTime? toDate,
+            [FromQuery] string? status,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 20,
+            int barberId = 0)
+        {
+            if (fromDate.HasValue != toDate.HasValue) return BadRequest(new { message = "Both From Date and To Date must be provided or left empty" });
+            if (fromDate.HasValue && toDate.HasValue && fromDate.Value > toDate.Value) return BadRequest(new { message = "From Date cannot be after To Date" });
+            var (from, to) = ToMaltaDayWindow(fromDate, toDate);
+
+            var barber = await _context.Barbers.Where(b => b.Id == barberId && b.isActive == true)
+                .Select(b => new { b.Id, b.User.Name, b.User.Surname, b.ImageUrl }).FirstOrDefaultAsync();
+            if (barber == null) return NotFound(new { message = "Barber not found" });
+
+            (page, pageSize) = NormalisePaging(page, pageSize);
+            var query = BuildBarberBookingsQuery(barberId, from, to, status);
+            var totalCount = await query.CountAsync();
+            var bookings = await query
+                .OrderByDescending(b => b.StartDateTime)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .Select(b => new
                 {
-                    ServiceName = bs.Service.Name,
-                    bs.Service.Price
-                })
-            }).ToListAsync();
+                    b.Id,
+                    b.StartDateTime,
+                    UserId = b.User.Id,
+                    Name = b.User.Name,
+                    Surname = b.User.Surname,
+                    Phone = b.User.Phone,
+                    Services = b.Services.Select(bs => new
+                    {
+                        ServiceName = bs.Service.Name,
+                        bs.Service.Price
+                    })
+                }).ToListAsync();
             return Ok(new
             {
                 barberName = barber.Name,
                 barberSurname = barber.Surname,
                 barberImageUrl = barber.ImageUrl,
-                bookings
+                bookings,
+                totalCount,
+                page,
+                pageSize,
+                totalPages = (int)Math.Ceiling(totalCount / (double)pageSize)
             });
+        }
+
+        /* Aggregate tiles for the barber bookings page (total bookings / distinct clients / distinct services).
+         * Computed in SQL over the same filtered set as barber-fetch so the tiles match the table, instead of
+         * the frontend counting a now-paginated page. */
+        [Authorize(Roles = "ADMIN,BARBER")]
+        [HttpGet("barber-summary/{barberId}")]
+        public async Task<IActionResult> GetBarberSummary(int barberId,
+            [FromQuery] DateTime? fromDate,
+            [FromQuery] DateTime? toDate,
+            [FromQuery] string? status)
+        {
+            try
+            {
+                if (fromDate.HasValue != toDate.HasValue) return BadRequest(new { message = "Both From Date and To Date must be provided or left empty" });
+                if (fromDate.HasValue && toDate.HasValue && fromDate.Value > toDate.Value) return BadRequest(new { message = "From Date cannot be after To Date" });
+                var (from, to) = ToMaltaDayWindow(fromDate, toDate);
+
+                var query = BuildBarberBookingsQuery(barberId, from, to, status);
+                var totalBookings = await query.CountAsync();
+                var distinctClients = await query.Select(b => b.UserId).Distinct().CountAsync();
+                var distinctServices = await query.SelectMany(b => b.Services).Select(bs => bs.ServiceId).Distinct().CountAsync();
+
+                return Ok(new { totalBookings, distinctClients, distinctServices });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500, new { message = "Unexpected Server error occurred" });
+            }
         }
 
         [Authorize(Roles = "ADMIN")]
@@ -566,15 +634,15 @@ namespace BarberShopAPI.Controllers
         public async Task<IActionResult> GetBookingsForAdmin(
             [FromQuery] DateTime? fromDate,
             [FromQuery] DateTime? toDate,
-            [FromQuery] string? status)
+            [FromQuery] string? status,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 20)
         {
             try
             {
-                var from = fromDate.HasValue ? ShopClock.FromUtc(fromDate.Value) : (DateTime?)null;
-                var to = toDate.HasValue ? ShopClock.FromUtc(toDate.Value) : (DateTime?)null;
-                Console.WriteLine($"Status is {status}, FromDate is{from}, toDate is {to}");
-                if (from.HasValue != to.HasValue) return BadRequest(new { message = "Both From Date and To Date must be provided or left empty" });
-                if (from.HasValue && to.HasValue && from.Value > to.Value) return BadRequest(new { message = "From Date cannot be after To Date" });
+                if (fromDate.HasValue != toDate.HasValue) return BadRequest(new { message = "Both From Date and To Date must be provided or left empty" });
+                if (fromDate.HasValue && toDate.HasValue && fromDate.Value > toDate.Value) return BadRequest(new { message = "From Date cannot be after To Date" });
+                var (from, to) = ToMaltaDayWindow(fromDate, toDate);
                 var query = _context.Bookings.AsQueryable();
 
                 // NEEDS_REVIEW is a cross-status worklist (a flagged booking can be any status), so it
@@ -605,7 +673,12 @@ namespace BarberShopAPI.Controllers
                     );
                 }
 
+                (page, pageSize) = NormalisePaging(page, pageSize);
+                var totalCount = await query.CountAsync();
                 var bookings = await query
+                    .OrderByDescending(b => b.StartDateTime)
+                    .Skip((page - 1) * pageSize)
+                    .Take(pageSize)
                     .Select(b => new BookingsAdminViewModel
                     {
                         Id = b.Id,
@@ -621,7 +694,7 @@ namespace BarberShopAPI.Controllers
                 /* The reason you dont do .Include() for Payment and User is because you are selecting(.Select()).
                  * When you use .Select() EF Core is smart enough to figure out exactly what data it
                  needs and writes a single SQL query with the necessary JOINS automatically.
-                
+
                  When you do need .Include() is when you load the full entity and then access navigation
                 properties outisde of a query - for example:
                 var booking = await _context.Bookings
@@ -631,9 +704,97 @@ namespace BarberShopAPI.Controllers
 
 // Then accessing it in C# code after the query
 Console.WriteLine(booking.User.Name); // would be null without Include()*/
-                return Ok(bookings);
+                return Ok(new
+                {
+                    bookings,
+                    totalCount,
+                    page,
+                    pageSize,
+                    totalPages = (int)Math.Ceiling(totalCount / (double)pageSize)
+                });
             }
             catch(Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500, new { message = "Unexpected Server error occurred" });
+            }
+        }
+
+        /* Server-side aggregates for the admin dashboard's stat cards and performance chart. These used to be
+         * computed in the browser over the full booking list - exactly the unbounded fetch pagination removes -
+         * so they now come from SQL. Everything is over COMPLETED bookings, and the month/day buckets read
+         * StartDateTime directly (Malta wall-clock, same basis as ShopClock.Now). */
+        [Authorize(Roles = "ADMIN")]
+        [HttpGet("admin-summary")]
+        public async Task<IActionResult> GetAdminSummary([FromQuery] int? year, [FromQuery] int? month)
+        {
+            try
+            {
+                // Guard the client-supplied year/month: an out-of-range year would blow up DateTime.DaysInMonth
+                // below (valid 1-9999), and month must be a real month for the daily drill-down.
+                if (year.HasValue && (year.Value < 1 || year.Value > 9999))
+                    return BadRequest(new { message = "Year is out of range" });
+                if (month.HasValue && (month.Value < 1 || month.Value > 12))
+                    return BadRequest(new { message = "Month must be between 1 and 12" });
+
+                var completed = _context.Bookings.Where(b => b.Status == BookingStatus.COMPLETED);
+
+                // Stat cards: this month vs last month.
+                var nowMalta = ShopClock.Now;
+                var thisMonthStart = new DateTime(nowMalta.Year, nowMalta.Month, 1);
+                var nextMonthStart = thisMonthStart.AddMonths(1);
+                var lastMonthStart = thisMonthStart.AddMonths(-1);
+
+                var thisMonthQuery = completed.Where(b => b.StartDateTime >= thisMonthStart && b.StartDateTime < nextMonthStart);
+                var lastMonthQuery = completed.Where(b => b.StartDateTime >= lastMonthStart && b.StartDateTime < thisMonthStart);
+
+                var thisMonthBookings = await thisMonthQuery.CountAsync();
+                var thisMonthRevenue = await thisMonthQuery.SumAsync(b => (decimal?)b.Payment.Amount) ?? 0m;
+                var lastMonthBookings = await lastMonthQuery.CountAsync();
+                var lastMonthRevenue = await lastMonthQuery.SumAsync(b => (decimal?)b.Payment.Amount) ?? 0m;
+
+                var availableYears = await completed.Select(b => b.StartDateTime.Year).Distinct().OrderBy(y => y).ToListAsync();
+
+                // Monthly series for the requested year (default: current year).
+                var targetYear = year ?? nowMalta.Year;
+                var monthlyRaw = await completed
+                    .Where(b => b.StartDateTime.Year == targetYear)
+                    .GroupBy(b => b.StartDateTime.Month)
+                    .Select(g => new { Month = g.Key, Count = g.Count(), Revenue = g.Sum(b => (decimal?)b.Payment.Amount) ?? 0m })
+                    .ToListAsync();
+                var monthly = Enumerable.Range(1, 12).Select(m =>
+                {
+                    var bucket = monthlyRaw.FirstOrDefault(x => x.Month == m);
+                    return new { count = bucket?.Count ?? 0, revenue = bucket?.Revenue ?? 0m };
+                }).ToList();
+
+                // Daily series only when a month is selected (chart drill-down). month is 1-based, validated above.
+                object daily = null;
+                if (month.HasValue)
+                {
+                    var dailyRaw = await completed
+                        .Where(b => b.StartDateTime.Year == targetYear && b.StartDateTime.Month == month.Value)
+                        .GroupBy(b => b.StartDateTime.Day)
+                        .Select(g => new { Day = g.Key, Count = g.Count(), Revenue = g.Sum(b => (decimal?)b.Payment.Amount) ?? 0m })
+                        .ToListAsync();
+                    var daysInMonth = DateTime.DaysInMonth(targetYear, month.Value);
+                    daily = Enumerable.Range(1, daysInMonth).Select(d =>
+                    {
+                        var bucket = dailyRaw.FirstOrDefault(x => x.Day == d);
+                        return new { count = bucket?.Count ?? 0, revenue = bucket?.Revenue ?? 0m };
+                    }).ToList();
+                }
+
+                return Ok(new
+                {
+                    stats = new { thisMonthBookings, thisMonthRevenue, lastMonthBookings, lastMonthRevenue },
+                    availableYears,
+                    year = targetYear,
+                    monthly,
+                    daily
+                });
+            }
+            catch (Exception ex)
             {
                 Console.WriteLine(ex.Message);
                 return StatusCode(500, new { message = "Unexpected Server error occurred" });
