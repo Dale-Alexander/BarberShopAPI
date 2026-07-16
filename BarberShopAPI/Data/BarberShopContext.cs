@@ -92,6 +92,13 @@ namespace BarberShopAPI.Data
             service.Property(s => s.Description).HasMaxLength(500);
             service.Property(s => s.ImageUrl).HasMaxLength(200);
 
+            // Unique service names, but only among ACTIVE services (mirrors the barber soft-delete
+            // pattern): a name freed up by deactivating a service can be reused by a new one.
+            service.HasIndex(s => s.Name)
+                   .IsUnique()
+                   .HasFilter("[IsActive] = 1")
+                   .HasDatabaseName("UX_Service_Name");
+
             var payment = modelBuilder.Entity<Payment>();
 
             payment.HasIndex(p => p.BookingId)

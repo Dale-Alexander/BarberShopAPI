@@ -4,6 +4,7 @@ using BarberShopAPI.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
 namespace BarberShopAPI.Controllers
@@ -92,6 +93,10 @@ namespace BarberShopAPI.Controllers
                 _context.Services.Add(service);
                 await _context.SaveChangesAsync();
                 return Ok(service);
+            }
+            catch (DbUpdateException ex) when (ex.InnerException is SqlException sqlEx && (sqlEx.Number == 2627 || sqlEx.Number == 2601))
+            {
+                return Conflict(new { message = "A service with this name already exists" });
             }
             catch(Exception ex)
             {

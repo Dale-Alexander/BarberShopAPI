@@ -129,18 +129,29 @@ namespace BarberShopAPI.Controllers
                     return BadRequest(new { message = "Invalid phone number" });
 
                 var user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == model.Phone);
+                var parts = model.FullName?.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries) ?? [];
+                var firstName = parts.Length > 0 ? parts[0] : "";
+                var lastName = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
                 if (user == null)
                 {
-                    var parts = model.FullName?.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries) ?? [];
                     user = new User
                     {
-                        Name = parts.Length > 0 ? parts[0] : "",
-                        Surname = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "",
+                        Name = firstName,
+                        Surname = lastName,
                         Phone = model.Phone
                     };
                     _context.Users.Add(user);
-                    await _context.SaveChangesAsync();
                 }
+                else
+                {
+                    // Returning customer (matched by phone): refresh the name so a corrected spelling -
+                    // or a different person sharing the phone - is reflected on this booking instead of
+                    // silently keeping the name from their first ever booking. FullName is already
+                    // validated above, so these are never empty.
+                    user.Name = firstName;
+                    user.Surname = lastName;
+                }
+                await _context.SaveChangesAsync();
                 var booking = new Booking
                 {
                     BarberId = barber.Id,
@@ -175,8 +186,11 @@ namespace BarberShopAPI.Controllers
             }
             catch(DbUpdateException ex) when (ex.InnerException is SqlException sqlEx && (sqlEx.Number == 2627 || sqlEx.Number == 2601))
             {
+                // This guard sits over two saves: the customer (User.Phone unique) and the booking
+                // ((BarberId, StartDateTime) unique). Both throw 2627/2601, so keep the message honest
+                // for either race rather than claiming it was always the slot.
                 await transaction.RollbackAsync();
-                return BadRequest(new { message = "This slot was just booked by someone else, please try again" });
+                return BadRequest(new { message = "That slot or customer was just saved by someone else, please try again" });
             }
             catch(Exception ex)
             {
@@ -247,7 +261,17 @@ namespace BarberShopAPI.Controllers
                 }).ToList();
 
             _context.Bookings.Add(booking);
-            await _context.SaveChangesAsync();
+            // No user is attached to a PENDING booking, so the only unique index this can hit is
+            // (BarberId, StartDateTime). The overlap check above is a read, so two customers racing
+            // for the same barber+time can both pass it; the DB index rejects the loser with 2627/2601.
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException ex) when (ex.InnerException is SqlException sqlEx && (sqlEx.Number == 2627 || sqlEx.Number == 2601))
+            {
+                return BadRequest(new { message = "This slot was just booked by someone else, please try again" });
+            }
 
             return Ok(new
             {
@@ -333,12 +357,12 @@ namespace BarberShopAPI.Controllers
                     return BadRequest(new { message = "Invalid email address"});
                 }
                 var user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == model.Phone);
+                var parts = model.FullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                //the above splits by space and ignores extra spaces
+                string firstName = parts.Length > 0 ? parts[0] : "";
+                string lastName = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
                 if (user == null)
                 {
-                    var parts = model.FullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                    //the above splits by space and ignores extra spaces
-                    string firstName = parts.Length > 0 ? parts[0] : "";
-                    string lastName = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
                     user = new User
                     {
                         Name = firstName,
@@ -346,8 +370,17 @@ namespace BarberShopAPI.Controllers
                         Phone = model.Phone,
                     };
                     _context.Users.Add(user);
-                    await _context.SaveChangesAsync();
                 }
+                else
+                {
+                    // Returning customer (matched by phone): refresh the name so a corrected spelling -
+                    // or a different person sharing the phone - is reflected on this booking instead of
+                    // silently keeping the name from their first ever booking. FullName is already
+                    // validated above, so these are never empty.
+                    user.Name = firstName;
+                    user.Surname = lastName;
+                }
+                await _context.SaveChangesAsync();
                 // The customer may have started a card payment earlier (clicked Pay Online) without finishing,
                 // leaving a live PaymentIntent on this booking. Switching to cash doesn't void it, so if we
                 // complete as cash without cancelling it, that card attempt could still succeed later (e.g. a

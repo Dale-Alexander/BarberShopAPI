@@ -219,6 +219,14 @@ namespace BarberShopAPI.Controllers
                     Console.WriteLine(existingUser);
                     Console.WriteLine($"Barber: {existingUser.Barber}");
 
+                    // The email may already belong to a non-barber account (e.g. the admin, or a
+                    // customer). There is no Barber row to revive in that case, so guard against a
+                    // NullReferenceException on existingUser.Barber below and return a clean message.
+                    if (existingUser.Barber == null)
+                    {
+                        return Conflict(new { message = "This email is already in use by another account" });
+                    }
+
                     if (existingUser.Barber.isActive == true)
                     {
                         return Conflict(new { message = "A barber with this email already exists" });
