@@ -1,5 +1,6 @@
 ﻿import { useState, useMemo, useEffect, useContext } from "react";
 import UserFormModal from "./UserFormModal/UserFormModal.jsx";
+import { resolveBarberImage, handleBarberImageError } from "../../utils/barberImage.js";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import axios from "axios";
@@ -526,7 +527,7 @@ const BarberDateAndTime = () => {
                                             whileTap={{ scale: 0.97 }}
                                         >
                                             <div className="bp-barber-avatar-wrap">
-                                                <img src={barber.imageUrl.startsWith("http") ? barber.imageUrl : `${import.meta.env.VITE_BASE_URL}${barber.imageUrl}`} alt={barber.barberName} className="bp-barber-avatar" />
+                                                <img src={resolveBarberImage(barber.imageUrl)} onError={handleBarberImageError} alt={barber.barberName} className="bp-barber-avatar" />
                                                 <span className={`bp-status-dot online`} />
                                             </div>
                                             <span className="bp-barber-name">{barber.barberName}</span>

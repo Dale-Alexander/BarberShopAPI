@@ -1,9 +1,10 @@
-import {Eye, Trash2 } from "lucide-react";
+import {Eye, Pencil, Trash2 } from "lucide-react";
 import { useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import "./MemberCard.css";
 import { BarberBookings } from "../../../../Context/BarberContext";
-const MemberCard = ({ barber, setDeleteBarberId }) => {
+import { resolveBarberImage, handleBarberImageError } from "../../../../utils/barberImage.js";
+const MemberCard = ({ barber, setDeleteBarberId, onEdit }) => {
     const navigate = useNavigate();
     const {setViewBookingsBarber} = useContext(BarberBookings);
     //this might need to be passed as a prop from TeamMembers.jsx
@@ -11,7 +12,7 @@ const MemberCard = ({ barber, setDeleteBarberId }) => {
     return (
         <div className="barber-card">
             <div className="barber-card-img">
-                <img src={barber.imageUrl.startsWith("http") ? barber.imageUrl : `${import.meta.env.VITE_BASE_URL}${barber.imageUrl}`} />
+                <img src={resolveBarberImage(barber.imageUrl)} onError={handleBarberImageError} />
             </div>
             <div className="barber-card-info">
                 <h3 className="barber-card-name">{barber.firstName} {barber.lastName}</h3>
@@ -27,6 +28,11 @@ const MemberCard = ({ barber, setDeleteBarberId }) => {
                     }}
                     title="View Bookings">
                     <Eye size={16} />
+                </button>
+                <button className="barber-action-btn barber-action-edit"
+                    onClick={() => onEdit(barber)}
+                    title="Edit Barber">
+                    <Pencil size={16} />
                 </button>
                 <button className = "barber-action-btn barber-action-delete"
                 onClick = {() => setDeleteBarberId(barber.id)}

@@ -8,6 +8,7 @@ import StripePaymentSection from "../StripePaymentSection/StripePaymentSection";
 import { BookingDetailsContext } from "../../../Context/BookingDetailsContext";
 import FancyPhoneInput from "../../../Components/FancyPhoneInput/FancyPhoneInput";
 import usePhone from "../../../Hooks/usePhone";
+import { resolveBarberImage, handleBarberImageError } from "../../../utils/barberImage.js";
 const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, setClientSecret, paymentMethod, setPaymentMethod, phone, setPhone, fullName, setFullName }) => {
     const stripeRef = useRef(null);
     const [loadingPayment, setLoadingPayment] = useState(false);
@@ -279,7 +280,7 @@ In plain terms: they tried to pay by card somewhere else, that payment is alread
                     <p className="checkout-summary__eyebrow">Booking Summary</p>
 
                     <div className="checkout-summary__barber">
-                        <img className="checkout-summary__barber-img" src={bookingDetails?.imageUrl.startsWith("http") ? bookingDetails?.imageUrl : `${import.meta.env.VITE_BASE_URL}${bookingDetails?.imageUrl}`} />
+                        <img className="checkout-summary__barber-img" src={resolveBarberImage(bookingDetails?.imageUrl)} onError={handleBarberImageError} />
 
                         <div>
                             <p className="checkout-summary__barber-name">{bookingDetails?.barberName}</p>

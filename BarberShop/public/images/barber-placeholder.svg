@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" role="img" aria-label="Barber photo placeholder">
+  <rect width="200" height="200" fill="#e6e6e6"/>
+  <circle cx="100" cy="80" r="34" fill="#b3b3b3"/>
+  <path d="M42 172c0-32 26-52 58-52s58 20 58 52z" fill="#b3b3b3"/>
+</svg>

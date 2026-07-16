@@ -1,4 +1,4 @@
-import { Plus, Trash2, X, Users } from "lucide-react";
+import { Plus, Trash2, X, Users, Check } from "lucide-react";
 import { useState , useEffect, useContext, useRef} from "react";
 import MemberCard from "./MemberCard/MemberCard";
 import "./TeamMembers.css";
@@ -6,6 +6,7 @@ import useFetch from "../../../Hooks/useFetch";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
 import { ToastContext } from "../../../Context/ToastContext";
 import LoadingSpinner from "../../../Components/LoadingSpinner/LoadingSpinner";
+import { resolveBarberImage } from "../../../utils/barberImage.js";
 const TeamMembers = () => {
     const {data, loading} = useFetch("/api/barbers/admin", true);
     const [barbers, setBarbers] = useState([]);
@@ -20,6 +21,16 @@ stored i the browser's memory which the backend cant access*/
     const [dragActive, setDragActive] = useState(false);
     const { showToast } = useContext(ToastContext);
     const createModalContainerRef = useRef(null);
+
+    // Edit flow. Kept in its own state so the edit modal never collides with the create modal's
+    // fields. editBarber holds the row being edited (null = closed).
+    const [editBarber, setEditBarber] = useState(null);
+    const [editName, setEditName] = useState("");
+    const [editImage, setEditImage] = useState("");//preview URL (existing photo or a freshly picked file)
+    const [editImageFile, setEditImageFile] = useState(null);//raw new file, only set if the admin picks one
+    const [editRemoveImage, setEditRemoveImage] = useState(false);//true = clear the existing photo on save
+    const [editDragActive, setEditDragActive] = useState(false);
+    const editModalContainerRef = useRef(null);
 
 
     useEffect(()=>{
@@ -89,6 +100,80 @@ stored i the browser's memory which the backend cant access*/
     }
     }
 
+    const openEdit = (barber) => {
+        setEditBarber(barber);
+        setEditName(`${barber.firstName ?? ""} ${barber.lastName ?? ""}`.trim());
+        // Show the current photo resolved to an absolute URL. Empty string -> the dropzone falls back
+        // to its upload placeholder, which is the right look for a barber who has no photo.
+        setEditImage(barber.imageUrl ? resolveBarberImage(barber.imageUrl) : "");
+        setEditImageFile(null);
+        setEditRemoveImage(false);
+    }
+
+    const closeEdit = () => {
+        setEditBarber(null);
+        setEditName("");
+        setEditImage("");
+        setEditImageFile(null);
+        setEditRemoveImage(false);
+    }
+
+    const handleEditImageChange = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            setEditImageFile(file);
+            setEditImage(URL.createObjectURL(file));
+            setEditRemoveImage(false);//picking a new photo overrides a pending removal
+        }
+    }
+
+    const handleEditDrop = (e) => {
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        if (file) {
+            setEditImageFile(file);
+            setEditImage(URL.createObjectURL(file));
+            setEditRemoveImage(false);//picking a new photo overrides a pending removal
+        }
+    }
+
+    const handleEditRemoveImage = () => {
+        // Clear the preview and flag removal so the backend nulls the column (rather than "leave as-is").
+        setEditImage("");
+        setEditImageFile(null);
+        setEditRemoveImage(true);
+    }
+
+    const handleEdit = async (e) => {
+        e.preventDefault();
+        if (!editName.trim()) {
+            showToast("Name is required");
+            return;
+        }
+        try {
+            const formData = new FormData();
+            formData.append("FullName", editName.trim());
+            // Only send an image if the admin actually picked a new one - otherwise the PATCH leaves
+            // the existing photo untouched. Email and password aren't editable here.
+            if (editImageFile) {
+                formData.append("ImageFile", editImageFile);
+            }
+            else if (editRemoveImage) {
+                formData.append("RemoveImage", "true");
+            }
+            const res = await adminAxios.patch(`/api/barbers/update/${editBarber.id}`, formData);
+            // Merge the server's canonical values (name split into first/last, resolved imageUrl) back
+            // into the list so the card updates without a refetch.
+            setBarbers(barbers.map(b => b.id === editBarber.id
+                ? { ...b, firstName: res.data.firstName, lastName: res.data.lastName, imageUrl: res.data.imageUrl }
+                : b));
+            closeEdit();
+        }
+        catch (err) {
+            showToast(err.response?.data?.message || "Something went wrong");
+        }
+    }
+
     /*const handleDelete = (id) => {
         setBarbers(barbers.filter((b) => b.id !== id));
     }*/
@@ -136,7 +221,7 @@ stored i the browser's memory which the backend cant access*/
                 <div className="team-grid">
                     {barbers?.length ? (
                         barbers?.map((b) => (
-                        <MemberCard key={b.id} barber={b} setDeleteBarberId = {setDeleteBarberId}/>
+                        <MemberCard key={b.id} barber={b} setDeleteBarberId = {setDeleteBarberId} onEdit={openEdit}/>
                         ))) : (
                             <div className="team-empty-state">
                                 <Users size={48} />
@@ -232,6 +317,78 @@ stored i the browser's memory which the backend cant access*/
                         <div className="modal-footer">
                             <button className="btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button>
                             <button className="btn-primary" onClick={handleCreate}><Plus size={16} /></button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {editBarber && (
+                <div className="modal-overlay"
+                    onMouseDown={(e) => editModalContainerRef.current = e.target}
+                    onClick={(e) => {
+                        if (editModalContainerRef.current === e.currentTarget) {
+                            closeEdit();
+                        }
+                    }}
+                >
+                    <div className="modal-content modal-content--wide"
+                        onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2>Edit Barber</h2>
+                            <button className="modal-close" onClick={closeEdit}>
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            <div className="form-group">
+                                <label className="form-label">Photo</label>
+                                <div className={`image-dropzone${editDragActive ? " image-dropzone--active" : ""}`}
+                                    onDragOver={(e) => {
+                                        e.preventDefault();
+                                        setEditDragActive(true);
+                                    }}
+                                    onDragLeave={() => setEditDragActive(false)}
+                                    onDrop={(e) => {
+                                        setEditDragActive(false);
+                                        handleEditDrop(e);
+                                    }}
+                                    onClick={() => document.getElementById("barber-edit-image-input")?.click()}>
+                                    {editImage ? (
+                                        <div className="image-preview-wrap">
+                                            <img src={editImage} className="image-preview" />
+                                            <button type="button"
+                                                className="image-preview-remove"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleEditRemoveImage();
+                                                }}>
+                                                <X size={14} />
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="image-dropzone-placeholder">
+                                            <Plus size={24} />
+                                            <span>Drag & Drop or click to upload</span>
+                                        </div>
+                                    )}
+                                    <input
+                                        id="barber-edit-image-input"
+                                        type="file"
+                                        accept="image/*"
+                                        style={{ display: "none" }}
+                                        onChange={handleEditImageChange} />
+                                </div>
+                            </div>
+                            <div className="form-group">
+                                <label className="form-label">Name *</label>
+                                <input className="form-input"
+                                    placeholder="Enter barber's name"
+                                    value={editName}
+                                    onChange={(e) => setEditName(e.target.value)} />
+                            </div>
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn-secondary" onClick={closeEdit}>Cancel</button>
+                            <button className="btn-primary" onClick={handleEdit}><Check size={16} /></button>
                         </div>
                     </div>
                 </div>

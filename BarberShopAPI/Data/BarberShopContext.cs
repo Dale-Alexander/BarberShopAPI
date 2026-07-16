@@ -90,7 +90,7 @@ namespace BarberShopAPI.Data
             // Optional: Column lengths
             service.Property(s => s.Name).HasMaxLength(100);
             service.Property(s => s.Description).HasMaxLength(500);
-            service.Property(s => s.ImageUrl).HasMaxLength(200);
+            service.Property(s => s.ImageUrl).HasMaxLength(1000);
 
             // Unique service names, but only among ACTIVE services (mirrors the barber soft-delete
             // pattern): a name freed up by deactivating a service can be reused by a new one.

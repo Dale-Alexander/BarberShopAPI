@@ -13,7 +13,7 @@ namespace BarberShopAPI.Models
         public decimal Price { get; set; }
         public int DurationMin { get; set; }
         public bool IsActive { get; set; } = true;
-        [MaxLength(500)]
+        [MaxLength(1000)]
         public string ImageUrl { get; set; }
         public virtual ICollection<BookingService> Bookings { get; set; }
     }

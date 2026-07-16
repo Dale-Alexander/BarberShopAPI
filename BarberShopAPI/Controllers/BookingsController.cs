@@ -77,6 +77,13 @@ namespace BarberShopAPI.Controllers
             if (string.IsNullOrWhiteSpace(name)) return false;
             if (name.Trim().Length < 2) return false;//at least 2 chars long
             if (name.Any(c => char.IsDigit(c))) return false;//no digits
+            // The name is split into first/last and stored in User.Name/User.Surname, each nvarchar(50).
+            // Validate against the same split so an over-long part gets a clean 400 here instead of a
+            // truncation error on save.
+            var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var firstName = parts.Length > 0 ? parts[0] : "";
+            var lastName = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
+            if (firstName.Length > 50 || lastName.Length > 50) return false;
             return true;
         }
 

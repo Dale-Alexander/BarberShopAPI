@@ -164,6 +164,13 @@ namespace BarberShopAPI.Controllers
             if (string.IsNullOrWhiteSpace(name)) return false;
             if (name.Trim().Length < 2) return false;
             if (name.Any(char.IsDigit)) return false;
+            // The name is split into first/last and stored in User.Name/User.Surname, each nvarchar(50).
+            // Validate against the same split so an over-long part gets a clean 400 here instead of a
+            // truncation error on save.
+            var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var firstName = parts.Length > 0 ? parts[0] : "";
+            var lastName = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
+            if (firstName.Length > 50 || lastName.Length > 50) return false;
             return true;
         }
 
@@ -251,6 +258,17 @@ namespace BarberShopAPI.Controllers
                         existingUser.Password = BCrypt.Net.BCrypt.HashPassword(request.Password);
                         existingUser.Role = Role.BARBER;
                         existingUser.Barber.isActive = true;
+
+                        // Reviving overwrites the old image, so remember any locally-stored previous
+                        // file and delete it after the save succeeds - same cleanup as UpdateService and
+                        // DeleteBarber, so a superseded upload doesn't orphan in wwwroot. http URLs aren't
+                        // ours to delete, and we skip it if the path didn't actually change.
+                        string oldLocalImage = null;
+                        if (!string.IsNullOrWhiteSpace(existingUser.Barber.ImageUrl)
+                            && !existingUser.Barber.ImageUrl.StartsWith("http")
+                            && existingUser.Barber.ImageUrl != finalImageUrl)
+                            oldLocalImage = existingUser.Barber.ImageUrl;
+
                         existingUser.Barber.ImageUrl = finalImageUrl;
                         existingUser.TokenVersion++;
                         /* Why increment instead of resetting to 0 ? 
@@ -270,6 +288,15 @@ namespace BarberShopAPI.Controllers
                         The increment on revival forces them to log in fresh, proving they have the new password the admin assigned them.*/
                         await _context.SaveChangesAsync();
                         await transaction.CommitAsync();
+
+                        // Delete the superseded file only after the row is safely persisted - if the
+                        // save above threw, we must not have removed the image the record still points at.
+                        if (oldLocalImage != null)
+                        {
+                            var oldPath = Path.Combine("wwwroot", oldLocalImage.TrimStart('/'));
+                            if (System.IO.File.Exists(oldPath)) System.IO.File.Delete(oldPath);
+                        }
+
                         return Ok(new
                         {
                             message = "Barber created successfully",
@@ -333,6 +360,98 @@ namespace BarberShopAPI.Controllers
                 return StatusCode(500, new { message = "An unexpected error occured" });
             }
         }
+
+        [Authorize(Roles = "ADMIN")]
+        [HttpPatch("update/{id}")]
+        public async Task<IActionResult> UpdateBarber(int id, [FromForm] UpdateBarberViewModel request)
+        {
+            if (!ModelState.IsValid)
+            {
+                var errors = ModelState.Values
+                    .SelectMany(v => v.Errors)
+                    .Select(e => e.ErrorMessage)
+                    .FirstOrDefault();
+                return BadRequest(new { message = errors ?? "Invalid request" });
+            }
+
+            // Only edit live barbers - a soft-deleted row is treated as gone, and bringing one back is
+            // CreateBarber's revive job, not this endpoint's. Include the User so we can update the name.
+            var barber = await _context.Barbers.Include(b => b.User)
+                .FirstOrDefaultAsync(b => b.Id == id && b.isActive);
+            if (barber == null) return NotFound(new { message = "Barber not found" });
+
+            if (request.FullName != null)
+            {
+                // IsValidName also caps each split part at 50 to match User.Name/Surname (nvarchar(50)).
+                if (!IsValidName(request.FullName))
+                    return BadRequest(new { message = "Please enter a valid full name" });
+                var parts = request.FullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                barber.User.Name = parts.Length > 0 ? parts[0] : "";
+                barber.User.Surname = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
+            }
+
+            try
+            {
+                // A new upload always wins; otherwise a bare ImageUrl replaces it; otherwise the existing
+                // image is left untouched. When we replace a locally-stored file we remember the old one
+                // and delete it after the save so orphaned uploads don't pile up (same as UpdateService).
+                string oldLocalImage = null;
+                if (request.ImageFile != null)
+                {
+                    var extension = Path.GetExtension(request.ImageFile.FileName).ToLower();
+                    var uploadsFolder = Path.Combine("wwwroot", "uploads");
+                    Directory.CreateDirectory(uploadsFolder);
+                    var fileName = Guid.NewGuid() + extension;
+                    var filePath = Path.Combine(uploadsFolder, fileName);
+                    using (var stream = new FileStream(filePath, FileMode.Create))
+                    {
+                        await request.ImageFile.CopyToAsync(stream);
+                    }
+                    if (!string.IsNullOrWhiteSpace(barber.ImageUrl) && !barber.ImageUrl.StartsWith("http"))
+                        oldLocalImage = barber.ImageUrl;
+                    barber.ImageUrl = $"/uploads/{fileName}";
+                }
+                else if (!string.IsNullOrWhiteSpace(request.ImageUrl))
+                {
+                    if (!string.IsNullOrWhiteSpace(barber.ImageUrl) && !barber.ImageUrl.StartsWith("http"))
+                        oldLocalImage = barber.ImageUrl;
+                    barber.ImageUrl = request.ImageUrl;
+                }
+                else if (request.RemoveImage)
+                {
+                    // Explicit removal - the barber image column is nullable, so clear it and drop the
+                    // old local file. http URLs aren't ours to delete.
+                    if (!string.IsNullOrWhiteSpace(barber.ImageUrl) && !barber.ImageUrl.StartsWith("http"))
+                        oldLocalImage = barber.ImageUrl;
+                    barber.ImageUrl = null;
+                }
+
+                await _context.SaveChangesAsync();
+
+                // Delete the superseded file only after the row is safely persisted - if the save above
+                // threw, we must not have removed the image the record still points at.
+                if (oldLocalImage != null)
+                {
+                    var oldPath = Path.Combine("wwwroot", oldLocalImage.TrimStart('/'));
+                    if (System.IO.File.Exists(oldPath)) System.IO.File.Delete(oldPath);
+                }
+
+                return Ok(new
+                {
+                    message = "Barber updated successfully",
+                    id = barber.Id,
+                    firstName = barber.User.Name,
+                    lastName = barber.User.Surname,
+                    imageUrl = barber.ImageUrl
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex);
+                return StatusCode(500, new { message = "An unexpected error occurred" });
+            }
+        }
+
         [Authorize(Roles = "ADMIN")]
         [HttpDelete("delete/{id}")]
         public async Task<IActionResult> DeleteBarber(int id)

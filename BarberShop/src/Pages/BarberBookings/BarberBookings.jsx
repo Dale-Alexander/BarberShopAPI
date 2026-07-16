@@ -9,6 +9,7 @@ import LoadingSpinner from "../../Components/LoadingSpinner/LoadingSpinner";
 import useFetchBarberBookings from "../../Hooks/UseFetchBarberBookings.js";
 import { fetchBarberSummary } from "../../utils/FetchBarberSummary.js";
 import Pagination from "../../Components/Pagination/Pagination.jsx";
+import { resolveBarberImage, handleBarberImageError } from "../../utils/barberImage.js";
 import FilterModal from "../AdminDashboard/DashboardComponents/Filter/Filter.jsx";
 const BarberBookings = () => {
     const { id } = useParams();
@@ -116,7 +117,7 @@ const BarberBookings = () => {
                 <div className="barber-detail-card">
                     <div className="barber-detail-left">
                         <div className="barber-detail-avatar">
-                            <img src={barberBookings?.barberImageUrl?.startsWith("http") ? barberBookings?.barberImageUrl : `${import.meta.env.VITE_BASE_URL}${barberBookings?.barberImageUrl}`} alt={barberBookings?.barberName} />
+                            <img src={resolveBarberImage(barberBookings?.barberImageUrl)} onError={handleBarberImageError} alt={barberBookings?.barberName} />
                             <span className="barber-detail-status" />
                         </div>
                         <div className="barber-detail-meta">

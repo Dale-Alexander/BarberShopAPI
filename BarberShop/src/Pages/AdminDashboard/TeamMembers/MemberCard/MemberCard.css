@@ -69,6 +69,14 @@
     background:var(--green-500);
     color:hsl(220, 25%, 10%)
 }
+.barber-action-edit{
+    background:hsl(220, 15%, 24%);
+    color:hsl(210, 20%, 90%);
+}
+.barber-action-edit:hover{
+    background:hsl(210, 20%, 90%);
+    color:hsl(220, 25%, 10%);
+}
 .barber-action-delete{
     background:hsl(220, 15%, 24%);
     color: hsl(0, 84%, 60%);
