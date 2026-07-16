@@ -10,6 +10,7 @@ namespace BarberShopAPI.ViewModels
         [Required]
         public string Token { get; set; }
         [Required]
+        [MinLength(6, ErrorMessage = "Password must be at least 6 characters")]
         [MaxLength(40)]
         public string NewPassword { get; set; }
         [Required]

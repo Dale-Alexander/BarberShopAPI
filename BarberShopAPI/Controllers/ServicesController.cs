@@ -46,6 +46,15 @@ namespace BarberShopAPI.Controllers
             {
                 return BadRequest(ModelState);/* if some of the data annotations of the view model are violated */
             }
+            // [Required] rejects null/empty but still lets whitespace-only ("   ") through, and it never
+            // trims. Trim here and validate the result so the stored name is clean - this also keeps the
+            // UX_Service_Name unique index honest, since " Haircut " and "Haircut" are different keys to it.
+            var title = request.Title?.Trim();
+            if (string.IsNullOrWhiteSpace(title) || title.Length < 2)
+                return BadRequest(new { message = "Service name must be at least 2 characters" });
+            var description = request.Description?.Trim();
+            if (string.IsNullOrWhiteSpace(description))
+                return BadRequest(new { message = "Description is required" });
             try
             {
                 string finalImageUrl = null;
@@ -84,10 +93,10 @@ namespace BarberShopAPI.Controllers
                 }
                     var service = new Service
                     {
-                        Name = request.Title,
+                        Name = title,
                         Price = request.Price,
                         DurationMin = request.DurationMin,
-                        Description = request.Description,
+                        Description = description,
                         ImageUrl = finalImageUrl
                     };
                 _context.Services.Add(service);

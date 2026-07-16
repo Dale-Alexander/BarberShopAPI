@@ -157,6 +157,16 @@ namespace BarberShopAPI.Controllers
         }
 
 
+        // Same rules customer names go through in BookingsController.IsValidName: non-empty,
+        // at least 2 real characters, and no digits - a barber is a person, not "123".
+        private bool IsValidName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            if (name.Trim().Length < 2) return false;
+            if (name.Any(char.IsDigit)) return false;
+            return true;
+        }
+
         private bool IsUniqueConstraintViolation(DbUpdateException ex)
         /* important that this is private otherwise Swagger might think that it is an endpoint and it doesnt see
          * that is has [HttpPost/Get/etc] so it will result in an error because an endpoint reques these things but in reality
@@ -180,6 +190,8 @@ namespace BarberShopAPI.Controllers
                     .FirstOrDefault();
                 return BadRequest(new { message = errors ?? "Invalid request" });
             }
+            if (!IsValidName(request.FullName))
+                return BadRequest(new { message = "Please enter a valid full name" });
             await using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {

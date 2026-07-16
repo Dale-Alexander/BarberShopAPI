@@ -356,6 +356,8 @@ namespace BarberShopAPI.Controllers
                 {
                     return BadRequest(new { message = "Invalid email address"});
                 }
+                if (model.Amount <= 0)
+                    return BadRequest(new { message = "Amount must be greater than zero" });
                 var user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == model.Phone);
                 var parts = model.FullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 //the above splits by space and ignores extra spaces

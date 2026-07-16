@@ -18,6 +18,7 @@ namespace BarberShopAPI.ViewModels
         [EmailAddress]
         public string Email { get; set; }
         [Required]
+        [MinLength(6, ErrorMessage = "Password must be at least 6 characters")]
         [MaxLength(100)]
         public string Password { get; set; }
 
