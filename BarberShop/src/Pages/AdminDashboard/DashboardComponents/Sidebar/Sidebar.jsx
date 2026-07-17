@@ -9,6 +9,7 @@ import { Link } from "react-router-dom";
 import "react-pro-sidebar/dist/css/styles.css";
 import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
 import PeopleOutlinedIcon from "@mui/icons-material/PeopleOutlined";
+import ContentCutOutlinedIcon from "@mui/icons-material/ContentCutOutlined";
 import ContactsOutlinedIcon from "@mui/icons-material/ContactsOutlined";
 import ReceiptOutlinedIcon from "@mui/icons-material/ReceiptOutlined";
 import PersonOutlinedIcon from "@mui/icons-material/PersonOutlined";
@@ -133,6 +134,13 @@ const SidebarContent = ({ collapsed, isCollapsed, setIsCollapsed, selected, setS
                             setSelected={setSelected}
                         />
                         <Item
+                            title="Manage Services"
+                            to="/admin/services"
+                            icon={<ContentCutOutlinedIcon />}
+                            selected={selected}
+                            setSelected={setSelected}
+                        />
+                        <Item
                             title="Contacts Information"
                             to="/contacts"
                             icon={<ContactsOutlinedIcon />}
@@ -213,6 +221,7 @@ const Sidebar = () => {
     const titleRoutes = {
         "/admin": "Dashboard",
         "/admin/team": "Manage Team",
+        "/admin/services": "Manage Services",
         "/admin/calendar": "Calendar",
         "/admin/settings": "Settings"
     };

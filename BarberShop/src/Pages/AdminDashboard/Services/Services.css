@@ -1,0 +1,62 @@
+/* The shared page chrome (team-header/title/subtitle, create-barber button, team-content-area,
+   team-empty-state), the form primitives (form-group/label/input, image-dropzone family) and the
+   modal/btn classes are defined in TeamMembers.css and index.css, both always bundled. Only the
+   classes unique to the services page live here. */
+
+.services-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+}
+
+@media (min-width: 640px) {
+    .services-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (min-width: 1024px) {
+    .services-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@media (min-width: 1400px) {
+    .services-grid {
+        grid-template-columns: repeat(4, 1fr);
+    }
+}
+
+/* Price + duration sit side by side on wider viewports, stacking on narrow ones. */
+.services-form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+@media (min-width: 480px) {
+    .services-form-row {
+        flex-direction: row;
+        gap: 16px;
+    }
+
+    .services-form-row .form-group {
+        flex: 1;
+    }
+}
+
+/* Rectangular preview inside the dropzone (services are shown as banners, not circular avatars). */
+.service-image-preview {
+    max-width: 100%;
+    max-height: 160px;
+    border-radius: 0.5rem;
+    object-fit: cover;
+    border: 2px solid var(--green-500);
+}
+
+/* textarea uses .form-input but needs to allow vertical resize and a sensible min height. */
+textarea.form-input {
+    resize: vertical;
+    min-height: 72px;
+    font-family: inherit;
+}

@@ -11,6 +11,7 @@ import { useAdminAxios } from "./Hooks/AxiosInterceptor.js";
 import AdminCalendar from "./Pages/AdminDashboard/Calendar/Calendar.jsx";
 import AdminLayout from "./Components/AdminLayout/AdminLayout.jsx";
 import TeamMembers from "./Pages/AdminDashboard/TeamMembers/TeamMembers.jsx";
+import Services from "./Pages/AdminDashboard/Services/Services.jsx";
 import Settings from "./Pages/AdminDashboard/Settings/Settings.jsx";
 import BarberBookings from "./Pages/BarberBookings/BarberBookings";
 import BarberDateAndTime from "./Pages/BarberDateAndTime/BarberDateAndTime.jsx";
@@ -51,6 +52,7 @@ function App() {
                         <Route path="/admin" element={<AdminDashboard />} />
                         <Route path="/admin/calendar" element={<AdminCalendar />} />
                         <Route path="/admin/team" element={<TeamMembers />} />
+                        <Route path="/admin/services" element={<Services />} />
                         <Route path="/admin/settings" element={<Settings />} />
                     </Route>
                     <Route element={<RequireRole Roles={["ADMIN", "BARBER"]} />}>

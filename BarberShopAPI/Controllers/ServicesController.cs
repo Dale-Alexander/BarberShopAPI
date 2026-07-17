@@ -35,6 +35,28 @@ namespace BarberShopAPI.Controllers
             var result = await ServicesList.ToListAsync();
             return Ok(result);
         }
+
+        // Admin catalogue: same live-services set as GetServices but carrying the Id (and used behind
+        // ADMIN auth) so the manage-services page can drive the update/delete endpoints. Kept separate
+        // from the public GET so the customer catalogue stays a minimal, unauthenticated projection.
+        [Authorize(Roles = "ADMIN")]
+        [HttpGet("admin")]
+        public async Task<IActionResult> GetServicesForAdmin()
+        {
+            var services = await (from s in _context.Services
+                                  where s.IsActive == true
+                                  select new ServicesForAdminDisplayViewModel
+                                  {
+                                      Id = s.Id,
+                                      Name = s.Name,
+                                      Description = s.Description,
+                                      Price = s.Price,
+                                      DurationMin = s.DurationMin,
+                                      ImageUrl = s.ImageUrl
+                                  }).ToListAsync();
+            return Ok(services);
+        }
+
         [Authorize(Roles = "ADMIN")]
         /* ASP.NET code will check if the JWT token has a claim of type ClaimTypes.Role(check the authController) and it will
          * see if the role assigned to the token matches the allowed role in [Authorize]*/

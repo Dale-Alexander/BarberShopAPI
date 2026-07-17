@@ -2,9 +2,6 @@
 
 notes about migrations and applicability of changes when changing from null to non-null but with default that isnt the case
 
-
-Look at BarberController of old project and look how capitalize is used. It returns the duplicate field that was entered to the browser
-
 #What happens when a barber or an admin try to make a booking. 
 
   No need to change vite.config.js. That is only used in development and not production
@@ -22,38 +19,22 @@ Look at BarberController of old project and look how capitalize is used. It retu
 Check if you the filtered index and not just a normal index.  see what happens when creating a barber, deleting it and creating 
 it with the same email and how that relates to the amount of people. I dont think you even have a statcard in the dashboard showing the amount of different people. 
 
-
-Also when making creating a booking. Make sure you do this:
-catch (DbUpdateException ex) when (ex.InnerException?.Message.Contains("unique") == true)
-
-
 When going to production you need to toggle off test mode for stripe and then the
 live keys will be revealed pk_live sk_live... . You then need to change your env variables
 
 Also check if keys expire after 90 days
 
-Add some validation on names in Services and maybe other attributes which need validation in all controllers
-
-
-
-In production change the from email you use when sending emails, change it to the 
-custom domain that you will have
-
+In production change the from email you use when sending emails, change it to the custom domain that you will have
 
 Maybe a post-visit follow-up email ("thanks for visiting, leave a review")
 
 Maybe loyalty tracking(10th cut free)
 
-
-Add a mark as paid button to cash bookings in the dashboard
-
 Decide whether bookings created by the admin can be marked as paid since their amount is set to null
-
 
 Dpnt forget that the githib repo is private and not public
 
 When you have the admin's email and password, re run dotnet run -- --seed-admin in the terminal with the new values in the .env file
-
 
 Should I include a page in the dashboard that takes him to the Stripe Dashboard? 
 
@@ -65,3 +46,6 @@ Time between each slot(not buffer) as a setting
 
 Different shop schedules per day as a setting and each barber can implement their own schedule 
 
+Is description in Services required/should you remove it/or nullable? 
+
+Make confirmed bookings' amount editable in case for example the customer decided to change services at the shop?
