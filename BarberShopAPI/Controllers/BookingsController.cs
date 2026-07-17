@@ -448,7 +448,7 @@ namespace BarberShopAPI.Controllers
         }
         [Authorize(Roles = "ADMIN,BARBER")]
         [HttpPatch("mark-cash-paid/{bookingId}")]
-        public async Task<IActionResult> MarkCashPaymentAsPaid(int bookingId)
+        public async Task<IActionResult> MarkCashPaymentAsPaid(int bookingId, [FromBody] MarkCashPaidViewModel? model = null)
         {
             try
             {
@@ -459,6 +459,18 @@ namespace BarberShopAPI.Controllers
                 if (payment.Status == PaymentStatus.COMPLETED)
                     return BadRequest(new { message = "This payment has already been marked as paid" });
 
+                // Admin (phone) bookings have no amount on file - it's only known once the customer pays in
+                // person, so it's captured here at mark-paid time. Optional by design: an admin reconciling
+                // later who doesn't remember the amount can still mark the booking collected with it left
+                // unknown. Customer cash bookings already carry their amount and send nothing. Bounds mirror
+                // ConfirmCashBooking / the CK_Payments_Amount_Max400 check constraint.
+                if (model?.Amount is decimal amount)
+                {
+                    if (amount <= 0 || amount > 400)
+                        return BadRequest(new { message = "Amount must be greater than zero and at most 400" });
+                    payment.Amount = amount;
+                }
+
                 payment.Status = PaymentStatus.COMPLETED;
                 payment.PaidAt = DateTime.UtcNow;
                 await _context.SaveChangesAsync();
@@ -467,6 +479,7 @@ namespace BarberShopAPI.Controllers
                 {
                     message = "Payment marked as paid",
                     paymentId = payment.Id,
+                    amount = payment.Amount,
                     paidAt = payment.PaidAt
                 });
             }

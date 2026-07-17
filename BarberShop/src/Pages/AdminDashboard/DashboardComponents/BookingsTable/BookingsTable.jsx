@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useContext } from "react";
 import { useNavigate } from "react-router-dom";
-import { SquarePen, Trash2, Plus, Filter, Search, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { SquarePen, Trash2, Plus, Filter, Search, AlertTriangle, CheckCircle2, Banknote } from "lucide-react";
 import { format } from "date-fns";
 import FilterModal from "../Filter/Filter.jsx";
 import "./BookingsTable.css";
@@ -22,6 +22,8 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
     const [cancelTarget, setCancelTarget] = useState(null);
     const [refundAnyway, setRefundAnyway] = useState(false);
     const [reviewTarget, setReviewTarget] = useState(null);
+    const [markPaidTarget, setMarkPaidTarget] = useState(null);
+    const [markPaidAmount, setMarkPaidAmount] = useState("");
     const { showToast } = useContext(ToastContext);
     const navigate = useNavigate();
 
@@ -99,6 +101,46 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
         if (!reviewTarget) return;
         onMarkReviewed(reviewTarget.id);
         setReviewTarget(null);
+    }
+
+    /* Cash bookings sit as COMPLETED booking + PENDING payment until the money is collected in person.
+     * This flips the payment to COMPLETED. `amount` is only sent for admin (phone) bookings, which have
+     * no amount on file; customer cash bookings keep their stored amount and pass null. */
+    const onMarkPaid = async (bookingId, amount) => {
+        try {
+            const res = await adminAxios.patch(`/api/bookings/mark-cash-paid/${bookingId}`, amount != null ? { amount } : {});
+            /* In the PENDING (unpaid) view the row no longer belongs, so drop it; in any other view keep
+             * it but flip the status and reflect any amount the admin just entered. Mirrors mark-reviewed. */
+            setBookings(prev =>
+                filters.status === "PENDING"
+                    ? prev.filter(b => b.id !== bookingId)
+                    : prev.map(b => b.id === bookingId
+                        ? { ...b, paymentStatus: "COMPLETED", amount: res.data?.amount ?? b.amount }
+                        : b)
+            );
+            showToast("Marked as paid", res.data?.message || `Booking #${bookingId} was marked as collected.`);
+        }
+        catch (err) {
+            showToast("Couldn't mark as paid", err.response?.data?.message || "An unexpected error occurred. Please try again.");
+        }
+    }
+
+    const confirmMarkPaid = () => {
+        if (!markPaidTarget) return;
+        /* Amount is optional here (admin may not remember). If given, mirror the backend bounds so a bad
+         * value is caught before the round-trip; blank means "collected, amount unknown". */
+        const trimmed = markPaidAmount.trim();
+        let amount = null;
+        if (trimmed !== "") {
+            const parsed = Number(trimmed);
+            if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 400) {
+                showToast("Invalid amount", "Enter an amount greater than 0 and at most 400, or leave it blank.");
+                return;
+            }
+            amount = parsed;
+        }
+        onMarkPaid(markPaidTarget.id, amount);
+        setMarkPaidTarget(null);
     }
 
     return (
@@ -206,6 +248,18 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                                                         setReviewTarget(b); setOpenMenuId(null);
                                                     }}><CheckCircle2 size={14} /> Mark reviewed</button>
                                                 )}
+                                                {b.paymentMethod === "CASH" && b.paymentStatus === "PENDING" && (
+                                                    <button className="action-dropdown-item mark-paid-item" onClick={() => {
+                                                        setOpenMenuId(null);
+                                                        /* Customer cash bookings already have an amount on file -> one-click.
+                                                         * Admin bookings (no amount) open a dialog to optionally capture it. */
+                                                        if (b.amount != null) {
+                                                            onMarkPaid(b.id, null);
+                                                        } else {
+                                                            setMarkPaidTarget(b); setMarkPaidAmount("");
+                                                        }
+                                                    }}><Banknote size={14} /> Mark as paid</button>
+                                                )}
                                                 </div>
                                             )}
                                     </div>
@@ -267,6 +321,36 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                         <div className="cancel-confirm-actions">
                             <button className="cancel-confirm-keep" onClick={() => setReviewTarget(null)}>Cancel</button>
                             <button className="review-confirm-go" onClick={confirmReview}>Mark reviewed</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {markPaidTarget && (
+                <div className="cancel-confirm-overlay" onClick={() => setMarkPaidTarget(null)}>
+                    <div className="cancel-confirm-modal" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="cancel-confirm-title">Mark booking #{markPaidTarget.id} as paid?</h3>
+                        <p className="cancel-confirm-text">
+                            This booking has no amount on file. Enter the cash you collected to keep revenue
+                            accurate &mdash; or leave it blank if you don't have it, and it'll still be marked
+                            as collected.
+                        </p>
+                        <label className="mark-paid-amount-label">
+                            Amount collected (&euro;)
+                            <input
+                                type="number"
+                                min="0"
+                                max="400"
+                                step="0.01"
+                                inputMode="decimal"
+                                className="mark-paid-amount-input"
+                                placeholder="Optional"
+                                value={markPaidAmount}
+                                onChange={(e) => setMarkPaidAmount(e.target.value)}
+                            />
+                        </label>
+                        <div className="cancel-confirm-actions">
+                            <button className="cancel-confirm-keep" onClick={() => setMarkPaidTarget(null)}>Cancel</button>
+                            <button className="review-confirm-go" onClick={confirmMarkPaid}>Mark as paid</button>
                         </div>
                     </div>
                 </div>

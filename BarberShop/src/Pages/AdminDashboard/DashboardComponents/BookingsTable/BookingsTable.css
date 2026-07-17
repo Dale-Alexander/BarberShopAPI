@@ -278,6 +278,15 @@
         color: #fcd34d;
     }
 
+.mark-paid-item {
+    color: hsl(145, 55%, 62%);
+}
+
+    .mark-paid-item:hover {
+        background: hsl(228, 17%, 24%);
+        color: hsl(145, 60%, 68%);
+    }
+
 /* ── Row needs-review marker ── */
 .booking-id-cell {
     display: inline-flex;
@@ -439,6 +448,30 @@
     color: #fbbf24;
     font-weight: 600;
 }
+
+.mark-paid-amount-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    color: #ffffff;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+}
+
+.mark-paid-amount-input {
+    padding: 0.5rem 0.7rem;
+    border-radius: 0.4rem;
+    border: 1px solid hsl(228, 17%, 40%);
+    background: var(--primary-500, hsl(228, 17%, 18%));
+    color: #ffffff;
+    font-size: 0.9rem;
+}
+
+    .mark-paid-amount-input:focus {
+        outline: none;
+        border-color: hsl(145, 55%, 55%);
+    }
 
 .review-confirm-go {
     border: none;
