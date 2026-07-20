@@ -3,12 +3,15 @@ import { AuthContext} from "../../Context/AuthContext";
 import {Navigate, Outlet, useLocation} from "react-router-dom";
 import LoadingSpinner from "../LoadingSpinner/LoadingSpinner";
 
-const RequireRole = ({ Roles }) => {
+// spinnerBg/spinnerColor let the loading state match the guarded route's background so there's no
+// white flash before it paints. Defaults suit the dark admin app; the cream customer route
+// (/datetime) passes its own lighter pair from App.jsx.
+const RequireRole = ({ Roles, spinnerBg, spinnerColor = "var(--grey-100)" }) => {
     const location = useLocation();
     const {user, loading} = useContext(AuthContext);
     if(loading){
         return(
-            <LoadingSpinner message = {"Fetching user information"} color="var(--primary-500)"/>
+            <LoadingSpinner message={"Fetching user information"} color={spinnerColor} fullscreen background={spinnerBg}/>
         )
     }
     if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />
@@ -20,7 +23,7 @@ const RequireRole = ({ Roles }) => {
     RequireRole would check if the user is logged in.
     If not he would be redirected back to the login page */
     if(!Roles.includes(user.role)){
-        return <Navigate to = "/admin/barber/bookings" replace/>
+        return <Navigate to = {`/admin/team/${user.barberId}`} replace/>
     }
     /* The admin can go anywhere. This if statement
     is only when a barber is already logged in 

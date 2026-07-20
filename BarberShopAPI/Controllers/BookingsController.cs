@@ -363,8 +363,16 @@ namespace BarberShopAPI.Controllers
                 {
                     return BadRequest(new { message = "Invalid email address"});
                 }
-                if (model.Amount <= 0)
-                    return BadRequest(new { message = "Amount must be greater than zero" });
+
+                // Recorded total comes from the booking's own services, never from the request body, so the
+                // amount that lands on the payment/receipt/dashboard can't be tampered with by the client.
+                var realTotal = await _context.Bookings
+                    .Where(b => b.Id == model.BookingId)
+                    .Select(b => b.Services.Sum(bs => bs.Service.Price))
+                    .FirstOrDefaultAsync();
+                if (realTotal <= 0)
+                    return BadRequest(new { message = "This booking has no payable services" });
+
                 var user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == model.Phone);
                 var parts = model.FullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 //the above splits by space and ignores extra spaces
@@ -419,7 +427,7 @@ namespace BarberShopAPI.Controllers
                 var payment = new Payment
                 {
                     BookingId = booking.Id,
-                    Amount = model.Amount
+                    Amount = realTotal
                 };
                 _context.Payments.Add(payment);
                 await _context.SaveChangesAsync();
@@ -492,7 +500,7 @@ namespace BarberShopAPI.Controllers
         [HttpPost("payment-intent")]
         public async Task<IActionResult> StartBookingCardFlow([FromBody] PaymentIntentViewModel request)
         {
-            Console.WriteLine($"{request.BookingId}, {request.Amount}, {request.FullName}, {request.Phone}");
+            Console.WriteLine($"{request.BookingId}, {request.FullName}, {request.Phone}");
             try
             {
                 var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.Id == request.BookingId);
@@ -506,9 +514,20 @@ namespace BarberShopAPI.Controllers
                     return BadRequest(new { message = "Invalid phone number" });
                 if (!isValidEmail(request.Email))
                     return BadRequest(new { message = "Invalid Email Address" });
+
+                // The amount is derived from the booking's own services here - NEVER from the request body -
+                // so a customer can't POST a smaller amount and underpay for their appointment. Stripe works
+                // in cents, hence *100.
+                var realTotal = await _context.Bookings
+                    .Where(b => b.Id == request.BookingId)
+                    .Select(b => b.Services.Sum(bs => bs.Service.Price))
+                    .FirstOrDefaultAsync();
+                if (realTotal <= 0)
+                    return BadRequest(new { message = "This booking has no payable services" });
+
                 var paymentIntentOptions = new PaymentIntentCreateOptions
                 {
-                    Amount = request.Amount,
+                    Amount = (long)(realTotal * 100m),
                     Currency = "eur",
                     PaymentMethodTypes = new List<string> { "card" },
                     Metadata = new Dictionary<string, string> {
@@ -603,6 +622,17 @@ namespace BarberShopAPI.Controllers
             return (from, to);
         }
 
+        /* Ownership guard for the barber-scoped endpoints below. Both are open to ADMIN and
+         * BARBER, but the {barberId} comes straight from the URL - without this, any logged-in
+         * barber could read another barber's clients/phone numbers just by editing the id (IDOR).
+         * Admins may view any barber; a barber may only view the barberId tied to their own user. */
+        private async Task<bool> BarberCanAccess(int barberId)
+        {
+            if (User.IsInRole("ADMIN")) return true;
+            var callerUserId = int.Parse(User.FindFirst("id")?.Value ?? "0");
+            return await _context.Barbers.AnyAsync(b => b.Id == barberId && b.UserId == callerUserId);
+        }
+
         [Authorize(Roles ="ADMIN,BARBER")]
         [HttpGet("barber-fetch/{barberId}")]
         public async Task<IActionResult> GetBarberBookings([FromQuery] DateTime? fromDate,
@@ -612,6 +642,7 @@ namespace BarberShopAPI.Controllers
             [FromQuery] int pageSize = 20,
             int barberId = 0)
         {
+            if (!await BarberCanAccess(barberId)) return StatusCode(403, new { message = "You can only view your own bookings" });
             if (fromDate.HasValue != toDate.HasValue) return BadRequest(new { message = "Both From Date and To Date must be provided or left empty" });
             if (fromDate.HasValue && toDate.HasValue && fromDate.Value > toDate.Value) return BadRequest(new { message = "From Date cannot be after To Date" });
             var (from, to) = ToMaltaDayWindow(fromDate, toDate);
@@ -666,6 +697,7 @@ namespace BarberShopAPI.Controllers
         {
             try
             {
+                if (!await BarberCanAccess(barberId)) return StatusCode(403, new { message = "You can only view your own bookings" });
                 if (fromDate.HasValue != toDate.HasValue) return BadRequest(new { message = "Both From Date and To Date must be provided or left empty" });
                 if (fromDate.HasValue && toDate.HasValue && fromDate.Value > toDate.Value) return BadRequest(new { message = "From Date cannot be after To Date" });
                 var (from, to) = ToMaltaDayWindow(fromDate, toDate);

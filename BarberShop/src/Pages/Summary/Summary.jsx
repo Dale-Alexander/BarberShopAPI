@@ -71,7 +71,8 @@ const AlreadyPaid = () => {
     }, [bookingId, data, navigate])
 
     //early returns after all hooks. Loading after useEffect
-    if (loading) return <LoadingSpinner message="Loading Booking Details" color="#000000" />
+    // Match the page's background (.ap-page) so the loading state doesn't flash white first.
+    if (loading) return <LoadingSpinner message="Loading Booking Details" color="#000000" fullscreen background="#f9f8f6" />
 
 
 

@@ -1,6 +1,7 @@
 import { useState, useContext } from "react";
 import "./Login.css";
 import axios from "axios";
+import { PulseLoader } from "react-spinners";
 import { Mail, Lock } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { AuthContext } from "../../Context/AuthContext";
@@ -12,11 +13,14 @@ const Login = () => {
     const navigate = useNavigate();
     const { showToast } = useContext(ToastContext);
     const location = useLocation();
+    const [submitting, setSubmitting] = useState(false);
     /* useLocation is used so that if i am not logged in and i visit /admin/team directly, i will get logged out and when i log in
     i will get redirected to /admin/team instead of just /admin. We are basically saving the desired original destination*/
     const handleSubmit = async (e) => {
         e.preventDefault();
         const fromPath = location?.state?.from;
+        if (submitting) return; // guard against a double-submit while the request is in flight
+        setSubmitting(true);
 
         try {
             const response = await axios.post("/api/auth/login", { email, password }, { withCredentials: true });
@@ -24,13 +28,15 @@ const Login = () => {
             console.log(response.data);
             setUser(({
                 id: response.data.id,
-                role: response.data.role
+                role: response.data.role,
+                barberId: response.data.barberId
             }))
             if (response.data.role === "ADMIN") {
                     navigate(fromPath || "/admin", { replace: true });
             }
             else {
-                navigate("/admin/barber/bookings", { replace: true });
+                // A barber's own bookings live at /admin/team/{barberId} (BarberBookings).
+                navigate(`/admin/team/${response.data.barberId}`, { replace: true });
             }
         }
         catch (err) {
@@ -38,6 +44,8 @@ const Login = () => {
             //the fallback message is unnecessary here i think since the backend has a response for every error.
             showToast("Login Failed", message);
             console.log(err);
+            // Only reset on failure - a success navigates away and unmounts this component.
+            setSubmitting(false);
         }
     }
 
@@ -66,8 +74,8 @@ const Login = () => {
                             className="login-input"
                             required />
                     </div>
-                    <button type="submit" className="login-button">
-                        Login
+                    <button type="submit" className="login-button" disabled={submitting}>
+                        {submitting ? <PulseLoader size={8} color="#2b2e38" /> : "Login"}
                     </button>
                 </form>
                 <div className="forgot-password">

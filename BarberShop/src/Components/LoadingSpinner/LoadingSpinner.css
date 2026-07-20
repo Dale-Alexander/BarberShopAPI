@@ -8,6 +8,14 @@
     justify-content: center;
 }
 
+/* Full-viewport loading state used by the route guards while the initial auth check is in flight.
+   Fixed + a solid background matching the destination avoids the white flash between the guard and
+   the (dark) app/login screen. Defaults to the dark app bg; pass `background` for lighter pages. */
+.spinner-container--screen {
+    position: fixed;
+    background: var(--primary-500);
+}
+
 .spinner-container--inline {
     display: flex;
     flex-direction: column;
@@ -15,4 +23,20 @@
     align-items: center;
     justify-content: center;
     padding: 24px 0;
+}
+
+/* Refetch busy state for the paginated tables (admin bookings + barber bookings). On a page or filter
+   change the existing rows stay in place under this subtle dim while the next set loads, so we never
+   blank data the user is already reading - the full spinner is only for the very first load. The
+   wrapping element must be position:relative for the overlay to cover just the table. */
+.table-busy-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(20, 20, 20, 0.35);
+    border-radius: inherit;
+    z-index: 5;
+    pointer-events: none;
 }

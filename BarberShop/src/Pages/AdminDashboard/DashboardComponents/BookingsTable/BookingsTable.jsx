@@ -7,6 +7,7 @@ import "./BookingsTable.css";
 import { adminAxios } from "../../../../Hooks/AxiosInterceptor";
 import { ToastContext } from "../../../../Context/ToastContext.jsx";
 import Pagination from "../../../../Components/Pagination/Pagination.jsx";
+import LoadingSpinner from "../../../../Components/LoadingSpinner/LoadingSpinner.jsx";
 
 /* Cancelling within this many hours of the appointment forfeits the customer's refund (mirrors the
  * backend RefundCutoff in BookingCanceller). Compared against Malta wall-clock, since startDateTime is
@@ -15,7 +16,7 @@ const REFUND_CUTOFF_HOURS = 24;
 const getMaltaNow = () =>
     new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Malta" }));
 
-const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filters, needsReviewCount = 0, refreshNeedsReviewCount, page = 1, totalPages = 1, onPageChange }) => {
+const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filters, needsReviewCount = 0, refreshNeedsReviewCount, refreshSummary, page = 1, totalPages = 1, onPageChange, loading = false }) => {
     const [openMenuId, setOpenMenuId] = useState(null);
     const [searchInput, setSearchInput] = useState("");
     const [filterModalOpen, setFilterModalOpen] = useState(false);
@@ -52,6 +53,9 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
         try {
             const res = await adminAxios.patch(`/api/bookings/cancel/${bookingId}${forceRefund ? "?refundAnyway=true" : ""}`);
             setBookings(prev => prev.filter(b => b.id !== bookingId));
+            // Pull the chart/stat cards back down so the now-cancelled booking leaves the COMPLETED-only
+            // series immediately, instead of lingering until the next page load.
+            refreshSummary?.();
             showToast("Booking cancelled", res.data?.message || "The booking was cancelled.");
         }
         catch (err) {
@@ -118,6 +122,9 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                         ? { ...b, paymentStatus: "COMPLETED", amount: res.data?.amount ?? b.amount }
                         : b)
             );
+            // A phone booking has no amount on file until it's marked paid, so collecting it adds that
+            // revenue to the chart's COMPLETED series. Refresh so the chart/cards reflect it immediately.
+            refreshSummary?.();
             showToast("Marked as paid", res.data?.message || `Booking #${bookingId} was marked as collected.`);
         }
         catch (err) {
@@ -192,7 +199,13 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
 
                 </div>
             </div>
-            <div style={{ overflowX: "auto" }}>
+            {/* First load has no rows yet, so take over the table area with a spinner. A page/filter
+                refetch keeps the current rows visible under a subtle busy overlay (see the overlay
+                below) rather than blanking data the admin is already looking at. */}
+            {loading && bookings.length === 0 ? (
+                <LoadingSpinner message="Loading Bookings" color="#e0e0e0" inline />
+            ) : (
+            <div style={{ position: "relative", overflowX: "auto" }}>
                 <table className="bookings-table">
                     <thead>
                         <tr>
@@ -268,7 +281,13 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                         ))}
                     </tbody>
                 </table>
+                {loading && bookings.length > 0 && (
+                    <div className="table-busy-overlay">
+                        <LoadingSpinner color="#e0e0e0" inline />
+                    </div>
+                )}
             </div>
+            )}
             <Pagination page={page} totalPages={totalPages} onChange={onPageChange} />
             {filterModalOpen && (
                 <>

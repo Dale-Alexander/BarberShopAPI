@@ -7,11 +7,13 @@ const RedirectIfLoggedIn = () => {
     const fromPath = location?.state?.from;
     const { user, loading } = useContext(AuthContext);
 
-    if (loading) return <LoadingSpinner message = {"Fetching user information"} color="var(--primary-500)" />;
+    // Every destination behind this guard (login/forgot/reset, or a redirect into the admin app) sits
+    // on a dark background, so the loading state matches it (dark bg + light dots) to avoid a flash.
+    if (loading) return <LoadingSpinner message={"Fetching user information"} color="var(--grey-100)" fullscreen />;
 
     if (user) {
         if (user.role === "ADMIN") return <Navigate to={fromPath || "/admin"} replace />;
-        else if (user.role === "BARBER") return <Navigate to="/admin/barber/bookings" replace />;
+        else if (user.role === "BARBER") return <Navigate to={`/admin/team/${user.barberId}`} replace />;
     }
     // if no user, allow access
     return <Outlet />;

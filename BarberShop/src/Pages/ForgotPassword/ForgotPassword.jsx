@@ -1,7 +1,9 @@
 import { useState } from "react";
 import "./ForgotPassword.css";
 import axios from "axios";
+import { PulseLoader } from "react-spinners";
 import { Mail } from "lucide-react";
+import { validateEmail } from "../../utils/validation";
 
 // Step 1 of the password reset flow: just collects an email and asks the backend to
 // send a reset link. This page never sees or sets a new password - that only happens
@@ -10,9 +12,16 @@ import { Mail } from "lucide-react";
 const ForgotPassword = () => {
     const [email, setEmail] = useState("");
     const [submitted, setSubmitted] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
+
+    // Shown live once the user starts typing; the button stays locked until the address is well-formed.
+    const emailError = email ? validateEmail(email) : null;
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (validateEmail(email)) return; // safety net; the button is disabled until the email is valid
+        if (submitting) return;
+        setSubmitting(true);
         try {
             await axios.post("/api/auth/forgot-password", { email });
         }
@@ -20,6 +29,7 @@ const ForgotPassword = () => {
             // Always show the same confirmation regardless of outcome - the backend
             // intentionally never reveals whether the email exists, so the UI
             // shouldn't either (even a failed request looks identical to a success).
+            setSubmitting(false);
             setSubmitted(true);
         }
     }
@@ -32,7 +42,7 @@ const ForgotPassword = () => {
                         {submitted ? (
                             <>
                                 <h1 className="login-title">Check your email</h1>
-                                <p>If an account with that email exists, we've sent a password reset link. It expires in 30 minutes.</p>
+                                <p className="forgot-confirmation">If an account with that email exists, we've sent a password reset link. It expires in 30 minutes.</p>
                             </>
                         ) : (
                             <>
@@ -45,11 +55,12 @@ const ForgotPassword = () => {
                                             placeholder="Email"
                                             value={email}
                                             onChange={(e) => setEmail(e.target.value)}
-                                            className="login-input"
+                                            className={`login-input${emailError ? " login-input--invalid" : ""}`}
                                             required />
                                     </div>
-                                    <button type="submit" className="login-button">
-                                        Send Reset Link
+                                    {emailError && <p className="login-field-error">{emailError}</p>}
+                                    <button type="submit" className="login-button" disabled={!!validateEmail(email) || submitting}>
+                                        {submitting ? <PulseLoader size={8} color="#2b2e38" /> : "Send Reset Link"}
                                     </button>
                                 </form>
                             </>

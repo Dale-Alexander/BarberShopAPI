@@ -1,74 +1,20 @@
 write notes about the graph used
-check about the revenue/booking percentage/valueand cover the edge cases like if last month there was no bookings/revenue
 
-Account for the fact that when the revenue/starts increasing the values displayed on the
-y axis are updated/changed appropriately
-
-refresh the chart when marking a booking as cancelled
-
-Make sure you are not duplicating data when calculating the label
-and when setting the tooltip. Is the label calculation even
-necessary or no
-
-Fix graph tooltip labelling
-
-You probably have to fix burger menu when scolrring up and down for better design
-
-Make sure you are using adminAxios where it matters most and not useFetch or some other shit like that
 Fix a little bit responsive design and padding for forgetPassword.jsx and Login.jsx
-
-See what is happening when i change my password from Swazzy2929 to
-swizzler2929 and then i logout. When i logout with swizzler2929
-it like freezes or redirects me back to dashboard and then
-back to login whereas with Swazzy2929 it just redirected me i think
-
 
 Add Login link on forget Password component to navigate back to login and fix the CSS for the forgot Password component
 
-Make the calendar responsive design and when you click on an event make sure it takes you to the event. 
+Make the calendar responsive design
 
-Fix the fact that when i go and highlight all the text to remove it
-and i keep going until my mouse isnt even in the modal, it doesnt exit the modal. Sending a backendd request. Just go through all of that Barber
-Bookings Component(Team Members)
-
-some input validation when creating a barber like phone number format and all the required fields(Some input validation). Make sure you add the
-delete feature for services and make sure the calendar and the Manage Team page are design responsive. See what you are going to do about the
-different image file formats like .avif and what not
-
-Make sure you register the loadingComponent in TeamMembers and in BarberBookings. Also if there are no bookings for a particular barber,
-then account for that accordingly and do the same for if there are not team members. 
-
-When a user who is not the admin tries to change the id of lets say the BarberDateAndTime component
-in the URL bar, make sure the backend rejects it because the user is not an admin
-and therefore he cannot edit it
-
-See if bookedSlots and isBarberAvailable in BarberDateAndTime can be reduced to 1 function
-
-do the appropriate toasts for the edit and cancel booking and other functions for that matter
+do the appropriate toasts messages for the edit and cancel booking and other functions for that matter. Check the inline error messages aswell
 
 In BookingsDateAndTable, dont forget to change the serviceIds when creating a pending booking
 
 Format form inputs on the frontend like transform an all capitalised input to proper casing
 
-Implement a Continue/ConfirmBooking button on BarberDateAndTime and disable
-that button if the loading state for AuthContext is still loading
-disabled = {loading}
-
-Check if the toast is working
-
-Dont forget to send the state adminBooking when creating a booking from the dashboard. location.state.adminBooking set to true
-
 For the bookings table you should probably add another button for cancelled since it doesnt make sense to add cancelled as an option in the filter since the bookings table
 only displays completed bookings and therefore selecting cancelled in the display doesnt make sense  because you are displaying cancelled in a table full of completed bookings
 only so it is better to add a cancelled button next to create booking or something
-
-Implement loading and toast for fetchBookings and check that everything else works
-
-See if you have to multiply the amount by 100 when confirming a cash payment. See why the name and phone reset when clicking the card method
-
-Use error in useFetch and probably use it with showToast. Look at Checkout.jsx for example. It displays the message whenever it fetches a booking that doesnt exist or
-when it fetches a booking that doesnt have pending status
-Also dont forget to implement loading for useFetch with the loading spinner 
 
 Change the links from NotFound to /services and not to /datetime
 
@@ -76,20 +22,45 @@ See if you are going to leave payment-intent endpoint like that specifically, th
 then when he wants to pay again and he clicks card payment method, it will show a toast saying error because that idempotencyKey with that bookingId was already generated
 and you cant have duplicate idempotency keys
 
-I think some oading spinners have #ffffff thinking it was black but in reality it is white so you might need to change some colours
-
-check if you want to add any validation for checkout so that the user cant just type any bookingId in the URL. That means tht he will make a payment for a booking that is not his
-so i think there isnt anything to do but IDK
-
-In alreadypaid instead of using a toast to show an error in the case where the user enters a non existent bookingId, navigate to 404 and also in Summary.jsx do the same
+If a booking is pending and someone navigates to /already-paid or /summary, it will show a toast saying this is still pending. Should it be like this or should it navigate to 404
 
 If you forget the stripe terminal to run and confirm a payment using the card, it will redirect you to the bookin success page and it will have empty details. It will also
 display an error saying this booking is still pending. You can navigate back
 
 When paying with card and filling all your details, make sure the optional stuff doesnt get rendered like the fullname.
-
-Add some validation for name on frontend
+Claude says it doesnt show the name but double check. Apparently the Postcode is shown, should you remove this.If you do Stripe's validation for payments from correct address wont work anymore.
 
 Maybe for TeamMembers.jsx, display all barbers, active or not active but make sure you indicate which ones arent active and which ones are. If you are going to 
 do this then edit the endpoint where you get the bookings for a particular barber because that endpoint only fetches active barbers.
 
+A stripe refund or a closure job auto-cancelling doesnt automatically update the chart but i think its better because you would have to poll constantly.
+Not worth the result for the performance
+
+Instead of showing Ids of certain entities in the URL, show a random string.
+
+For Services creation or update, inform the user to click on the box to visit his files on his pc or he can drag and drop to replace the image/create the image for the first time
+
+Fix action button for each bookin in dashboard when screen is really small
+
+Fix burger menu to be well aligned with the drawer. When screen is really small, fix the buttons for Services, Team and Individual barbers so filter and creation buttons
+still stay on the right. Make sure all of the pages' titles have identical font sizes, font boldness and identical spaces from the edges of the screen. Calendar is the one that is really different
+
+Check if the login actually works like traiditonal systems. Meaning like if you are logged in and you visit /login, does it redirect you to 
+dashboard or stay in login
+
+Check which functionalities can be done by the barber and admin and by the admin only and make sure they are correct. The editing a booking on the frontend 
+ensures an admin only can edit a booking but the backend allows a barber and an admin. Check about this and any other functionality for that matter. Check that
+frontend and backend authorization match. For all functionalities see if you want to implement per-owner check. Any authenticated Barber can edit any booking,
+including another barber's.
+
+
+When for example you login and the credentials are invalid and you retry immediately after, make sure the toast timer restarts. Also you should probably
+reset the password/email when credentials are wrong. You should make this for other examples aswell like for example when user types a name that is 1 character long.
+I dont think you need to do it for phone and email because they are validated inline and you cant submit until they are correct, but for examples where once you submit,
+an error occurs i think you should probably reset the inputs. 
+
+I think when creating a closure the admin cant close slots for other barbers, he can only do shop-wide closures. I think though im not sure. Either way should it be like this?
+
+After resetting a password and taken back to login a toast is shown saying to login with new password and i have 2 browsers open. Is that how you usually do it?
+
+Burger menu should stay fixed at the top when scrolling up and down in the sidebar

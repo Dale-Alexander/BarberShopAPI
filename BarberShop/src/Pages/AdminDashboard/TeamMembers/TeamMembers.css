@@ -27,6 +27,18 @@
     border-color:var(--green-500);
 }
 
+.form-input--invalid,
+.form-input--invalid:focus{
+    border-color:#e74c3c;
+}
+
+.form-error{
+    display:block;
+    margin-top:6px;
+    color:#e74c3c;
+    font-size:0.78rem;
+}
+
 .create-barber{
     display: inline-flex;
     align-items: center;
@@ -46,18 +58,25 @@
   }
 
   .team-header {
-    padding: 0 16px 16px;
+    /* Side padding + top spacing now come from the shared .admin-page wrapper. Keep only the bottom
+       gap; padding-left is re-added below <=768px to clear the fixed burger. */
+    padding: 0 0 16px;
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
-  
+
   @media (min-width: 768px) {
     .team-header {
-      padding: 0 24px 16px;
       flex-direction: row;
       align-items: center;
       justify-content: space-between;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .team-header {
+      padding-left: 50px; /* clear the fixed burger so it sits inline with the title */
     }
   }
   
@@ -72,13 +91,8 @@
     font-size: 0.875rem;
   }
   .team-content-area {
-    padding: 0 16px 24px;
-  }
-  
-  @media (min-width: 768px) {
-    .team-content-area {
-      padding: 0 24px 24px;
-    }
+    /* Side padding comes from the shared .admin-page wrapper now. */
+    padding: 0 0 24px;
   }
   
   .team-content-area > * + * {

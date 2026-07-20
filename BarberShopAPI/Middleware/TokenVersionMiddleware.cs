@@ -27,6 +27,15 @@ namespace BarberShopAPI.Middleware
             tells ASP.NET Core wait for this middleware to finish before moving
             to the next one*/
         {
+            // Logout must be reachable even with an already-invalid token (e.g. the user just
+            // reset their password, which bumps TokenVersion and makes their still-present cookie
+            // stale). Without this bypass the stale token would be 401'd here BEFORE Logout runs,
+            // so the cookie would never get cleared. Logout itself decides what to revoke.
+            if (context.Request.Path.StartsWithSegments("/api/auth/logout"))
+            {
+                await _next(context);
+                return;
+            }
             if (!context.User.Identity?.IsAuthenticated ?? true)
                 /* What the above if statement does: IT asks these things:
                  *If the request: Has no JWT, Has an invalid JWT, is calling

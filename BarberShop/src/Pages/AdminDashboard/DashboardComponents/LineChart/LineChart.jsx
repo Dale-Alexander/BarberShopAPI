@@ -62,7 +62,7 @@ const LineChart = ({ showRevenue, selectedYear, selectedMonth, setSelectedMonth,
                         label: function (ctx) {
                             //ctx is the context object representing the data point being hovered
                             if (showRevenue) {
-                                return ` $${ctx.parsed.y.toLocaleString()}`;
+                                return ` €${ctx.parsed.y.toLocaleString()}`;
                             }
                             else {
                                 return ` ${ctx.parsed.y} bookings`;
@@ -83,8 +83,11 @@ const LineChart = ({ showRevenue, selectedYear, selectedMonth, setSelectedMonth,
                 ticks:{
                     color:"hsl(215, 15%, 55%)",
                     font:{size:11},
+                    // precision:0 forces whole-number ticks - stops Chart.js drawing gridlines like
+                    // "1.5 bookings" when the counts are small. Revenue is whole euros too.
+                    precision: 0,
                     callback: function(val) {
-                        return showRevenue ? `$${(val / 1).toFixed(0)}` : val;
+                        return showRevenue ? `€${val.toLocaleString()}` : val;
                     }
                 },
                 border:{display:false}

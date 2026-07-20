@@ -8,8 +8,9 @@
     margin-bottom: 5px;
     font-size: 30px;
 }
-@media (max-width: 530px) {
-    /* target whatever wraps your page content */
+@media (max-width: 768px) {
+    /* clear the fixed burger so it sits inline with the title - the burger exists across the whole
+       <=768px range now (see Sidebar.jsx / .admin-burger), not just <=530px */
     .calendar-header-title-container {
         padding-left: 50px;
     }
@@ -398,4 +399,124 @@
     color: var(--muted-fg);
     font-size: 0.8rem;
     line-height: 1.5;
+}
+
+/* ── Create Closure modal ── */
+.closure-create-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 12px;
+    border-radius: 0.4rem;
+    background: hsl(220, 25%, 18%);
+    margin-bottom: 14px;
+}
+
+.closure-create-when {
+    color: hsl(210, 20%, 90%);
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.closure-create-type {
+    color: var(--muted-fg);
+    font-size: 0.78rem;
+}
+
+.closure-create-note {
+    color: var(--muted-fg);
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin-bottom: 16px;
+}
+
+.closure-create-label {
+    display: block;
+    color: hsl(210, 20%, 90%);
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.closure-create-optional {
+    color: var(--muted-fg);
+    font-weight: 400;
+    font-size: 0.75rem;
+}
+
+.closure-create-input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 0.5rem;
+    border: 1px solid hsl(220, 20%, 24%);
+    background: hsl(220, 25%, 11%);
+    color: hsl(210, 20%, 90%);
+    font-size: 0.9rem;
+    font-family: inherit;
+    transition: border-color 0.2s;
+}
+
+.closure-create-input::placeholder {
+    color: hsl(215, 15%, 45%);
+}
+
+.closure-create-input:focus {
+    outline: none;
+    border-color: var(--green-500);
+}
+
+/* Disabled state for the shared primary button - the Create button greys out until a reason is typed. */
+.btn-primary:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+/* Shown when the closures fetch fails. Amber, non-blocking banner above the grid: it explains why
+   closure creation is disabled and offers a Retry (wired to useFetch's reFetch). The calendar stays
+   viewable underneath. */
+.calendar-error-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin: 0 0 14px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    background: rgba(224, 160, 60, 0.12);
+    border: 1px solid rgba(224, 160, 60, 0.4);
+    color: var(--grey-100);
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.calendar-error-banner__text {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.calendar-error-banner__text svg {
+    color: #e0a03c;
+    flex-shrink: 0;
+}
+
+.calendar-error-banner__retry {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 0.9rem;
+    border: 1px solid currentColor;
+    border-radius: 0.5rem;
+    background: transparent;
+    color: inherit;
+    font-weight: 600;
+    font-size: 0.8rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s ease;
+}
+
+.calendar-error-banner__retry:hover {
+    background: rgba(127, 127, 127, 0.15);
 }

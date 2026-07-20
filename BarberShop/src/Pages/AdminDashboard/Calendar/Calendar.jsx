@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useContext } from "react";
+﻿import { useState, useEffect, useContext, useRef } from "react";
 import FullCalendar from "@fullcalendar/react";
 import { formatDate } from "@fullcalendar/core";
 import dayGridPlugin from "@fullcalendar/daygrid";
@@ -9,7 +9,7 @@ import "./Calendar.css";
 import useFetch from "../../../Hooks/useFetch.js";
 import { Box, List, ListItem, ListItemText, Typography } from "@mui/material";
 import { startOfDay, addDays } from "date-fns";
-import { Trash2, X, Menu, Mail, Phone } from "lucide-react";
+import { Trash2, X, Menu, Mail, Phone, AlertTriangle, RotateCw } from "lucide-react";
 import { AuthContext } from "../../../Context/AuthContext.jsx";
 import { ToastContext } from "../../../Context/ToastContext.jsx";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
@@ -20,7 +20,7 @@ const AdminCalendar = () => {
     const closuresUrl = user?.role === 'BARBER'
         ? `/api/dates/barber/${user?.id}/closures`
         : '/api/dates/admin/closures';
-    const { data, loading } = useFetch(closuresUrl, true);
+    const { data, loading, error, reFetch } = useFetch(closuresUrl, true);
     const [deleteSelectedEvent, setDeleteSelectedEvent] = useState(null);
     const [events, setEvents] = useState([]);
     const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -29,6 +29,22 @@ const AdminCalendar = () => {
      * cancelled and re-submit with confirmCancelBookings. submitting guards the confirm button. */
     const [conflictData, setConflictData] = useState(null);
     const [submitting, setSubmitting] = useState(false);
+    // Ref to the FullCalendar instance so clicking an event in the list can jump the grid to its date.
+    const calendarRef = useRef(null);
+    /* Holds the FullCalendar date-selection (the dragged range) while the "create closure" modal is open,
+     * plus the reason the admin types. Replaces the old window.prompt(). Null = modal closed. */
+    const [pendingSelection, setPendingSelection] = useState(null);
+    const [closureReason, setClosureReason] = useState("");
+
+    /* Clicking an event in the Events list navigates the calendar to the month/day that event falls in
+     * (gotoDate keeps the current view type and just moves the date). Guarded because the API isn't
+     * available until the calendar has mounted. Also closes the mobile drawer so the grid is visible. */
+    const goToEventOnCalendar = (event) => {
+        const api = calendarRef.current?.getApi();
+        if (!api || !event?.start) return;
+        api.gotoDate(event.start);
+        setSidebarOpen(false);
+    };
     useEffect(() => {
         if (!data) return;
         setEvents(data.map(closure => ({      
@@ -46,6 +62,13 @@ const AdminCalendar = () => {
         })));
         console.log(data);
     }, [data]);
+
+    /* A failed load leaves the calendar showing no closures - which looks identical to "there are none".
+       Creating a closure from that blind state risks duplicating/overlapping one the admin simply couldn't
+       see, so while `error` is set we disable closure creation (see `selectable` + handleDateClick below)
+       and show a persistent banner with Retry. The grid itself stays viewable/navigable. 401 is handled by
+       the axios interceptor. */
+    const loadFailed = !!error && error.response?.status !== 401;
 
     useEffect(() => {
         const handleResize = () => {
@@ -96,8 +119,8 @@ const AdminCalendar = () => {
       return sameDay ?
         formatDate(event.start, dateOptions)
         : sameMonth ?
-          `${formatDate(event.start, dayMonthOptions)} - ${endDate.getDate()} ${endDate.getFullYear()}`:// same month: 12 - 15 Feb
-          `${formatDate(event.start, dayMonthOptions)} - ${formatDate(endDate, dateOptions)}`;//different mnth: 27 feb - 3 Mar 2024
+          `${startDate.getDate()} - ${formatDate(endDate, dateOptions)}`:// same month: 12 - 15 Feb 2026
+          `${formatDate(event.start, dayMonthOptions)} - ${formatDate(endDate, dateOptions)}`;//different mnth: 27 Feb - 3 Mar 2026
     }
     else {
       const startTime = formatDate(event.start, timeOnlyOptions);
@@ -107,7 +130,7 @@ const AdminCalendar = () => {
         return `${formatDate(event.start, dateOptions)} ${startTime} - ${endTime}`;
       }
       else if (sameMonth) {
-        return `${formatDate(event.start, dayMonthOptions)} - ${endDate.getDate()} ${endDate.getFullYear()} ${startTime} - ${endTime}`;
+        return `${startDate.getDate()} - ${formatDate(endDate, dateOptions)} ${startTime} - ${endTime}`;
       }
       else {
         return `${formatDate(event.start, dayMonthOptions)} - ${formatDate(endDate, dateOptions)} ${startTime} - ${endTime}`;
@@ -117,25 +140,39 @@ const AdminCalendar = () => {
 
 
 
+  /* Selecting a range on the calendar no longer fires a native prompt(): we stash the selection and open
+     * the create-closure modal. The drag highlight is kept (selectMirror) so the admin can see exactly
+     * what they're about to close while they type the reason. */
   const handleDateClick = (selected) => {
-    const title = prompt("Please enter a new title for your event");
-    const calendarAPI = selected.view.calendar;/* gets a reference
-        to the fullCalendar API instance through the "selected" object. This gives
-        you access to calendar methods like addEvent, unselect etc */
-    calendarAPI.unselect();/* Clears the visual highlight/selection on the calendar
-        immediately after the user selects a date. Just cleans up the UI */
-      if (title) {
-          selected.title = title;
-          createDateClosure(selected);
+    // Don't let the admin create a closure while the existing ones haven't loaded (or failed to) - they'd
+    // be acting blind and could overlap a closure they can't see. `selectable` already blocks the drag in
+    // these states; this is the safety net.
+    if (loading || loadFailed) return;
+    setPendingSelection(selected);
+    setClosureReason("");
+  };
 
-      }
-    }
+  // Closes the create-closure modal and clears the leftover drag highlight on the grid.
+  const closeClosureModal = () => {
+    setPendingSelection(null);
+    setClosureReason("");
+    calendarRef.current?.getApi().unselect();
+  };
 
-    const buildClosurePayload = (selected) => {
+  const confirmCreateClosure = () => {
+    if (!pendingSelection) return;
+    // Reason is optional: fall back to "Closed" so an unlabeled closure is still identifiable in the list.
+    const reason = closureReason.trim() || "Closed";
+    createDateClosure(pendingSelection, reason);
+    // Fire-and-close: submitClosure owns the outcome (success toast, 409 conflict modal, or error toast).
+    closeClosureModal();
+  };
+
+    const buildClosurePayload = (selected, reason) => {
         const shopClosureData = {
             startDate: selected.allDay ? selected.startStr : selected.startStr.split('T')[0],
             isFullDay: selected.allDay,
-            reason: selected.title,
+            reason: reason,
         }
         if (!selected.allDay) {
             shopClosureData.startTime = selected.startStr.split("T")[1].substring(0, 8);
@@ -209,7 +246,7 @@ const AdminCalendar = () => {
         }
     }
 
-    const createDateClosure = (selected) => submitClosure(buildClosurePayload(selected));
+    const createDateClosure = (selected, reason) => submitClosure(buildClosurePayload(selected, reason));
 
     const confirmClosureWithCancellations = () => {
         if (!conflictData) return;
@@ -225,6 +262,8 @@ const AdminCalendar = () => {
         }
         catch (err) {
             console.log(err);
+            // Leave the modal open so the admin can retry; tell them it failed rather than silently no-op.
+            showToast("Couldn't delete event", err.response?.data?.message || "An unexpected error occurred. Please try again.");
         }
     }
 
@@ -238,6 +277,21 @@ const AdminCalendar = () => {
                 <h2 className="calendar-header-title">Calendar</h2>
                 <h5 className="calendar-header-subtitle">Interactive Calendar Page</h5>
             </div>
+
+            {/* Closures failed to load: creating one now would be blind, so creation is disabled (see
+                `selectable`) until a successful retry. The grid stays viewable in the meantime. */}
+            {loadFailed && (
+                <div className="calendar-error-banner">
+                    <span className="calendar-error-banner__text">
+                        <AlertTriangle size={16} />
+                        Couldn't load your closures. Creating new closures is disabled until this loads, so
+                        you don't add one that overlaps an existing closure you can't currently see.
+                    </span>
+                    <button type="button" className="calendar-error-banner__retry" onClick={reFetch}>
+                        <RotateCw size={14} /> Retry
+                    </button>
+                </div>
+            )}
 
             <Box display="flex" justifyContent="space-between" className="calendar-layout">
 
@@ -265,14 +319,22 @@ const AdminCalendar = () => {
                         Events
                     </Typography>
                     <List>
+                        {events?.length === 0 && (
+                            <Typography sx={{ color: "var(--grey-100)", opacity: 0.7, mt: 1 }}>
+                                No upcoming events
+                            </Typography>
+                        )}
                         {events?.map((event) => (
                             <ListItem
                                 key={event.id}
+                                onClick={() => goToEventOnCalendar(event)}
                                 sx={{
                                     backgroundColor: "#3788d8",
                                     color: "#fff",
                                     margin: "10px 0",
                                     borderRadius: "2px",
+                                    cursor: "pointer",
+                                    "&:hover": { backgroundColor: "#2c6cb0" },
                                 }}
                             >
                                 <ListItemText
@@ -289,6 +351,7 @@ const AdminCalendar = () => {
                 {/* ── CALENDAR ── */}
                 <Box flex="1 1 100%" ml="15px" className="calendar-main">
                     <FullCalendar
+                        ref={calendarRef}
                         height="75vh"
                         plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin, listPlugin]}
                         headerToolbar={{
@@ -298,7 +361,7 @@ const AdminCalendar = () => {
                         }}
                         initialView="dayGridMonth"
                         editable={true}
-                        selectable={true}
+                        selectable={!loading && !loadFailed}
                         selectMirror={true}
                         dayMaxEvents={true}
                         select={handleDateClick}
@@ -379,11 +442,14 @@ const AdminCalendar = () => {
                                     {events?.map((event) => (
                                         <ListItem
                                             key={event.id}
+                                            onClick={() => goToEventOnCalendar(event)}
                                             sx={{
                                                 backgroundColor: "#3788d8",
                                                 color: "#fff",
                                                 margin: "10px 0",
                                                 borderRadius: "2px",
+                                                cursor: "pointer",
+                                                "&:hover": { backgroundColor: "#2c6cb0" },
                                             }}
                                         >
                                             <ListItemText
@@ -476,6 +542,64 @@ const AdminCalendar = () => {
                                 {submitting
                                     ? "Cancelling…"
                                     : `Cancel ${conflictData.conflicts.length} booking(s) & close`}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Create Closure Modal (replaces the old window.prompt) ── */}
+            {pendingSelection && (
+                <div className="modal-overlay" onClick={closeClosureModal}>
+                    <div
+                        className="modal-content"
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ maxWidth: 460 }}
+                    >
+                        <div className="modal-header">
+                            <h2>Create closure</h2>
+                            <button className="modal-close" onClick={closeClosureModal}>
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            <div className="closure-create-summary">
+                                <span className="closure-create-when">{formatEventDate(pendingSelection)}</span>
+                                <span className="closure-create-type">
+                                    {pendingSelection.allDay ? "Full-day closure" : "Timed closure"}
+                                </span>
+                            </div>
+
+                            <p className="closure-create-note">
+                                {user?.role === "BARBER"
+                                    ? "This blocks your availability for the selected time — customers won't be able to book you."
+                                    : "This closes the whole shop for the selected time — no barber can be booked."}
+                            </p>
+
+                            <label className="closure-create-label" htmlFor="closure-reason">
+                                Reason <span className="closure-create-optional">(optional)</span>
+                            </label>
+                            <input
+                                id="closure-reason"
+                                className="closure-create-input"
+                                type="text"
+                                autoFocus
+                                maxLength={100}
+                                placeholder="e.g. Public holiday, sick leave — defaults to “Closed”"
+                                value={closureReason}
+                                onChange={(e) => setClosureReason(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter") confirmCreateClosure(); }}
+                            />
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn-secondary" onClick={closeClosureModal}>
+                                Cancel
+                            </button>
+                            <button
+                                className="btn-primary"
+                                onClick={confirmCreateClosure}
+                            >
+                                Create closure
                             </button>
                         </div>
                     </div>

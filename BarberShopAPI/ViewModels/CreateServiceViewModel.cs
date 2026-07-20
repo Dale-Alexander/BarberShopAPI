@@ -10,6 +10,7 @@ namespace BarberShopAPI.ViewModels
         [MaxLength(1000)]
         public string? ImageUrl { get; set; } // web Url
         [Required]
+        [MinLength(2, ErrorMessage = "Service name must be at least 2 characters")]
         [MaxLength(100)]
         public string Title { get; set; }
         [Required]

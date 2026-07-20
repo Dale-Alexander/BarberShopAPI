@@ -49,3 +49,8 @@ Different shop schedules per day as a setting and each barber can implement thei
 Is description in Services required/should you remove it/or nullable? 
 
 Make confirmed bookings' amount editable in case for example the customer decided to change services at the shop?
+
+Check the "if you had to start over what would you do" list in the A5 booklet in the very last page and see if you can implement some of them.
+
+When checking for conflicts with closures, should you inform the user/admin to pick another barber in case the closure happened due to a barber only?
+

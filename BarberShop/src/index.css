@@ -105,12 +105,49 @@ body{
     min-width:0;
     position:relative;
 }
+
+/* Shared wrapper around every admin page's <Outlet/> (see AdminLayout). Gives all pages the same
+   padding, max-width and centering the dashboard used to set on .home-page-content, so Dashboard,
+   Team, Services, Calendar and barber bookings all share identical spacing from the edges. */
+.admin-page{
+    padding:1rem 1.5rem 3rem;
+    max-width:120rem;
+    margin:0 auto;
+    width:100%;
+}
+@media(min-width:640px){
+    .admin-page{ padding:1.5rem 2rem 3rem; }
+}
+@media(min-width:1024px){
+    .admin-page{ padding:2rem 2rem 3rem; }
+}
 ::-webkit-scrollbar {
     width: 10px;
   }
   button{
     border:none;
   }
+
+/* Mobile (<=768px) sidebar burger. Positioned to sit on the same line as the page title (the top of
+   .home-page-content, which is padded 1rem then 1.5rem at >=640px) rather than pinned to the very top,
+   so it reads as inline with the title behind it. The 640px step mirrors AdminDashboard.css so the
+   burger tracks the title as the heading grows. Doubled selector beats MUI's .MuiIconButton-root. */
+.admin-burger.admin-burger {
+    position: fixed;
+    left: 20px;
+    top: 18px;
+    z-index: 1300;
+    color: var(--grey-100);
+    transition: left 0.2s ease;
+}
+.admin-burger.admin-burger:hover { color: var(--blue-600); }
+@media (min-width: 640px) {
+    .admin-burger.admin-burger { top: 28px; }
+}
+/* While the drawer is open the burger sits over the drawer, not the page. Shift it right so its icon
+   lines up with the menu-item column (the content Box paddingLeft:10% + .pro-inner-item left pad),
+   instead of the closed-state title line. Glides across as the drawer slides in (transition above). */
+.admin-burger--in-drawer.admin-burger--in-drawer { left: 44px; }
 .modal-overlay {
     position: fixed;
     inset: 0;
@@ -175,7 +212,7 @@ body{
     color: hsl(220, 25%, 10%);
     padding: 8px 20px;
     border-radius: 0.5rem;
-    font-size: 0.0875rem;
+    font-size: 0.875rem;
     font-weight: 600;
     transition: opacity 0.2s;
     display: inline-flex;

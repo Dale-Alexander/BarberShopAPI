@@ -12,6 +12,7 @@ namespace BarberShopAPI.ViewModels
         [Url]
         [MaxLength(1000)] // matches the Services.ImageUrl column (nvarchar(1000)).
         public string? ImageUrl { get; set; } // web Url
+        [MinLength(2, ErrorMessage = "Service name must be at least 2 characters")] // only checked when Title is provided (PATCH)
         [MaxLength(100)]
         public string? Title { get; set; }
         [MaxLength(255)]

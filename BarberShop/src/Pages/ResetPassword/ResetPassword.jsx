@@ -1,10 +1,12 @@
 import { useState } from "react";
 import "../ForgotPassword/ForgotPassword.css";
 import axios from "axios";
+import { PulseLoader } from "react-spinners";
 import { Lock, LockOpen } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ToastContext } from "../../Context/ToastContext";
 import { useContext } from "react";
+import { validatePassword } from "../../utils/validation";
 
 // Step 2 of the password reset flow, reached only via the link emailed by
 // RequestPasswordReset (authController.cs) - the token in the URL is what proves this
@@ -16,9 +18,19 @@ const ResetPassword = () => {
     const [confirmNewPassword, setConfirmNewPassword] = useState("");
     const navigate = useNavigate();
     const { showToast } = useContext(ToastContext);
+    const [submitting, setSubmitting] = useState(false);
+
+    // Live inline validation (max 40 mirrors ResetPasswordViewModel). Errors stay quiet on a pristine
+    // empty field and appear as the user types; the button unlocks only when both fields agree and pass.
+    const passwordError = newPassword ? validatePassword(newPassword, { max: 40 }) : null;
+    const confirmError = confirmNewPassword && confirmNewPassword !== newPassword ? "Passwords do not match" : null;
+    const canSubmit = !validatePassword(newPassword, { max: 40 })
+        && confirmNewPassword.length > 0 && newPassword === confirmNewPassword;
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!canSubmit || submitting) return; // safety net; the button is disabled until this holds
+        setSubmitting(true);
         try {
             await axios.post("/api/auth/reset-password", { token, newPassword, confirmNewPassword });
             // No cookie/session is set by this request on purpose (see ResetPassword in
@@ -33,6 +45,8 @@ const ResetPassword = () => {
             // to show directly.
             const message = err.response?.data?.message || "Something went wrong. Please try again";
             showToast("Failed to reset password", message);
+            // Only reset on failure - a success navigates to /login and unmounts this component.
+            setSubmitting(false);
         }
     }
 
@@ -69,20 +83,22 @@ const ResetPassword = () => {
                                     placeholder="Password"
                                     value={newPassword}
                                     onChange={(e) => setNewPassword(e.target.value)}
-                                    className="login-input"
+                                    className={`login-input${passwordError ? " login-input--invalid" : ""}`}
                                     required />
                             </div>
+                            {passwordError && <p className="login-field-error">{passwordError}</p>}
                             <div className="input-group">
                                 <LockOpen className="input-icon" />
                                 <input type="password"
                                     placeholder="Confirm Password"
                                     value={confirmNewPassword}
                                     onChange={(e) => setConfirmNewPassword(e.target.value)}
-                                    className="login-input"
+                                    className={`login-input${confirmError ? " login-input--invalid" : ""}`}
                                     required />
                             </div>
-                            <button type="submit" className="login-button">
-                                Confirm New Password
+                            {confirmError && <p className="login-field-error">{confirmError}</p>}
+                            <button type="submit" className="login-button" disabled={!canSubmit || submitting}>
+                                {submitting ? <PulseLoader size={8} color="#2b2e38" /> : "Confirm New Password"}
                             </button>
                         </form>
                     </div>

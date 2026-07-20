@@ -23,6 +23,8 @@ import {
 } from "date-fns";
 import { ChevronLeft, ChevronRight, SquarePen, UserRound, Scissors, ArrowRight, Calendar } from "lucide-react";
 import useFetch from "../../Hooks/useFetch";
+import LoadingSpinner from "../../Components/LoadingSpinner/LoadingSpinner";
+import ErrorState from "../../Components/ErrorState/ErrorState";
 import "./BarberDateAndTime.css";
 import { adminAxios } from "../../Hooks/AxiosInterceptor";
 import { AuthContext } from "../../Context/AuthContext.jsx";
@@ -97,9 +99,11 @@ const BarberDateAndTime = () => {
     /* what this does is it effectively converts
         bookingId to a boolean. If its not falsy("", false, 0, null, undefined), 
         isEditMode will be set to true*/
-    const { data: barberBookings, loading: barberBookingsloading } = useFetch(`/api/Barbers/barbers-with-bookings`, isEditMode);
+    const { data: barberBookings, loading: barberBookingsloading, error: barberBookingsError, reFetch: reFetchBarbers } = useFetch(`/api/Barbers/barbers-with-bookings`, false);
     //this will fetch dates where barbers are booked, when they are closed and when the whole shop is closed
-    const { data: editBooking, loading: editBookingloading } = useFetch(bookingId ? `/api/Bookings/admin/${bookingId}` : null, isEditMode);
+    //this endpoint is public, so no credentials are needed (isProtected = false)
+    const { data: editBooking, error: editBookingError } = useFetch(bookingId ? `/api/Bookings/admin/${bookingId}` : null, true);
+    //admin/{bookingId} is [Authorize(ADMIN,BARBER)], so it always needs credentials (isProtected = true)
     /* Admin-only: pull the default booking duration so the on-page duration control starts at the
      * shop's configured default (admin auth is required, so this uses adminAxios via isProtected). */
     const { data: shopSettings } = useFetch(isAdminMode ? `/api/Settings` : null, true);
@@ -136,6 +140,16 @@ const BarberDateAndTime = () => {
             setAdminDurationInput(String(shopSettings.defaultAdminBookingDurationMin));
         }
     }, [shopSettings]);
+
+    /* Edit mode couldn't load the booking being edited (e.g. it was cancelled, or the id is bad -> 404).
+       Without the booking there's nothing to prefill or save against, so tell the staff member and send
+       them back to the dashboard. 401 is left to the axios interceptor, which redirects to login. */
+    useEffect(() => {
+        if (isEditMode && editBookingError && editBookingError.response?.status !== 401) {
+            showToast("Couldn't load booking", editBookingError.response?.data?.message || "This booking may no longer exist.");
+            navigate("/admin", { replace: true });
+        }
+    }, [isEditMode, editBookingError]);
 
     /* The length of the booking being placed, used to grey slots by the real appointment length.
      * Edit: the existing booking's duration. Admin: the on-page control. Customer: the chosen
@@ -515,7 +529,24 @@ const BarberDateAndTime = () => {
                                             </span>
                                         </motion.button>
                                     ) */}
-                                {barbers.map((barber) => {
+                                {barberBookingsloading && barbers.length === 0 ? (
+                                    // Availability is still loading - hold the barber grid with a spinner
+                                    // rather than showing an empty "Choose Your Barber" strip on first paint.
+                                    <div style={{ gridColumn: "1 / -1" }}>
+                                        <LoadingSpinner message="Loading barbers" color="hsl(220, 20%, 14%)" inline />
+                                    </div>
+                                ) : barberBookingsError && barbers.length === 0 ? (
+                                    // The load failed and we have nothing to show - a customer facing an empty
+                                    // grid with no explanation can't book, so give them an error + Retry.
+                                    <div style={{ gridColumn: "1 / -1" }}>
+                                        <ErrorState
+                                            inline
+                                            title="Couldn't load barbers"
+                                            message="We couldn't load availability right now. Please try again."
+                                            onRetry={reFetchBarbers}
+                                        />
+                                    </div>
+                                ) : barbers.map((barber) => {
                                     /*const available = isBarberAvailable(barber, selectedDate, selectedTime);*/
                                     /* when wrapping in JSX curly brackets you need to return */
                                     return (

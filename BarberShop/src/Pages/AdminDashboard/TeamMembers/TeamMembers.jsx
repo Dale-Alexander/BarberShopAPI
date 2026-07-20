@@ -6,9 +6,12 @@ import useFetch from "../../../Hooks/useFetch";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
 import { ToastContext } from "../../../Context/ToastContext";
 import LoadingSpinner from "../../../Components/LoadingSpinner/LoadingSpinner";
+import ErrorState from "../../../Components/ErrorState/ErrorState";
+import { PulseLoader } from "react-spinners";
 import { resolveBarberImage } from "../../../utils/barberImage.js";
+import { validateName, validateNameInline, validateEmail, validatePassword } from "../../../utils/validation.js";
 const TeamMembers = () => {
-    const {data, loading} = useFetch("/api/barbers/admin", true);
+    const {data, loading, error, reFetch} = useFetch("/api/barbers/admin", true);
     const [barbers, setBarbers] = useState([]);
     const [showCreate, setShowCreate] = useState(false);
     const [newName, setNewName] = useState("");
@@ -19,6 +22,9 @@ const TeamMembers = () => {
     const [imageFile, setImageFile] = useState();/* the raw file which we send to the backend. We cant send the useState("image") because "image" is a URL 
 stored i the browser's memory which the backend cant access*/
     const [dragActive, setDragActive] = useState(false);
+    // Guards all three modal actions (create/edit/delete) - only one modal is open at a time - so a
+    // slow request can't be fired twice (a double-submitted create would make two barbers).
+    const [submitting, setSubmitting] = useState(false);
     const { showToast } = useContext(ToastContext);
     const createModalContainerRef = useRef(null);
 
@@ -42,6 +48,8 @@ stored i the browser's memory which the backend cant access*/
     }, [deleteBarberId])
 
     const handleDelete = async(id) =>{
+        if (submitting) return;
+        setSubmitting(true);
         try{
             await adminAxios.delete(`/api/barbers/delete/${id}`);
             setBarbers(barbers.filter(b => b.id !== id));
@@ -55,11 +63,16 @@ stored i the browser's memory which the backend cant access*/
                 showToast("An unexpected error occurred");
             }
         }
+        finally{
+            setSubmitting(false);
+        }
     }
     const handleCreate = async(e) => {
         e.preventDefault();
-        if(!newName.trim() || !email.trim() || !password.trim()){
-            showToast("Missing some fields");
+        // The submit button is disabled until these pass, so this is just a safety net.
+        const fieldError = validateName(newName) || validateEmail(email) || validatePassword(password);
+        if (fieldError) {
+            showToast(fieldError);
             return;
         }
 
@@ -67,6 +80,8 @@ stored i the browser's memory which the backend cant access*/
         showToast("Please provide an image");
         return;
     }
+    if (submitting) return;
+    setSubmitting(true);
     try{
         const formData = new FormData();
         formData.append("FullName", newName.trim());
@@ -97,6 +112,9 @@ stored i the browser's memory which the backend cant access*/
         else{
             showToast("Something went wrong. Please refresh or try inputting a different email");
         }
+    }
+    finally{
+        setSubmitting(false);
     }
     }
 
@@ -146,10 +164,13 @@ stored i the browser's memory which the backend cant access*/
 
     const handleEdit = async (e) => {
         e.preventDefault();
-        if (!editName.trim()) {
-            showToast("Name is required");
+        const nameError = validateName(editName);
+        if (nameError) {
+            showToast(nameError);
             return;
         }
+        if (submitting) return;
+        setSubmitting(true);
         try {
             const formData = new FormData();
             formData.append("FullName", editName.trim());
@@ -171,6 +192,9 @@ stored i the browser's memory which the backend cant access*/
         }
         catch (err) {
             showToast(err.response?.data?.message || "Something went wrong");
+        }
+        finally {
+            setSubmitting(false);
         }
     }
 
@@ -202,8 +226,30 @@ stored i the browser's memory which the backend cant access*/
             This lets you display the immage immediately in an <img> tag. The src attribute of <img> expects a URL, a plain object File(like the onse stored in imageFile) does not satisfy this,so the image wont display */
         }
     }
+    // Live inline validation (mirrors the backend). Names use the *inline* check, which flags the
+    // obvious problems (digits, over-long) but not the 2-char minimum - a too-short name shows only
+    // as a toast on submit, so it never disables the button either. Email/password are fully checked.
+    const createNameError = newName ? validateNameInline(newName) : null;
+    const createEmailError = email ? validateEmail(email) : null;
+    const createPasswordError = password ? validatePassword(password) : null;
+    const createValid = !validateNameInline(newName) && !validateEmail(email)
+        && !validatePassword(password) && !!(imageFile || newImage?.trim());
+    const editNameError = editName ? validateNameInline(editName) : null;
+
     if (loading) {
         return <LoadingSpinner message="Loading Team Data" color="#e0e0e0"/>
+    }
+
+    /* Failed load -> error with Retry, not the "No barbers yet" empty state below (which would wrongly
+       read as "you have no barbers"). */
+    if (error) {
+        return (
+            <ErrorState
+                title="Couldn't load team"
+                message="We couldn't load your barbers. Please try again."
+                onRetry={reFetch}
+            />
+        );
     }
     return (
         <>
@@ -294,29 +340,33 @@ stored i the browser's memory which the backend cant access*/
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Name *</label>
-                                <input className="form-input"
+                                <input className={`form-input${createNameError ? " form-input--invalid" : ""}`}
                                     placeholder="Enter barber's name"
                                     value={newName}
                                     onChange={(e) => setNewName(e.target.value)} />
+                                {createNameError && <span className="form-error">{createNameError}</span>}
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Email *</label>
-                                <input className="form-input"
+                                <input className={`form-input${createEmailError ? " form-input--invalid" : ""}`}
                                     placeholder="Enter barber's Email"
                                     value={email}
                                     onChange={(e) => setEmail(e.target.value)} />
+                                {createEmailError && <span className="form-error">{createEmailError}</span>}
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Password *</label>
-                                <input className="form-input"
+                                <input className={`form-input${createPasswordError ? " form-input--invalid" : ""}`}
+                                    type="password"
                                     placeholder="Enter barber's Password"
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)} />
+                                {createPasswordError && <span className="form-error">{createPasswordError}</span>}
                             </div>
                         </div>
                         <div className="modal-footer">
                             <button className="btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button>
-                            <button className="btn-primary" onClick={handleCreate}><Plus size={16} /></button>
+                            <button className="btn-primary" onClick={handleCreate} disabled={!createValid || submitting}>{submitting ? <PulseLoader size={8} color="hsl(220, 25%, 10%)" /> : <Plus size={16} />}</button>
                         </div>
                     </div>
                 </div>
@@ -380,15 +430,16 @@ stored i the browser's memory which the backend cant access*/
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Name *</label>
-                                <input className="form-input"
+                                <input className={`form-input${editNameError ? " form-input--invalid" : ""}`}
                                     placeholder="Enter barber's name"
                                     value={editName}
                                     onChange={(e) => setEditName(e.target.value)} />
+                                {editNameError && <span className="form-error">{editNameError}</span>}
                             </div>
                         </div>
                         <div className="modal-footer">
                             <button className="btn-secondary" onClick={closeEdit}>Cancel</button>
-                            <button className="btn-primary" onClick={handleEdit}><Check size={16} /></button>
+                            <button className="btn-primary" onClick={handleEdit} disabled={!!validateNameInline(editName) || submitting}>{submitting ? <PulseLoader size={8} color="hsl(220, 25%, 10%)" /> : <Check size={16} />}</button>
                         </div>
                     </div>
                 </div>
@@ -408,8 +459,8 @@ stored i the browser's memory which the backend cant access*/
                             </p>
                           </div>
                           <div className="modal-footer">
-                            <button className="btn-secondary" onClick={() => setDeleteBarberId(null)}>Cancel</button>
-                            <button className="btn-primary" style={{ background: "#e74c3c" }} onClick={() => handleDelete(deleteBarberId)}><Trash2 size = {16}/></button>
+                            <button className="btn-secondary" onClick={() => setDeleteBarberId(null)} disabled={submitting}>Cancel</button>
+                            <button className="btn-primary" style={{ background: "#e74c3c" }} onClick={() => handleDelete(deleteBarberId)} disabled={submitting}>{submitting ? <PulseLoader size={8} color="#fff" /> : <Trash2 size = {16}/>}</button>
                           </div>
                         </div>
                       </div>

@@ -47,7 +47,8 @@ const Checkout = () => {
         }, [data, bookingId, error]);
 
 
-    if (loading) return <LoadingSpinner message = "Loading Booking Details" color = "#ffffff"/>
+    // Match the checkout page's background (.checkout-page) so the loading state doesn't flash white first.
+    if (loading) return <LoadingSpinner message = "Loading Booking Details" color = "#000000" fullscreen background="#f9f8f6"/>
 
     return (
         <ElementsWrapper clientSecret = {clientSecret}>

@@ -9,6 +9,7 @@ import { BookingDetailsContext } from "../../../Context/BookingDetailsContext";
 import FancyPhoneInput from "../../../Components/FancyPhoneInput/FancyPhoneInput";
 import usePhone from "../../../Hooks/usePhone";
 import { resolveBarberImage, handleBarberImageError } from "../../../utils/barberImage.js";
+import { validateName, validateNameInline, validateEmail } from "../../../utils/validation.js";
 const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, setClientSecret, paymentMethod, setPaymentMethod, phone, setPhone, fullName, setFullName }) => {
     const stripeRef = useRef(null);
     const [loadingPayment, setLoadingPayment] = useState(false);
@@ -18,17 +19,11 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
     const { showToast } = useContext(ToastContext);
     const [hasClickedConfirm, setHasClickedConfirm] = useState(false);
     const navigate = useNavigate();
-    const [emailTouched, setEmailTouched] = useState(false);
     const { clearBooking } = useContext(BookingDetailsContext);
     const { handlePhoneChange, isValid: isPhoneValid } = usePhone(phone);
     useEffect(() => {
         console.log(clientSecret);
     }, [clientSecret]);
-
-    const isValidEmail = (value) => {
-        if (!value?.trim()) return false;
-        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
-    }
 
     /* The slot can vanish from under the customer while they sit on this page: the 15-min hold expires
        (cron) or an admin closes the slot. Both cancel the still-PENDING booking on the server, so the
@@ -51,10 +46,25 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
         //We only want the to redirect for the "gone" ones. For an invalid email, the user should stay on the page and fix it. 
     };
 
+    // Gates the Confirm button. Uses the inline name check (not the min-length one) so a too-short
+    // name doesn't lock the button - that case is caught by a toast when they actually submit.
     const isUserDetailsValid = () => {
-        if (!fullName.trim()) return false;
-        if (!isValidEmail(email)) return false;
+        if (validateNameInline(fullName)) return false;
+        if (validateEmail(email)) return false;
         if (!isPhoneValid()) return false;
+        return true;
+    };
+
+    // Live inline errors: shown once the field has a value (an empty field stays quiet until the
+    // customer starts filling it in). All three update as the customer types.
+    const nameError = fullName ? validateNameInline(fullName) : null;
+    const emailError = email ? validateEmail(email) : null;
+    const phoneError = phone && !isPhoneValid() ? "Please enter a valid phone number" : null;
+
+    // Full name check (adds the 2-char minimum) used only to toast on submit / when picking a card.
+    const guardName = () => {
+        const err = validateName(fullName);
+        if (err) { showToast("Invalid name", err); return false; }
         return true;
     };
 
@@ -71,12 +81,13 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
         and navigates back to checkout from /booking/success he gets to r etry. Without this, if he navigated back and clicked the Card option, that would attempt
         to create another paymentIntent/clientSecret which would fail because an idempotencyKey with that bookingId was already created*/
         try {
+            // No amount is sent: the server charges the booking's own service total (guards against a
+            // tampered amount). bookingDetails.price is display-only.
             const payload = {
                 fullName,
                 phone,
                 bookingId,
                 email,
-                amount: bookingDetails?.price * 100
             }
             const { data } = await axios.post(`/api/bookings/payment-intent`, payload);
             setClientSecret(data.clientSecret);
@@ -110,14 +121,15 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
 
     const handleCashConfirm = async () => {
         if (hasClickedConfirm || !isConfirmValid()) return;
+        if (!guardName()) return;
         setHasClickedConfirm(true);
         try {
+            // No amount is sent: the server records the booking's own service total (see above).
             const { data } = await axios.post(`/api/bookings/confirm-cash`, {
                 fullName,
                 bookingId,
                 phone,
                 email,
-                amount: bookingDetails?.price
             });
             console.log("Booking confirmed", data);
             clearBooking();
@@ -134,6 +146,7 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
 
     const handleCardConfirm = async () => {
         if (hasClickedConfirm || !isConfirmValid()) return;
+        if (!guardName()) return;
         if (!stripeRef.current?.isReady()){
             showToast("Stripe not ready", "Payment Provider isn't ready yet");
             return;
@@ -164,6 +177,7 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
             showToast("Incorrect Inputs", "Please input a valid name and phone number and email address");
             return;
         }
+        if (!guardName()) return;
         setPaymentMethod("CARD");
         setPaymentInProgress(false);
         setLoadingPayment(true);
@@ -185,24 +199,25 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
                     <div className="checkout-field-group">
                         <div className="checkout-field">
                             <label className="checkout-field__label">Name</label>
-                            <input value={fullName} onChange={(e) => setFullName(e.target.value)} className="checkout-field__input" type="text" name="customerName" placeholder="John Smith" />
+                            <input value={fullName} onChange={(e) => setFullName(e.target.value)} className={`checkout-field__input ${nameError ? "checkout-field__input--invalid" : ""}`} type="text" name="customerName" placeholder="John Smith" />
+                            {nameError && <p className="checkout-field__error">{nameError}</p>}
                         </div>
                         <div className="checkout-field">
                             <label className="checkout-field__label">Phone Number</label>
                             <FancyPhoneInput value={phone} onChange={(val, iso2) => handlePhoneChange(val, iso2, setPhone)}/>
+                            {phoneError && <p className="checkout-field__error">{phoneError}</p>}
                         </div>
                         <div className="checkout-field">
                             <label className="checkout-field__label">Email</label>
                             <input
                                 value={email}
-                                onBlur={() => setEmailTouched(true)}
                                 onChange={(e) => setEmail(e.target.value)}
-                                className={`checkout-field__input ${emailTouched && !isValidEmail(email) ? "checkout-field__input--invalid" : ""}`}
+                                className={`checkout-field__input ${emailError ? "checkout-field__input--invalid" : ""}`}
                                 type="email"
                                 name="customerEmail"
                                 placeholder="john@example.com" />
-                            {emailTouched && !isValidEmail(email) && (
-                                <p className = "checkout-field__error">Please enter a valid email address</p>
+                            {emailError && (
+                                <p className = "checkout-field__error">{emailError}</p>
                             ) }
                         </div>
                     </div>

@@ -4,10 +4,11 @@ import useFetch from "../../../Hooks/useFetch";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
 import { ToastContext } from "../../../Context/ToastContext";
 import LoadingSpinner from "../../../Components/LoadingSpinner/LoadingSpinner";
+import ErrorState from "../../../Components/ErrorState/ErrorState";
 import "./Settings.css";
 
 const Settings = () => {
-    const { data, loading } = useFetch("/api/Settings", true);
+    const { data, loading, error, reFetch } = useFetch("/api/Settings", true);
     const [bufferMin, setBufferMin] = useState(0);
     const [defaultAdminDuration, setDefaultAdminDuration] = useState(30);
     const [graceAfterClose, setGraceAfterClose] = useState(0);
@@ -58,8 +59,35 @@ const Settings = () => {
         }
     };
 
+    // Live inline validation mirroring UpdateShopSettingsViewModel's [Range] attributes. The fields are
+    // pre-filled, so an out-of-range value lights up immediately; Save is blocked until all three pass.
+    const rangeErr = (v, min, max, label) => {
+        if (v === "" || v == null) return `${label} is required`;
+        const n = Number(v);
+        if (!Number.isInteger(n) || n < min || n > max)
+            return `${label} must be a whole number between ${min} and ${max}`;
+        return null;
+    };
+    const bufferError = rangeErr(bufferMin, 0, 120, "Minutes between bookings");
+    const durationError = rangeErr(defaultAdminDuration, 5, 240, "Default admin booking duration");
+    const graceError = rangeErr(graceAfterClose, 0, 120, "Grace after close");
+    const canSave = !bufferError && !durationError && !graceError;
+
     if (loading) {
         return <LoadingSpinner message="Loading Settings" color="#e0e0e0" />;
+    }
+
+    /* Block the whole form on a failed load. The inputs are seeded from `data`, so falling through to
+       the form would show the defaults (0 / 30 / 0) - and a Save from there would overwrite the shop's
+       real settings. Better to show nothing editable until the load succeeds. */
+    if (error) {
+        return (
+            <ErrorState
+                title="Couldn't load settings"
+                message="We couldn't load your shop settings. Saving now could overwrite them, so please retry."
+                onRetry={reFetch}
+            />
+        );
     }
 
     return (
@@ -79,7 +107,7 @@ const Settings = () => {
                             time). Set to 0 to allow back-to-back bookings.
                         </p>
                         <input
-                            className="form-input"
+                            className={`form-input${bufferError ? " form-input--invalid" : ""}`}
                             type="number"
                             min={0}
                             max={120}
@@ -87,6 +115,7 @@ const Settings = () => {
                             value={bufferMin}
                             onChange={(e) => setBufferMin(e.target.value)}
                         />
+                        {bufferError && <span className="form-error">{bufferError}</span>}
                     </div>
                     <div className="form-group">
                         <label className="form-label">Default admin booking duration (minutes)</label>
@@ -95,7 +124,7 @@ const Settings = () => {
                             still change it per booking). Between 5 and 240 minutes.
                         </p>
                         <input
-                            className="form-input"
+                            className={`form-input${durationError ? " form-input--invalid" : ""}`}
                             type="number"
                             min={5}
                             max={240}
@@ -103,6 +132,7 @@ const Settings = () => {
                             value={defaultAdminDuration}
                             onChange={(e) => setDefaultAdminDuration(e.target.value)}
                         />
+                        {durationError && <span className="form-error">{durationError}</span>}
                     </div>
                     <div className="form-group">
                         <label className="form-label">Grace after close (minutes)</label>
@@ -111,7 +141,7 @@ const Settings = () => {
                             finish by closing; e.g. 15 lets the last client run up to 15 minutes over.
                         </p>
                         <input
-                            className="form-input"
+                            className={`form-input${graceError ? " form-input--invalid" : ""}`}
                             type="number"
                             min={0}
                             max={120}
@@ -119,9 +149,10 @@ const Settings = () => {
                             value={graceAfterClose}
                             onChange={(e) => setGraceAfterClose(e.target.value)}
                         />
+                        {graceError && <span className="form-error">{graceError}</span>}
                     </div>
                     <div className="settings-actions">
-                        <button className="btn-primary" onClick={handleSave} disabled={saving}>
+                        <button className="btn-primary" onClick={handleSave} disabled={saving || !canSave}>
                             <Save size={16} />
                             {saving ? " Saving..." : " Save"}
                         </button>

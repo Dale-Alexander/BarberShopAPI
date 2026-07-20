@@ -1,23 +1,10 @@
 
 
 
+/* Padding / max-width / centering now come from the shared .admin-page wrapper (index.css) so every
+   admin page shares the dashboard's spacing. This element just passes through. */
 .home-page-content{
-flex:1;
-padding:1rem 1.5rem 3rem;
-max-width:120rem;
-margin:0 auto;
 width:100%;
-}
-
-@media(min-width:640px){
-    .home-page-content{
-        padding:1.5rem 2rem 3rem;
-    }
-}
-@media(min-width:1024px){
-    .home-page-content{
-        padding:2rem 2rem 3rem;
-    }
 }
 
 .home-page-sections{
@@ -37,8 +24,10 @@ width:100%;
         justify-content:space-between;
     }
 }
-@media (max-width: 530px) {
-    /* target whatever wraps your page content */
+/* Make room for the fixed burger next to the title. The burger exists for the whole <=768px range
+   (Sidebar.jsx), so the clearance must too - it was previously only <=530px, which left the title
+   sitting under the burger in the 531-768px band. */
+@media (max-width: 768px) {
     .home-page-welcome{
         padding-left: 50px;
     }

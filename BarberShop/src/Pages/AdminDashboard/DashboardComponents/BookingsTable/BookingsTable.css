@@ -198,7 +198,7 @@
 .action-dropdown-menu {
     position: absolute;
     left: 50%;
-    transform: translateX(-50%);
+    transform:translateX(-50%);
     top: 100%;
     background: hsl(228, 20%, 18%);
     border: 1px solid var(--grey-600);
@@ -211,9 +211,9 @@
 
     .action-dropdown-menu::before {
         content: "";
+        left:50%;
         position: absolute;
         top: -2px;
-        left: 50%;
         width: 10px;
         height: 10px;
         background: hsl(228, 20%, 18%);

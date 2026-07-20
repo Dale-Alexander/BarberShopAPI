@@ -151,11 +151,18 @@ namespace BarberShopAPI.Controllers
                     Expires = DateTime.UtcNow.AddDays(1)
                 });
                 Console.WriteLine("Login successful");
+                // Barbers navigate to their own bookings page at /admin/team/{barberId},
+                // which is keyed by the Barber row's Id (NOT the User id). Surface it here
+                // so the frontend can build that route; null for admins, who don't need it.
+                int? barberId = user.Role.ToString() == "BARBER"
+                    ? await _context.Barbers.Where(b => b.UserId == user.Id).Select(b => (int?)b.Id).FirstOrDefaultAsync()
+                    : null;
                 return Ok(new
                 {
                     user.Id,
                     user.Email,
                     user.Role,
+                    BarberId = barberId,
                     message = "Login Successful"
                 });
             }
@@ -213,20 +220,36 @@ namespace BarberShopAPI.Controllers
                 /* Load the user from the database. Why this step?
                  * User may have need deleted, role may have changed,account
                  may have been disabeld*/
-                return Ok(new { user.Id, user.Email, user.Role });
+                // Same as login: barbers need their Barber row id to reach /admin/team/{barberId}.
+                int? barberId = user.Role.ToString() == "BARBER"
+                    ? await _context.Barbers.Where(b => b.UserId == user.Id).Select(b => (int?)b.Id).FirstOrDefaultAsync()
+                    : null;
+                return Ok(new { user.Id, user.Email, user.Role, BarberId = barberId });
 
             /* [Authorize] will automatically return 401 if the token is missing or invalid
              *This is done so by the challenge used in Program.cs
              */
         }
-        [Authorize]
+        // Deliberately NOT [Authorize], and TokenVersionMiddleware skips this route: logout must
+        // ALWAYS clear the cookie and succeed, even when the caller's token is already invalid
+        // (e.g. their password was just reset, which bumps TokenVersion and leaves the still-present
+        // cookie stale). If the JWT authentication middleware managed to populate a CURRENT, valid
+        // session we also bump TokenVersion to revoke that JWT server-side (in case a copy was
+        // stolen); if the token is stale or absent there's nothing to revoke - it's already dead -
+        // so we just clear the cookie.
         [HttpGet("logout")]
         public async Task<IActionResult> Logout()
         {
-            var userId = int.Parse(User.FindFirst("id")?.Value);
-            var user = await _context.Users.FindAsync(userId);
-            user.TokenVersion++;
-            await _context.SaveChangesAsync();
+            if (int.TryParse(User.FindFirst("id")?.Value, out var userId)
+                && int.TryParse(User.FindFirst("tokenVersion")?.Value, out var tokenVersion))
+            {
+                var user = await _context.Users.FindAsync(userId);
+                if (user != null && user.TokenVersion == tokenVersion)
+                {
+                    user.TokenVersion = (user.TokenVersion ?? 0) + 1;
+                    await _context.SaveChangesAsync();
+                }
+            }
             Response.Cookies.Delete("jwt");
             return Ok(new { message = "Logged out successfully" });
         }

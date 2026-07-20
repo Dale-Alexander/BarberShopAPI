@@ -143,7 +143,7 @@ const BarberBookings = () => {
                 {barberBookings?.bookings.length === 0 ? (
                     <p className="no-bookings">No bookings yet for this barber.</p>
                 ) : (
-                    <div className="bookings-table-wrap">
+                    <div className="bookings-table-wrap" style={{ position: "relative" }}>
                         <table className="bookings-table">
                             <thead >
                                 <tr className="barber-bookings-table-row">
@@ -177,6 +177,14 @@ const BarberBookings = () => {
                                 ))}
                             </tbody>
                         </table>
+                        {/* First load is handled by the full-page spinner above (loading && !barberBookings);
+                            reaching here with loading true is a page/filter refetch, so keep the current rows
+                            under a subtle busy overlay instead of blanking them - matches BookingsTable. */}
+                        {loading && (
+                            <div className="table-busy-overlay">
+                                <LoadingSpinner color="#e0e0e0" inline />
+                            </div>
+                        )}
                     </div>
                 )}
                 <Pagination page={page} totalPages={totalPages} onChange={setPage} />

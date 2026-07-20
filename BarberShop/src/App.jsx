@@ -4,6 +4,7 @@ import Home from "./Pages/Home/Home";
 import Login from "./Pages/Login/Login";
 import AdminDashboard from "./Pages/AdminDashboard/AdminDashboard";
 import RequireRole from "./Components/RequireRole/RequireRole";
+import RequireOwnBarber from "./Components/RequireOwnBarber/RequireOwnBarber";
 import RedirectIfLoggedIn from "./Components/RedirectIfLoggedIn/RedirectIfLoggedIn";
 import ForgotPassword from "./Pages/ForgotPassword/ForgotPassword.jsx";
 import ResetPassword from "./Pages/ResetPassword/ResetPassword.jsx";
@@ -34,7 +35,7 @@ function App() {
             <Routes>
                 <Route element={<UserLayout/> }>
                     <Route path="/" element={<Home />} />
-                    <Route element={<RequireRole Roles = {["ADMIN", "BARBER"]}/>}>
+                    <Route element={<RequireRole Roles = {["ADMIN", "BARBER"]} spinnerBg="var(--background)" spinnerColor="var(--primary-500)"/>}>
                         <Route path="/datetime/:bookingId" element={<BarberDateAndTime />} />
                     </Route>
                     <Route path="/checkout/:bookingId" element={<Checkout key={location.key} />} />
@@ -47,16 +48,20 @@ function App() {
                     <Route path="/forgot-password" element={<ForgotPassword />} />
                     <Route path="/reset-password" element={<ResetPassword />} />
                 </Route>
-                <Route element={<AdminLayout />}>
-                    <Route element={<RequireRole Roles={["ADMIN"]} />}>
+                <Route element={<RequireRole Roles={["ADMIN"]} />}>
+                    <Route element={<AdminLayout />}>
                         <Route path="/admin" element={<AdminDashboard />} />
                         <Route path="/admin/calendar" element={<AdminCalendar />} />
                         <Route path="/admin/team" element={<TeamMembers />} />
                         <Route path="/admin/services" element={<Services />} />
                         <Route path="/admin/settings" element={<Settings />} />
                     </Route>
-                    <Route element={<RequireRole Roles={["ADMIN", "BARBER"]} />}>
-                        <Route path="/admin/team/:id" element={<BarberBookings/> }/>
+                </Route>
+                <Route element={<RequireRole Roles={["ADMIN", "BARBER"]} />}>
+                    <Route element={<AdminLayout />}>
+                        <Route element={<RequireOwnBarber />}>
+                            <Route path="/admin/team/:id" element={<BarberBookings/> }/>
+                        </Route>
                     </Route>
                 </Route>
                 <Route path="*" element={<NotFound />} />

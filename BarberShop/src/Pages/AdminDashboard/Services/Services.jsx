@@ -6,6 +6,8 @@ import useFetch from "../../../Hooks/useFetch";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
 import { ToastContext } from "../../../Context/ToastContext";
 import LoadingSpinner from "../../../Components/LoadingSpinner/LoadingSpinner";
+import ErrorState from "../../../Components/ErrorState/ErrorState";
+import { PulseLoader } from "react-spinners";
 import { resolveServiceImage } from "../../../utils/serviceImage.js";
 
 /* Client-side bounds mirror the backend (CreateServiceViewModel / UpdateServiceViewModel data
@@ -19,8 +21,10 @@ const DURATION_MIN = 1;
 const DURATION_MAX = 300;
 
 const Services = () => {
-    const { data, loading } = useFetch("/api/services/admin", true);
+    const { data, loading, error, reFetch } = useFetch("/api/services/admin", true);
     const [services, setServices] = useState([]);
+    // Guards the create/edit/delete modal actions (only one is open at a time) against a double-submit.
+    const [submitting, setSubmitting] = useState(false);
     const { showToast } = useContext(ToastContext);
 
     // Create flow
@@ -32,6 +36,7 @@ const Services = () => {
     const [newImage, setNewImage] = useState("");   // preview URL (<img> can't take a raw File as src)
     const [imageFile, setImageFile] = useState(null); // raw file sent to the backend
     const [dragActive, setDragActive] = useState(false);
+    const [createAttempted, setCreateAttempted] = useState(false); // reveals required-field errors after a submit try
     const createModalContainerRef = useRef(null);
 
     // Edit flow — kept separate so its fields never collide with the create modal.
@@ -43,6 +48,7 @@ const Services = () => {
     const [editImage, setEditImage] = useState("");      // preview (existing photo or freshly picked file)
     const [editImageFile, setEditImageFile] = useState(null); // raw new file, only if the admin picks one
     const [editDragActive, setEditDragActive] = useState(false);
+    const [editAttempted, setEditAttempted] = useState(false);
     const editModalContainerRef = useRef(null);
 
     const [deleteServiceId, setDeleteServiceId] = useState(null);
@@ -56,20 +62,45 @@ const Services = () => {
         setServices(data ?? []);
     }
 
-    /* Shared field validation for create and edit. Returns an error string, or null when valid. */
-    const validateFields = ({ title, description, price, duration }) => {
-        if (title.trim().length < NAME_MIN) return `Service name must be at least ${NAME_MIN} characters`;
-        if (title.trim().length > NAME_MAX) return `Service name must be at most ${NAME_MAX} characters`;
-        if (!description.trim()) return "Description is required";
-        if (description.trim().length > DESC_MAX) return `Description must be at most ${DESC_MAX} characters`;
-        const priceNum = Number(price);
-        if (!Number.isFinite(priceNum) || priceNum < PRICE_MIN || priceNum > PRICE_MAX)
+    /* Per-field validators mirroring the backend (Create/UpdateServiceViewModel). Each returns an error
+     * string, or null when valid. Unlike person names, a service name can contain digits ("Kids Cut 12"),
+     * so only length is checked. Description's only rule is that it isn't empty (its 255-char cap is
+     * already enforced by the textarea's maxLength). */
+    const titleErr = (v) => {
+        const t = (v ?? "").trim();
+        if (!t) return "Service name is required";
+        if (t.length < NAME_MIN) return `Service name must be at least ${NAME_MIN} characters`;
+        if (t.length > NAME_MAX) return `Service name must be at most ${NAME_MAX} characters`;
+        return null;
+    };
+    const descErr = (v) => ((v ?? "").trim() ? null : "Description is required");
+    const priceErr = (v) => {
+        if (v === "" || v == null) return "Price is required";
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < PRICE_MIN || n > PRICE_MAX)
             return `Price must be between ${PRICE_MIN} and ${PRICE_MAX}`;
-        const durationNum = Number(duration);
-        if (!Number.isInteger(durationNum) || durationNum < DURATION_MIN || durationNum > DURATION_MAX)
+        return null;
+    };
+    const durationErr = (v) => {
+        if (v === "" || v == null) return "Duration is required";
+        const n = Number(v);
+        if (!Number.isInteger(n) || n < DURATION_MIN || n > DURATION_MAX)
             return `Duration must be a whole number between ${DURATION_MIN} and ${DURATION_MAX} minutes`;
         return null;
     };
+
+    /* Inline errors. A field's error shows once it has a value (live as they type) or once they've tried
+     * to submit (so empty required fields light up too). The image is required only on create. */
+    const cTitleError = (title || createAttempted) ? titleErr(title) : null;
+    const cDescError = (description || createAttempted) ? descErr(description) : null;
+    const cPriceError = (price || createAttempted) ? priceErr(price) : null;
+    const cDurationError = (duration || createAttempted) ? durationErr(duration) : null;
+    const cImageError = createAttempted && !imageFile ? "A service image is required" : null;
+
+    const eTitleError = (editTitle || editAttempted) ? titleErr(editTitle) : null;
+    const eDescError = (editDescription || editAttempted) ? descErr(editDescription) : null;
+    const ePriceError = (editPrice || editAttempted) ? priceErr(editPrice) : null;
+    const eDurationError = (editDuration || editAttempted) ? durationErr(editDuration) : null;
 
     const resetCreate = () => {
         setTitle("");
@@ -78,14 +109,17 @@ const Services = () => {
         setDuration("");
         setNewImage("");
         setImageFile(null);
+        setCreateAttempted(false);
         setShowCreate(false);
     };
 
     const handleCreate = async (e) => {
         e.preventDefault();
-        const error = validateFields({ title, description, price, duration });
-        if (error) { showToast(error); return; }
-        if (!imageFile) { showToast("A service image is required"); return; }
+        setCreateAttempted(true); // surface any empty-required errors inline
+        const error = titleErr(title) || descErr(description) || priceErr(price) || durationErr(duration);
+        if (error || !imageFile) return; // inline errors are now visible; don't round-trip
+        if (submitting) return;
+        setSubmitting(true);
         try {
             const formData = new FormData();
             formData.append("Title", title.trim());
@@ -102,6 +136,9 @@ const Services = () => {
         catch (err) {
             showToast(err.response?.data?.message || "Something went wrong. Please try again.");
         }
+        finally {
+            setSubmitting(false);
+        }
     };
 
     const openEdit = (service) => {
@@ -112,18 +149,23 @@ const Services = () => {
         setEditDuration(service.durationMin != null ? String(service.durationMin) : "");
         setEditImage(service.imageUrl ? resolveServiceImage(service.imageUrl) : "");
         setEditImageFile(null);
+        setEditAttempted(false);
     };
 
     const closeEdit = () => {
         setEditService(null);
         setEditImageFile(null);
         setEditImage("");
+        setEditAttempted(false);
     };
 
     const handleEdit = async (e) => {
         e.preventDefault();
-        const error = validateFields({ title: editTitle, description: editDescription, price: editPrice, duration: editDuration });
-        if (error) { showToast(error); return; }
+        setEditAttempted(true);
+        const error = titleErr(editTitle) || descErr(editDescription) || priceErr(editPrice) || durationErr(editDuration);
+        if (error) return; // inline errors now visible
+        if (submitting) return;
+        setSubmitting(true);
         try {
             const formData = new FormData();
             formData.append("Title", editTitle.trim());
@@ -142,9 +184,14 @@ const Services = () => {
         catch (err) {
             showToast(err.response?.data?.message || "Something went wrong. Please try again.");
         }
+        finally {
+            setSubmitting(false);
+        }
     };
 
     const handleDelete = async (id) => {
+        if (submitting) return;
+        setSubmitting(true);
         try {
             await adminAxios.delete(`/api/services/delete/${id}`);
             setServices((prev) => prev.filter((s) => s.id !== id));
@@ -153,6 +200,9 @@ const Services = () => {
         }
         catch (err) {
             showToast(err.response?.data?.message || "An unexpected error occurred");
+        }
+        finally {
+            setSubmitting(false);
         }
     };
 
@@ -180,6 +230,18 @@ const Services = () => {
 
     if (loading) {
         return <LoadingSpinner message="Loading Services" color="#e0e0e0" />;
+    }
+
+    /* On a failed load, show an error with Retry rather than the "No services yet" empty state below,
+       which would wrongly imply the catalogue is empty. */
+    if (error) {
+        return (
+            <ErrorState
+                title="Couldn't load services"
+                message="We couldn't load your service catalogue. Please try again."
+                onRetry={reFetch}
+            />
+        );
     }
 
     return (
@@ -248,35 +310,40 @@ const Services = () => {
                                     <input id="service-image-input" type="file" accept="image/*"
                                         style={{ display: "none" }} onChange={handleImageChange} />
                                 </div>
+                                {cImageError && <span className="form-error">{cImageError}</span>}
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Name *</label>
-                                <input className="form-input" placeholder="e.g. Haircut & Beard Trim"
+                                <input className={`form-input${cTitleError ? " form-input--invalid" : ""}`} placeholder="e.g. Haircut & Beard Trim"
                                     maxLength={NAME_MAX} value={title} onChange={(e) => setTitle(e.target.value)} />
+                                {cTitleError && <span className="form-error">{cTitleError}</span>}
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Description *</label>
-                                <textarea className="form-input" rows={3} placeholder="Describe what's included"
+                                <textarea className={`form-input${cDescError ? " form-input--invalid" : ""}`} rows={3} placeholder="Describe what's included"
                                     maxLength={DESC_MAX} value={description} onChange={(e) => setDescription(e.target.value)} />
+                                {cDescError && <span className="form-error">{cDescError}</span>}
                             </div>
                             <div className="services-form-row">
                                 <div className="form-group">
                                     <label className="form-label">Price (&euro;) *</label>
-                                    <input className="form-input" type="number" min={PRICE_MIN} max={PRICE_MAX} step="0.01"
+                                    <input className={`form-input${cPriceError ? " form-input--invalid" : ""}`} type="number" min={PRICE_MIN} max={PRICE_MAX} step="0.01"
                                         inputMode="decimal" placeholder="0.00" value={price}
                                         onChange={(e) => setPrice(e.target.value)} />
+                                    {cPriceError && <span className="form-error">{cPriceError}</span>}
                                 </div>
                                 <div className="form-group">
                                     <label className="form-label">Duration (min) *</label>
-                                    <input className="form-input" type="number" min={DURATION_MIN} max={DURATION_MAX} step="1"
+                                    <input className={`form-input${cDurationError ? " form-input--invalid" : ""}`} type="number" min={DURATION_MIN} max={DURATION_MAX} step="1"
                                         inputMode="numeric" placeholder="30" value={duration}
                                         onChange={(e) => setDuration(e.target.value)} />
+                                    {cDurationError && <span className="form-error">{cDurationError}</span>}
                                 </div>
                             </div>
                         </div>
                         <div className="modal-footer">
                             <button className="btn-secondary" onClick={resetCreate}>Cancel</button>
-                            <button className="btn-primary" onClick={handleCreate}><Plus size={16} /></button>
+                            <button className="btn-primary" onClick={handleCreate} disabled={submitting}>{submitting ? <PulseLoader size={8} color="hsl(220, 25%, 10%)" /> : <Plus size={16} />}</button>
                         </div>
                     </div>
                 </div>
@@ -315,30 +382,34 @@ const Services = () => {
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Name *</label>
-                                <input className="form-input" maxLength={NAME_MAX}
+                                <input className={`form-input${eTitleError ? " form-input--invalid" : ""}`} maxLength={NAME_MAX}
                                     value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
+                                {eTitleError && <span className="form-error">{eTitleError}</span>}
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Description *</label>
-                                <textarea className="form-input" rows={3} maxLength={DESC_MAX}
+                                <textarea className={`form-input${eDescError ? " form-input--invalid" : ""}`} rows={3} maxLength={DESC_MAX}
                                     value={editDescription} onChange={(e) => setEditDescription(e.target.value)} />
+                                {eDescError && <span className="form-error">{eDescError}</span>}
                             </div>
                             <div className="services-form-row">
                                 <div className="form-group">
                                     <label className="form-label">Price (&euro;) *</label>
-                                    <input className="form-input" type="number" min={PRICE_MIN} max={PRICE_MAX} step="0.01"
+                                    <input className={`form-input${ePriceError ? " form-input--invalid" : ""}`} type="number" min={PRICE_MIN} max={PRICE_MAX} step="0.01"
                                         inputMode="decimal" value={editPrice} onChange={(e) => setEditPrice(e.target.value)} />
+                                    {ePriceError && <span className="form-error">{ePriceError}</span>}
                                 </div>
                                 <div className="form-group">
                                     <label className="form-label">Duration (min) *</label>
-                                    <input className="form-input" type="number" min={DURATION_MIN} max={DURATION_MAX} step="1"
+                                    <input className={`form-input${eDurationError ? " form-input--invalid" : ""}`} type="number" min={DURATION_MIN} max={DURATION_MAX} step="1"
                                         inputMode="numeric" value={editDuration} onChange={(e) => setEditDuration(e.target.value)} />
+                                    {eDurationError && <span className="form-error">{eDurationError}</span>}
                                 </div>
                             </div>
                         </div>
                         <div className="modal-footer">
                             <button className="btn-secondary" onClick={closeEdit}>Cancel</button>
-                            <button className="btn-primary" onClick={handleEdit}><Check size={16} /></button>
+                            <button className="btn-primary" onClick={handleEdit} disabled={submitting}>{submitting ? <PulseLoader size={8} color="hsl(220, 25%, 10%)" /> : <Check size={16} />}</button>
                         </div>
                     </div>
                 </div>
@@ -358,9 +429,9 @@ const Services = () => {
                             </p>
                         </div>
                         <div className="modal-footer">
-                            <button className="btn-secondary" onClick={() => setDeleteServiceId(null)}>Cancel</button>
-                            <button className="btn-primary" style={{ background: "#e74c3c" }}
-                                onClick={() => handleDelete(deleteServiceId)}><Trash2 size={16} /></button>
+                            <button className="btn-secondary" onClick={() => setDeleteServiceId(null)} disabled={submitting}>Cancel</button>
+                            <button className="btn-primary" style={{ background: "#e74c3c" }} disabled={submitting}
+                                onClick={() => handleDelete(deleteServiceId)}>{submitting ? <PulseLoader size={8} color="#fff" /> : <Trash2 size={16} />}</button>
                         </div>
                     </div>
                 </div>

@@ -1,6 +1,7 @@
 ﻿
 .barber-bookings-header {
-    padding: 0 16px 16px;
+    /* Side padding + top spacing now come from the shared .admin-page wrapper. */
+    padding: 0 0 16px;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -8,10 +9,15 @@
 
 @media (min-width: 768px) {
     .barber-bookings-header {
-        padding: 0 24px 16px;
         flex-direction: row;
         align-items: center;
         justify-content: space-between;
+    }
+}
+
+@media (max-width: 768px) {
+    .barber-bookings-header {
+        padding-left: 50px; /* clear the fixed burger so it sits inline with the title */
     }
 }
 
@@ -51,13 +57,8 @@
     }
 
 .barber-bookings-content-area {
-    padding: 0 16px 24px;
-}
-
-@media (min-width: 768px) {
-    .barbebr-bookings-content-area {
-        padding: 0 24px 24px;
-    }
+    /* Side padding comes from the shared .admin-page wrapper now. */
+    padding: 0 0 24px;
 }
 
 .barber-bookings-content-area > * + * {
