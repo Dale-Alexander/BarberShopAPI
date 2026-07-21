@@ -1,39 +1,4 @@
-﻿
-.barber-bookings-header {
-    /* Side padding + top spacing now come from the shared .admin-page wrapper. */
-    padding: 0 0 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-@media (min-width: 768px) {
-    .barber-bookings-header {
-        flex-direction: row;
-        align-items: center;
-        justify-content: space-between;
-    }
-}
-
-@media (max-width: 768px) {
-    .barber-bookings-header {
-        padding-left: 50px; /* clear the fixed burger so it sits inline with the title */
-    }
-}
-
-
-.barber-bookings-title {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: var(--grey-100);
-}
-
-.barber-bookings-subtitle {
-    color: var(--green-500);
-    font-size: 0.875rem;
-}
-
-.back-to-team {
+﻿.back-to-team {
     display: inline-flex;
     align-items: center;
     gap: 8px;

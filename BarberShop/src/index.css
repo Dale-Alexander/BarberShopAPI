@@ -96,7 +96,10 @@ body{
     min-height: 100vh;
     user-select:none;
     display:flex;
-    overflow-x:hidden;
+    /* clip (not hidden): still suppresses horizontal overflow, but unlike `hidden` it does NOT
+       become a scroll container - which is what let the sticky sidebar below anchor to the viewport
+       instead of scrolling away with the page. */
+    overflow-x:clip;
     background-color: var(--primary-500);
 }
 
@@ -121,6 +124,43 @@ body{
 @media(min-width:1024px){
     .admin-page{ padding:2rem 2rem 3rem; }
 }
+
+/* ── Shared page header ──────────────────────────────────────────────────────────────────────
+   Every admin page (Dashboard, Team, Services, Settings, Calendar, Barber bookings) uses this so
+   the title + subtitle typography and spacing are identical everywhere. Any right-side control
+   (Add button, Filter/Back) is the second child and sits opposite the title. */
+.page-header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    flex-wrap:wrap;
+    gap:12px;
+    margin:0 0 1.5rem 0;
+}
+@media (max-width:768px){
+    .page-header{ padding-left:50px; } /* clear the fixed sidebar burger */
+}
+.page-header-text{ min-width:0; } /* let the title shrink/wrap instead of pushing the button off */
+.page-title{
+    font-size:1.875rem;
+    font-weight:700;
+    line-height:1.2;
+    color:var(--grey-100);
+    margin:0 0 0.5rem 0;
+}
+@media (min-width:640px){
+    .page-title{ font-size:2.25rem; }
+}
+.page-subtitle{
+    font-size:1rem;
+    font-weight:400;
+    line-height:1.4;
+    color:var(--green-500);
+    margin:0;
+}
+/* Team + Services: keep the Add button pinned to the right even on small screens (don't wrap it). */
+.page-header--inline{ flex-wrap:nowrap; }
+
 ::-webkit-scrollbar {
     width: 10px;
   }
@@ -148,6 +188,32 @@ body{
    lines up with the menu-item column (the content Box paddingLeft:10% + .pro-inner-item left pad),
    instead of the closed-state title line. Glides across as the drawer slides in (transition above). */
 .admin-burger--in-drawer.admin-burger--in-drawer { left: 44px; }
+
+/* Admin sidebar layout. react-pro-sidebar scrolls the WHOLE .pro-sidebar-layout by default, which
+   let the header (brand + collapse burger) scroll out of view. Instead: pin the sidebar as a
+   full-height sticky column and let only the nav list (.pro-sidebar-content) scroll, so the header
+   burger and the logout footer stay fixed at top/bottom. Scoped to the inline desktop sidebar
+   (direct child of .admin-app) - the mobile drawer renders its own copy in a MUI portal. */
+.admin-app > .admin-sidebar-box {
+    position: sticky;
+    top: 0;
+    align-self: flex-start; /* don't stretch to page height - stay one viewport tall */
+    height: 100vh;
+}
+.pro-sidebar-layout { overflow-y: hidden !important; }
+.pro-sidebar-content { overflow-y: auto; }
+.pro-sidebar-header, .pro-sidebar-footer { flex-shrink: 0; }
+
+/* Header row: collapse burger aligned to the same left icon column as the nav links, brand beside it. */
+.admin-sidebar-header {
+    display: flex;
+    align-items: center;
+    min-height: 64px;
+    padding-left: 44px; /* lands the burger icon in the nav-link icon column */
+}
+.admin-sidebar-header--collapsed { justify-content: center; padding-left: 0; }
+.admin-sidebar-toggle.admin-sidebar-toggle { color: var(--grey-100); }
+.admin-sidebar-toggle.admin-sidebar-toggle:hover { color: var(--blue-600); background: transparent; }
 .modal-overlay {
     position: fixed;
     inset: 0;

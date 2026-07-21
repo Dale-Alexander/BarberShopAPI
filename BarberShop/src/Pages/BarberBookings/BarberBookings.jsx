@@ -95,10 +95,10 @@ const BarberBookings = () => {
 
     return (
         <>
-            <div className="barber-bookings-header">
-                <div>
-                    <h1 className="barber-bookings-title">BOOKINGS</h1>
-                    <p className="barber-bookings-subtitle">Viewing bookings for {barberBookings?.barberName} {barberBookings?.barberSurname}</p>
+            <div className="page-header">
+                <div className="page-header-text">
+                    <h1 className="page-title">Bookings</h1>
+                    <p className="page-subtitle">Viewing bookings for {barberBookings?.barberName} {barberBookings?.barberSurname}</p>
                 </div>
                 <div className="barber-bookings-top-right">
                     <section aria-label="Filter">

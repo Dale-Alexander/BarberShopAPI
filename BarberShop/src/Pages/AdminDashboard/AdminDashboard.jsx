@@ -151,13 +151,13 @@ const AdminDashboard = () => {
     return (
 
         <div className="home-page-content">
-            <div className="home-page-sections">
-                <div className="home-page-welcome">
-                    <div className="home-page-welcome-text">
-                        <h1> Dashboard</h1>
-                        <p>Welcome to your dashboard</p>
-                    </div>
+            <div className="page-header">
+                <div className="page-header-text">
+                    <h1 className="page-title">Dashboard</h1>
+                    <p className="page-subtitle">Welcome to your dashboard</p>
                 </div>
+            </div>
+            <div className="home-page-sections">
                 <div className="home-page-stats-grid">
                     <StatCard title={"Revenue"} value={`€${thisMonthRevenue.toLocaleString()}`} increase={`${revenueIncreaseOrDecrease}${revenuePercentage}%`} trend={revenueIncreaseOrDecrease} icon={<EuroIcon />} progress={revenuePercentage} />
                     <StatCard title={"Bookings"} value={thisMonthBookings} increase={`${bookingIncreaseOrDecrease}${bookingPercentage}%`} trend={bookingIncreaseOrDecrease} icon={<BookmarkIcon />} progress={bookingPercentage} />

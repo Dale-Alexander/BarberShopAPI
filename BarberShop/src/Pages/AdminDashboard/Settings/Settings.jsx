@@ -92,10 +92,10 @@ const Settings = () => {
 
     return (
         <>
-            <div className="team-header">
-                <div>
-                    <h2 className="team-title">SETTINGS</h2>
-                    <p className="team-subtitle">Booking rules for the shop</p>
+            <div className="page-header">
+                <div className="page-header-text">
+                    <h1 className="page-title">Settings</h1>
+                    <p className="page-subtitle">Booking rules for the shop</p>
                 </div>
             </div>
             <div className="settings-content-area">

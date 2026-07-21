@@ -1,28 +1,4 @@
-﻿.calendar-header-title-container {
-    margin-bottom: 30px;
-}
-
-.calendar-header-title {
-    color: var(--grey-100);
-    font-weight: bold;
-    margin-bottom: 5px;
-    font-size: 30px;
-}
-@media (max-width: 768px) {
-    /* clear the fixed burger so it sits inline with the title - the burger exists across the whole
-       <=768px range now (see Sidebar.jsx / .admin-burger), not just <=530px */
-    .calendar-header-title-container {
-        padding-left: 50px;
-    }
-}
-
-
-.calendar-header-subtitle {
-    color: var(--green-500);
-    font-size: 17px;
-}
-
-.fc-daygrid-day,
+﻿.fc-daygrid-day,
 .fc-timegrid-slot {
     cursor: pointer;
 }

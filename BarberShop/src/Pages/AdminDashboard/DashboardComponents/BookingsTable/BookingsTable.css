@@ -195,33 +195,18 @@
         background: hsl(228, 17%, 30%);
     }
 
+/* Positioned inline via JS (fixed, viewport-relative) so it escapes the table's overflow wrapper
+   and never gets clipped - see toggleActionMenu in BookingsTable.jsx. */
 .action-dropdown-menu {
-    position: absolute;
-    left: 50%;
-    transform:translateX(-50%);
-    top: 100%;
+    position: fixed;
     background: hsl(228, 20%, 18%);
     border: 1px solid var(--grey-600);
     border-radius: 0.375rem;
-    min-width: 130px;
-    z-index: 100;
+    min-width: 140px;
+    z-index: 1000;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    margin-top: 8px;
+    overflow: hidden;
 }
-
-    .action-dropdown-menu::before {
-        content: "";
-        left:50%;
-        position: absolute;
-        top: -2px;
-        width: 10px;
-        height: 10px;
-        background: hsl(228, 20%, 18%);
-        border-left: 1px solid var(--grey-600);
-        border-top: 1px solid var(--grey-600);
-        transform: rotate(45deg) translateX(-50%);
-        z-index: -1;
-    }
 
 .action-dropdown-item {
     display: flex;

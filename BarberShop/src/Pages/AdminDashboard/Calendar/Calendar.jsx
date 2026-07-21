@@ -271,11 +271,13 @@ const AdminCalendar = () => {
 
     // 3. Replace your entire return with this:
     return (
-        <Box id="calendar-page" m="20px">
+        <Box id="calendar-page">
             {/* Header */}
-            <div className="calendar-header-title-container">
-                <h2 className="calendar-header-title">Calendar</h2>
-                <h5 className="calendar-header-subtitle">Interactive Calendar Page</h5>
+            <div className="page-header">
+                <div className="page-header-text">
+                    <h1 className="page-title">Calendar</h1>
+                    <p className="page-subtitle">Interactive Calendar Page</p>
+                </div>
             </div>
 
             {/* Closures failed to load: creating one now would be blind, so creation is disabled (see

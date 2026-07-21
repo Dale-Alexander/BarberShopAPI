@@ -18,6 +18,9 @@ const getMaltaNow = () =>
 
 const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filters, needsReviewCount = 0, refreshNeedsReviewCount, refreshSummary, page = 1, totalPages = 1, onPageChange, loading = false }) => {
     const [openMenuId, setOpenMenuId] = useState(null);
+    /* The action menu is positioned fixed (viewport-relative) so it escapes the table's
+     * overflow-x:auto wrapper, which otherwise clips it on narrow screens / for the last row. */
+    const [menuStyle, setMenuStyle] = useState(null);
     const [searchInput, setSearchInput] = useState("");
     const [filterModalOpen, setFilterModalOpen] = useState(false);
     const [cancelTarget, setCancelTarget] = useState(null);
@@ -40,14 +43,42 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
      * the admin click through to an error. Malta-vs-Malta comparison, same as isWithinRefundCutoff. */
     const isPast = (booking) => new Date(booking.startDateTime) < getMaltaNow();
     useEffect(() => {
-        const handleClickOutside = () => {
-            setOpenMenuId(null);
-        }
-        if (openMenuId != null) {
-            document.addEventListener("click", handleClickOutside);
-        }
-        return () => document.removeEventListener("click", handleClickOutside);
+        if (openMenuId == null) return;
+        const close = () => setOpenMenuId(null);
+        document.addEventListener("click", close);
+        /* The menu is viewport-fixed, so a scroll/resize would leave it floating away from its
+         * button - close it instead of letting it detach. Capture phase catches inner scrollers too. */
+        window.addEventListener("scroll", close, true);
+        window.addEventListener("resize", close);
+        return () => {
+            document.removeEventListener("click", close);
+            window.removeEventListener("scroll", close, true);
+            window.removeEventListener("resize", close);
+        };
     }, [openMenuId])
+
+    /* Toggle the row action menu, pinning it to the viewport just under (or above) the button.
+     * Right-aligned to the button and clamped to an 8px gutter so it never spills off-screen. */
+    const MENU_WIDTH = 150;
+    const toggleActionMenu = (e, bookingId) => {
+        e.stopPropagation();
+        if (openMenuId === bookingId) {
+            setOpenMenuId(null);
+            return;
+        }
+        const rect = e.currentTarget.getBoundingClientRect();
+        const spaceBelow = window.innerHeight - rect.bottom;
+        const openUp = spaceBelow < 200 && rect.top > spaceBelow;
+        const left = Math.max(8, Math.min(rect.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8));
+        setMenuStyle({
+            position: "fixed",
+            left: `${left}px`,
+            ...(openUp
+                ? { bottom: `${window.innerHeight - rect.top + 6}px` }
+                : { top: `${rect.bottom + 6}px` }),
+        });
+        setOpenMenuId(bookingId);
+    };
 
     const onCancel = async (bookingId, forceRefund = false) => {
         try {
@@ -242,14 +273,11 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                                 <td className="table-data" data-label="Actions">
                                     <div className="action-menu-container">
                                         <button className="three-dots-btn"
-                                            onClick={(e) => {
-                                                setOpenMenuId(openMenuId === b.id ? null : b.id);
-                                                e.stopPropagation();
-                                            }}
+                                            onClick={(e) => toggleActionMenu(e, b.id)}
                                         >⋮
                                         </button>
                                             {openMenuId === b.id && (
-                                                <div className="action-dropdown-menu">
+                                                <div className="action-dropdown-menu" style={menuStyle}>
                                                     <button className="action-dropdown-item edit-item" disabled={isPast(b)} title={isPast(b) ? "This booking has already passed" : undefined} onClick={() => {
                                                     navigate(`/datetime/${b.id}`); setOpenMenuId(null);
                                                     }}><SquarePen size={14}/> Edit</button>

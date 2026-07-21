@@ -246,10 +246,10 @@ const Services = () => {
 
     return (
         <>
-            <div className="team-header">
-                <div>
-                    <h2 className="team-title">MANAGE SERVICES</h2>
-                    <p className="team-subtitle">Create, edit and remove the services you offer</p>
+            <div className="page-header page-header--inline">
+                <div className="page-header-text">
+                    <h1 className="page-title">Manage Services</h1>
+                    <p className="page-subtitle">Create, edit and remove the services you offer</p>
                 </div>
                 <button className="create-barber" onClick={() => setShowCreate(true)}>
                     <Plus size={16} />

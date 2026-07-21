@@ -1,7 +1,7 @@
-/* The shared page chrome (team-header/title/subtitle, create-barber button, team-content-area,
-   team-empty-state), the form primitives (form-group/label/input, image-dropzone family) and the
-   modal/btn classes are defined in TeamMembers.css and index.css, both always bundled. Only the
-   classes unique to the services page live here. */
+/* The shared page header (page-header/page-title/page-subtitle) lives in index.css. The create-barber
+   button, team-content-area, team-empty-state, the form primitives (form-group/label/input,
+   image-dropzone family) and the modal/btn classes are defined in TeamMembers.css and index.css, both
+   always bundled. Only the classes unique to the services page live here. */
 
 .services-grid {
     display: grid;

@@ -3,7 +3,7 @@ import { useLocation } from "react-router-dom";
 import { AuthContext } from "../../../../Context/AuthContext.jsx";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
-import { ProSidebar, Menu, MenuItem } from "react-pro-sidebar";
+import { ProSidebar, Menu, MenuItem, SidebarHeader, SidebarContent as ProSidebarContent, SidebarFooter } from "react-pro-sidebar";
 import { Box, Drawer, IconButton, Typography, useMediaQuery } from "@mui/material";
 import { Link } from "react-router-dom";
 import "react-pro-sidebar/dist/css/styles.css";
@@ -46,6 +46,7 @@ const Item = ({ title, to, icon, selected, setSelected, handleLogout = null }) =
 
 const SidebarContent = ({ collapsed, showCollapseToggle = false, isCollapsed, setIsCollapsed, selected, setSelected, handleLogout = null }) => (
     <Box
+        className="admin-sidebar-box"
         sx={{
             "& .pro-sidebar-inner": {
                 background: `var(--primary-400) !important`,
@@ -65,43 +66,39 @@ const SidebarContent = ({ collapsed, showCollapseToggle = false, isCollapsed, se
         }}
     >
         <ProSidebar collapsed={collapsed}>
-            <Menu iconShape="square">
-                {/* LOGO AND MENU ICON */}
-                <MenuItem
+            {/* Pinned header: the collapse burger + brand. Living in SidebarHeader (not inside the
+                scrolling Menu) is what keeps it fixed at the top while the nav list scrolls under it.
+                The burger sits in the same left icon column as the nav links so it reads as inline
+                with them. In the mobile drawer (showCollapseToggle=false) the floating .admin-burger
+                owns open/close, so the header shows only the brand, indented past that fixed burger. */}
+            <SidebarHeader>
+                <Box
+                    className={`admin-sidebar-header${collapsed ? " admin-sidebar-header--collapsed" : ""}`}
                     onClick={showCollapseToggle ? () => setIsCollapsed(!isCollapsed) : undefined}
-                    // The burger only belongs to the desktop sidebar (it collapses the rail). In the mobile
-                    // drawer (showCollapseToggle=false) the floating burger owns open/close, so this header
-                    // shows none of its own - that's what removes the "two burgers" case. When the desktop
-                    // rail is collapsed, this icon IS the only way to expand it again.
-                    icon={showCollapseToggle && collapsed ? <MenuOutlinedIcon /> : undefined}
-                    style={{
-                        // In the drawer, drop this header onto the fixed burger's line (~18-28px from top,
-                        // see .admin-burger) so the burger reads as level with the drawer content.
-                        margin: showCollapseToggle ? "10px 0 20px 0" : "20px 0 20px 0",
-                        color: "var(--grey-100)",
-                    }}
+                    sx={{ cursor: showCollapseToggle ? "pointer" : "default" }}
                 >
-                    {!collapsed && (
-                        <Box
-                            display="flex"
-                            justifyContent="space-between"
-                            alignItems="center"
-                            // In the drawer, indent the title past the fixed burger so they don't overlap.
-                            ml={showCollapseToggle ? "15px" : "52px"}
+                    {showCollapseToggle && (
+                        <IconButton
+                            className="admin-sidebar-toggle"
+                            onClick={(e) => { e.stopPropagation(); setIsCollapsed(!isCollapsed); }}
                         >
-                            <Typography variant="h3" color="var(--grey-100)">
-                                ADMINIS
-                            </Typography>
-                            {showCollapseToggle && (
-                                <IconButton onClick={() => setIsCollapsed(!isCollapsed)}>
-                                    <MenuOutlinedIcon />
-                                </IconButton>
-                            )}
-                        </Box>
+                            <MenuOutlinedIcon />
+                        </IconButton>
                     )}
-                </MenuItem>
-                <Box display="flex" flexDirection="column" height="calc(100vh - 120px)" justifyContent="space-between">
+                    {!collapsed && (
+                        <Typography
+                            variant="h4"
+                            color="var(--grey-100)"
+                            sx={{ ml: showCollapseToggle ? 0 : "52px", whiteSpace: "nowrap" }}
+                        >
+                            ADMINIS
+                        </Typography>
+                    )}
+                </Box>
+            </SidebarHeader>
 
+            <ProSidebarContent>
+                <Menu iconShape="square">
                     <Box paddingLeft={collapsed ? undefined : "10%"}>
                         {!collapsed && (
                             <Box mb="25px">
@@ -200,6 +197,12 @@ const SidebarContent = ({ collapsed, showCollapseToggle = false, isCollapsed, se
                             setSelected={setSelected}
                         />
                     </Box>
+                </Menu>
+            </ProSidebarContent>
+
+            {/* Pinned footer: logout always sits at the bottom of the rail, out of the scroll. */}
+            <SidebarFooter>
+                <Menu iconShape="square">
                     <Box sx={{
                         "& .pro-inner-item:hover": { color: "var(--red-600) !important" }
                     }} paddingLeft={collapsed ? undefined : "10%"}>
@@ -212,8 +215,8 @@ const SidebarContent = ({ collapsed, showCollapseToggle = false, isCollapsed, se
                             handleLogout={handleLogout}
                         />
                     </Box>
-                </Box>
-            </Menu>
+                </Menu>
+            </SidebarFooter>
         </ProSidebar>
     </Box>
 );

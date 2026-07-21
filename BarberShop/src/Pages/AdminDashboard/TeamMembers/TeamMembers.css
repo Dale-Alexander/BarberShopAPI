@@ -51,45 +51,13 @@
     font-weight: 600;
     transition: opacity 0.2s;
     width: fit-content;
+    flex-shrink: 0; /* stay full-size on the right of .page-header--inline, don't squash on small screens */
     cursor:pointer;
 }
 .create-barber:hover {
     opacity: 0.9;
   }
 
-  .team-header {
-    /* Side padding + top spacing now come from the shared .admin-page wrapper. Keep only the bottom
-       gap; padding-left is re-added below <=768px to clear the fixed burger. */
-    padding: 0 0 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  @media (min-width: 768px) {
-    .team-header {
-      flex-direction: row;
-      align-items: center;
-      justify-content: space-between;
-    }
-  }
-
-  @media (max-width: 768px) {
-    .team-header {
-      padding-left: 50px; /* clear the fixed burger so it sits inline with the title */
-    }
-  }
-  
-  .team-title {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: hsl(210, 20%, 90%);
-  }
-  
-  .team-subtitle {
-    color: var(--green-500);
-    font-size: 0.875rem;
-  }
   .team-content-area {
     /* Side padding comes from the shared .admin-page wrapper now. */
     padding: 0 0 24px;

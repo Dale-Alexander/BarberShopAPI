@@ -253,10 +253,10 @@ stored i the browser's memory which the backend cant access*/
     }
     return (
         <>
-            <div className="team-header">
-                <div>
-                    <h2 className="team-title">MANAGE TEAM</h2>
-                    <p className="team-subtitle">Welcome to your team members</p>
+            <div className="page-header page-header--inline">
+                <div className="page-header-text">
+                    <h1 className="page-title">Manage Team</h1>
+                    <p className="page-subtitle">Welcome to your team members</p>
                 </div>
                 <button className="create-barber" onClick={() => setShowCreate(true)}>
                     <Plus size={16} />
