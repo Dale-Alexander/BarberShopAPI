@@ -19,6 +19,9 @@ const TeamMembers = () => {
     const [password, setPassword] = useState("");
     const [deleteBarberId, setDeleteBarberId] = useState(null);
     const [email, setEmail] = useState("");
+    // Server-side "email already in use" (409). Shown inline under the Email field rather than as a
+    // toast, since it's a fix-this-field problem and the admin should keep what they typed.
+    const [emailConflict, setEmailConflict] = useState(null);
     const [newImage, setNewImage] = useState("");/* needed because <img> cannot use a raw image file as src. URL.createObjectURL converts the file into something the image can display */
     const [imageFile, setImageFile] = useState();/* the raw file which we send to the backend. We cant send the useState("image") because "image" is a URL 
 stored i the browser's memory which the backend cant access*/
@@ -72,10 +75,6 @@ stored i the browser's memory which the backend cant access*/
             return;
         }
 
-    if (!imageFile && !newImage?.trim()) {
-        showToast("Image required", "Please provide an image.");
-        return;
-    }
     if (submitting) return;
     setSubmitting(true);
     try{
@@ -102,7 +101,11 @@ stored i the browser's memory which the backend cant access*/
         setShowCreate(false);
     }
     catch(err){
-        showToast("Couldn't add barber", getErrorMessage(err, "Something went wrong. Please refresh or try a different email."));
+        if (err.response?.status === 409) {
+            setEmailConflict(getErrorMessage(err));
+        } else {
+            showToast("Couldn't add barber", getErrorMessage(err, "Something went wrong. Please refresh or try a different email."));
+        }
     }
     finally{
         setSubmitting(false);
@@ -223,8 +226,10 @@ stored i the browser's memory which the backend cant access*/
     const createNameError = newName ? validateNameInline(newName) : null;
     const createEmailError = email ? validateEmail(email) : null;
     const createPasswordError = password ? validatePassword(password) : null;
+    // Photo is optional (Barber.ImageUrl is nullable server-side; barbers with no photo fall back to the
+    // placeholder), so it isn't part of createValid - a barber can be created without one.
     const createValid = !validateNameInline(newName) && !validateEmail(email)
-        && !validatePassword(password) && !!(imageFile || newImage?.trim());
+        && !validatePassword(password);
     const editNameError = editName ? validateNameInline(editName) : null;
 
     if (loading) {
@@ -249,7 +254,7 @@ stored i the browser's memory which the backend cant access*/
                     <h1 className="page-title">Manage Team</h1>
                     <p className="page-subtitle">Welcome to your team members</p>
                 </div>
-                <button className="create-barber" onClick={() => setShowCreate(true)}>
+                <button className="create-barber" onClick={() => { setShowCreate(true); setEmailConflict(null); }}>
                     <Plus size={16} />
                     ADD BARBER
                 </button>
@@ -264,7 +269,7 @@ stored i the browser's memory which the backend cant access*/
                                 <Users size={48} />
                                 <h3>No barbers yet</h3>
                                 <p>Get started by adding your first team member</p>
-                                <button className="create-barber" onClick={() => setShowCreate(true)}>
+                                <button className="create-barber" onClick={() => { setShowCreate(true); setEmailConflict(null); }}>
                                     <Plus size={16} />
                                     ADD BARBER
                                 </button>
@@ -339,11 +344,11 @@ stored i the browser's memory which the backend cant access*/
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Email *</label>
-                                <input className={`form-input${createEmailError ? " form-input--invalid" : ""}`}
+                                <input className={`form-input${(createEmailError || emailConflict) ? " form-input--invalid" : ""}`}
                                     placeholder="Enter barber's Email"
                                     value={email}
-                                    onChange={(e) => setEmail(e.target.value)} />
-                                {createEmailError && <span className="form-error">{createEmailError}</span>}
+                                    onChange={(e) => { setEmail(e.target.value); setEmailConflict(null); }} />
+                                {(createEmailError || emailConflict) && <span className="form-error">{createEmailError || emailConflict}</span>}
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Password *</label>

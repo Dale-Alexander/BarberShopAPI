@@ -165,20 +165,22 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
         }
     }
 
-    const confirmMarkPaid = () => {
-        if (!markPaidTarget) return;
-        /* Amount is optional here (admin may not remember). If given, mirror the backend bounds so a bad
-         * value is caught before the round-trip; blank means "collected, amount unknown". */
+    /* Amount is optional here (admin may not remember); blank means "collected, amount unknown". When
+     * given, it must mirror the backend bounds. The error is shown inline under the field (and disables
+     * the button), so a bad value never reaches confirmMarkPaid. */
+    const markPaidAmountError = (() => {
         const trimmed = markPaidAmount.trim();
-        let amount = null;
-        if (trimmed !== "") {
-            const parsed = Number(trimmed);
-            if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 400) {
-                showToast("Invalid amount", "Enter an amount greater than 0 and at most 400, or leave it blank.");
-                return;
-            }
-            amount = parsed;
-        }
+        if (trimmed === "") return null;
+        const parsed = Number(trimmed);
+        if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 400)
+            return "Enter an amount greater than 0 and at most 400, or leave it blank.";
+        return null;
+    })();
+
+    const confirmMarkPaid = () => {
+        if (!markPaidTarget || markPaidAmountError) return;
+        const trimmed = markPaidAmount.trim();
+        const amount = trimmed === "" ? null : Number(trimmed);
         onMarkPaid(markPaidTarget.id, amount);
         setMarkPaidTarget(null);
     }
@@ -393,15 +395,16 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                                 max="400"
                                 step="0.01"
                                 inputMode="decimal"
-                                className="mark-paid-amount-input"
+                                className={`mark-paid-amount-input${markPaidAmountError ? " form-input--invalid" : ""}`}
                                 placeholder="Optional"
                                 value={markPaidAmount}
                                 onChange={(e) => setMarkPaidAmount(e.target.value)}
                             />
+                            {markPaidAmountError && <span className="form-error">{markPaidAmountError}</span>}
                         </label>
                         <div className="cancel-confirm-actions">
                             <button className="cancel-confirm-keep" onClick={() => setMarkPaidTarget(null)}>Cancel</button>
-                            <button className="review-confirm-go" onClick={confirmMarkPaid}>Mark as paid</button>
+                            <button className="review-confirm-go" onClick={confirmMarkPaid} disabled={!!markPaidAmountError}>Mark as paid</button>
                         </div>
                     </div>
                 </div>

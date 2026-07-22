@@ -1,33 +1,29 @@
-import { useState, useContext } from "react";
-import { ToastContext } from "../../../Context/ToastContext.jsx";
+import { useState } from "react";
 import "./UserFormModal.css";
 import usePhone from "../../../Hooks/usePhone.js";
 import FancyPhoneInput from "../../../Components/FancyPhoneInput/FancyPhoneInput.jsx";
 import { validateName, validateNameInline } from "../../../utils/validation.js";
 const UserFormModal = ({ onConfirm, onCancel }) => {
-    const { showToast } = useContext(ToastContext);
     const [name, setName] = useState("");
     const [phone, setPhone] = useState("");
+    // Flipped on the first confirm attempt so the full errors (name 2-char minimum, missing phone)
+    // show inline per field instead of as a toast.
+    const [attempted, setAttempted] = useState(false);
     const { handlePhoneChange, isValid: isPhoneValid } = usePhone(phone);
 
-    // Name is optional here, so it's only validated once something's typed. The inline error covers the
-    // obvious problems (digits, over-long); a too-short name is left to the toast on confirm. Phone is
-    // required and shows its error live once the field has a value.
-    const nameError = name ? validateNameInline(name) : null;
-    const phoneError = phone && !isPhoneValid() ? "Please enter a valid phone number" : null;
-    const canConfirm = isPhoneValid() && !nameError;
+    // Name is optional, so an empty box never errors. The inline check covers the obvious problems
+    // (digits, over-long) as they type; the 2-char minimum is revealed inline only after an attempt,
+    // so it doesn't nag mid-typing. The button gate stays on the inline check (min-length never locks it).
+    const nameInlineError = name ? validateNameInline(name) : null;
+    const nameError = attempted && name ? validateName(name) : nameInlineError;
+    const phoneError = (phone || attempted) ? (isPhoneValid() ? null : "Please enter a valid phone number") : null;
+    const canConfirm = isPhoneValid() && !nameInlineError;
 
     const handleConfirm = () => {
-        if (!isPhoneValid()) {
-            showToast("Booking Confirmation Failed", "Please enter a valid phone number");
-            return;
-        }
+        setAttempted(true);
+        if (!isPhoneValid()) return;
         // Only when a name was actually entered - blank stays valid (it's optional).
-        const fullNameError = name ? validateName(name) : null;
-        if (fullNameError) {
-            showToast("Booking Confirmation Failed", fullNameError);
-            return;
-        }
+        if (name && validateName(name)) return;
         // Duration is chosen on the date/time page now, so the modal only collects name + phone.
         onConfirm({ name, phone });
     }

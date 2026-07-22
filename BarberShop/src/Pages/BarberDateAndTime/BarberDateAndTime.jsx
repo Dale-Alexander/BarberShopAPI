@@ -167,6 +167,18 @@ const BarberDateAndTime = () => {
      * so the admin can also type any value (e.g. a one-off 75) - these are just quick picks. */
     const DURATION_PRESETS = [15, 30, 45, 60, 90];
 
+    /* Admin-only inline validation for the on-page duration box (mirrors the backend 5-240 bound).
+     * Shown under the field and used to gate the "Next" button, so a bad value is caught here rather
+     * than as a toast after the details modal. Number("") is 0, so an empty box is flagged too. */
+    const adminDurationError = isAdminMode
+        ? (() => {
+            const n = Number(adminDurationInput);
+            return (!Number.isInteger(n) || n < 5 || n > 240)
+                ? "Enter a whole number of minutes between 5 and 240."
+                : null;
+        })()
+        : null;
+
     const capitalize = (str) => str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
 
     const today = startOfDay(getMaltaNow());
@@ -395,12 +407,10 @@ const BarberDateAndTime = () => {
     }
     const handleAdminCreate = async ({ name, phone }) => {
         if (loading || bookingLoading) return;
-        // Validate the raw text (not the last-valid number) so an empty/blank box is still blocked.
+        // Duration is validated inline on the page (adminDurationError) and gates the "Next" button, so
+        // this is just a safety net. Send the raw text's value (not the last-valid number).
         const durationToSend = Number(adminDurationInput);
-        if (!Number.isInteger(durationToSend) || durationToSend < 5 || durationToSend > 240) {
-            showToast("Invalid duration", "Please enter a booking duration between 5 and 240 minutes.");
-            return;
-        }
+        if (adminDurationError) return;
         const newDateFormatted = format(selectedDate, "yyyy-MM-dd");
         console.log(`${newDateFormatted}T${selectedTime}:00`);
 
@@ -603,6 +613,11 @@ const BarberDateAndTime = () => {
                                                 <option key={min} value={min} />
                                             ))}
                                         </datalist>
+                                        {adminDurationError && (
+                                            <span style={{ display: "block", marginTop: 6, color: "#e53e3e", fontSize: 12 }}>
+                                                {adminDurationError}
+                                            </span>
+                                        )}
                                     </div>
                                 )}
 
@@ -713,7 +728,7 @@ const BarberDateAndTime = () => {
                             </motion.section>                     
                     </motion.div>
                     <div className="barber-datetime-proceed">
-                        <button onClick={isEditMode ? handleEdit : isAdminMode ? () => setShowModal(true) : handleUserCreate} disabled={loading || bookingLoading || !(selectedBarberId && selectedDate && selectedTime)} className={`next-details-btn ${!(selectedBarberId && selectedDate && selectedTime) ? "disabled" : ""}`}>
+                        <button onClick={isEditMode ? handleEdit : isAdminMode ? () => setShowModal(true) : handleUserCreate} disabled={loading || bookingLoading || !(selectedBarberId && selectedDate && selectedTime) || (isAdminMode && !!adminDurationError)} className={`next-details-btn ${!(selectedBarberId && selectedDate && selectedTime) || (isAdminMode && !!adminDurationError) ? "disabled" : ""}`}>
                             {isEditMode ? (
                                 <>
                                     Confirm Edit <SquarePen size={18} />

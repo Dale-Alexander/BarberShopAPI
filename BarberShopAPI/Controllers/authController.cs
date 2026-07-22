@@ -33,27 +33,19 @@ namespace BarberShopAPI.Controllers
         {
             try
             {
-                Console.WriteLine(request.Email);
-                Console.WriteLine(request.Password);
                 var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == request.Email);
-                if (user == null)
+                // A single generic 401 for every pre-token failure - unknown email, a non-staff role
+                // (only admins/barbers have passwords), or a missing/incorrect password. Returning the
+                // same status + message for all of them means the response never reveals whether an
+                // email has an account or which check failed, which would let an attacker enumerate
+                // valid emails. The short-circuit order also guarantees Verify only runs with a
+                // non-empty submitted password.
+                if (user == null
+                    || (user.Role.ToString() != "ADMIN" && user.Role.ToString() != "BARBER")
+                    || string.IsNullOrEmpty(request.Password)
+                    || !BCrypt.Net.BCrypt.Verify(request.Password, user.Password))
                 {
-                    return NotFound(new { message = "User not found" });
-                }
-                if (user.Role.ToString() != "ADMIN" && user.Role.ToString() != "BARBER")
-                {
-                    return StatusCode(403, new { message = "Only admin and barbers can log in" });
-                }
-                if (string.IsNullOrEmpty(request.Password))
-                {
-                    return StatusCode(500, new { message = "Password not set" });
-                }
-                //only barbers and admins have passwords. This might be redundant 
-                //since we are checking for barbers and admins previously
-                bool IsPasswordCorrect = BCrypt.Net.BCrypt.Verify(request.Password, user.Password);
-                if (!IsPasswordCorrect)
-                {
-                    return Unauthorized(new { message = "Invalid Credentials. Please try again" });
+                    return Unauthorized(new { message = "Invalid email or password" });
                 }
                 //Create JWT
 

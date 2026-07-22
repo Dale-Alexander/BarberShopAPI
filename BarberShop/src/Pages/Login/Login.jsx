@@ -41,11 +41,19 @@ const Login = () => {
             }
         }
         catch (err) {
-            // getErrorMessage adds offline detection ("couldn't reach the server") on top of the
-            // backend's message, which matters on a login page where a dead connection is common.
-            showToast("Login Failed", getErrorMessage(err, "Something went wrong. Please try again."));
+            // Clear the password on any failed attempt (keep the email so a typo is easy to fix).
+            setPassword("");
+            const status = err.response?.status;
+            // The backend now returns a single generic 401 for every credential failure, so the UI
+            // matches it: no hint about whether the email exists or which field was wrong. Anything
+            // else (network down, server error) still gets getErrorMessage's specific/offline text.
+            if (status === 401 || status === 404) {
+                showToast("Login Failed", "Invalid email or password.");
+            } else {
+                showToast("Login Failed", getErrorMessage(err));
+            }
             console.log(err);
-            // Only reset on failure - a success navigates away and unmounts this component.
+            // Only reset submitting on failure - a success navigates away and unmounts this component.
             setSubmitting(false);
         }
     }

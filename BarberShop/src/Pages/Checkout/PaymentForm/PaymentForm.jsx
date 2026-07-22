@@ -19,6 +19,9 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
     const [paymentInProgress, setPaymentInProgress] = useState(false);
     const { showToast } = useContext(ToastContext);
     const [hasClickedConfirm, setHasClickedConfirm] = useState(false);
+    // Flipped on the first submit / card-pick attempt. Before that the inline errors stay gentle
+    // (quiet on empty fields, name minimum deferred); after, the full rules show inline per field.
+    const [attempted, setAttempted] = useState(false);
     const navigate = useNavigate();
     const { clearBooking } = useContext(BookingDetailsContext);
     const { handlePhoneChange, isValid: isPhoneValid } = usePhone(phone);
@@ -56,18 +59,17 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
         return true;
     };
 
-    // Live inline errors: shown once the field has a value (an empty field stays quiet until the
-    // customer starts filling it in). All three update as the customer types.
-    const nameError = fullName ? validateNameInline(fullName) : null;
-    const emailError = email ? validateEmail(email) : null;
-    const phoneError = phone && !isPhoneValid() ? "Please enter a valid phone number" : null;
+    // Inline errors. Before the first attempt they stay quiet on empty fields and flag only obvious
+    // problems as the customer types (name uses the inline check, no 2-char minimum). Once they've
+    // attempted, the full rules apply inline - incl. the name minimum and empty-required fields - so the
+    // guidance lives next to each field instead of in a toast.
+    const nameError = attempted ? validateName(fullName) : (fullName ? validateNameInline(fullName) : null);
+    const emailError = (email || attempted) ? validateEmail(email) : null;
+    const phoneError = (phone || attempted) ? (isPhoneValid() ? null : "Please enter a valid phone number") : null;
 
-    // Full name check (adds the 2-char minimum) used only to toast on submit / when picking a card.
-    const guardName = () => {
-        const err = validateName(fullName);
-        if (err) { showToast("Invalid name", err); return false; }
-        return true;
-    };
+    // All three contact fields fully valid (name incl. the 2-char minimum). Gates submit after the
+    // inline errors have been revealed via setAttempted.
+    const isContactValid = () => !validateName(fullName) && !validateEmail(email) && isPhoneValid();
 
 
     const isConfirmValid = () => {
@@ -122,7 +124,8 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
 
     const handleCashConfirm = async () => {
         if (hasClickedConfirm || !isConfirmValid()) return;
-        if (!guardName()) return;
+        setAttempted(true);
+        if (!isContactValid()) return;
         setHasClickedConfirm(true);
         try {
             // No amount is sent: the server records the booking's own service total (see above).
@@ -147,7 +150,8 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
 
     const handleCardConfirm = async () => {
         if (hasClickedConfirm || !isConfirmValid()) return;
-        if (!guardName()) return;
+        setAttempted(true);
+        if (!isContactValid()) return;
         if (!stripeRef.current?.isReady()){
             showToast("Stripe not ready", "Payment Provider isn't ready yet");
             return;
@@ -174,11 +178,8 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
 
 
     const handleCardMethodSelected = async () => {
-        if (!isUserDetailsValid()) {
-            showToast("Incorrect Inputs", "Please input a valid name and phone number and email address");
-            return;
-        }
-        if (!guardName()) return;
+        setAttempted(true);
+        if (!isContactValid()) return;
         setPaymentMethod("CARD");
         setPaymentInProgress(false);
         setLoadingPayment(true);

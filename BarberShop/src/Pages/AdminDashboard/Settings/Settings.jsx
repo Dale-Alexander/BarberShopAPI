@@ -25,21 +25,12 @@ const Settings = () => {
     }, [data]);
 
     const handleSave = async () => {
+        // Save is gated on canSave (all three inline range validators pass), so the values are already
+        // valid by the time we get here - just coerce to numbers for the payload. The out-of-range
+        // feedback lives inline under each field, not in a toast.
         const value = Number(bufferMin);
         const durationValue = Number(defaultAdminDuration);
         const graceValue = Number(graceAfterClose);
-        if (!Number.isInteger(value) || value < 0 || value > 120) {
-            showToast("Invalid buffer", "Buffer must be a whole number between 0 and 120 minutes.");
-            return;
-        }
-        if (!Number.isInteger(durationValue) || durationValue < 5 || durationValue > 240) {
-            showToast("Invalid duration", "Default admin booking duration must be a whole number between 5 and 240 minutes.");
-            return;
-        }
-        if (!Number.isInteger(graceValue) || graceValue < 0 || graceValue > 120) {
-            showToast("Invalid grace period", "Grace after close must be a whole number between 0 and 120 minutes.");
-            return;
-        }
         try {
             setSaving(true);
             const res = await adminAxios.put("/api/Settings", {

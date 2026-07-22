@@ -38,6 +38,9 @@ const Services = () => {
     const [imageFile, setImageFile] = useState(null); // raw file sent to the backend
     const [dragActive, setDragActive] = useState(false);
     const [createAttempted, setCreateAttempted] = useState(false); // reveals required-field errors after a submit try
+    // Server-side "a service with this name already exists" (409) - shown inline under the Name field,
+    // keeping what the admin typed, instead of a toast.
+    const [createNameConflict, setCreateNameConflict] = useState(null);
     const createModalContainerRef = useRef(null);
 
     // Edit flow — kept separate so its fields never collide with the create modal.
@@ -50,6 +53,7 @@ const Services = () => {
     const [editImageFile, setEditImageFile] = useState(null); // raw new file, only if the admin picks one
     const [editDragActive, setEditDragActive] = useState(false);
     const [editAttempted, setEditAttempted] = useState(false);
+    const [editNameConflict, setEditNameConflict] = useState(null);
     const editModalContainerRef = useRef(null);
 
     const [deleteServiceId, setDeleteServiceId] = useState(null);
@@ -111,6 +115,7 @@ const Services = () => {
         setNewImage("");
         setImageFile(null);
         setCreateAttempted(false);
+        setCreateNameConflict(null);
         setShowCreate(false);
     };
 
@@ -135,7 +140,11 @@ const Services = () => {
             showToast("Service created", `${res.data.name} was added to your catalogue.`, "success");
         }
         catch (err) {
-            showToast("Couldn't create service", getErrorMessage(err));
+            if (err.response?.status === 409) {
+                setCreateNameConflict(getErrorMessage(err));
+            } else {
+                showToast("Couldn't create service", getErrorMessage(err));
+            }
         }
         finally {
             setSubmitting(false);
@@ -151,6 +160,7 @@ const Services = () => {
         setEditImage(service.imageUrl ? resolveServiceImage(service.imageUrl) : "");
         setEditImageFile(null);
         setEditAttempted(false);
+        setEditNameConflict(null);
     };
 
     const closeEdit = () => {
@@ -158,6 +168,7 @@ const Services = () => {
         setEditImageFile(null);
         setEditImage("");
         setEditAttempted(false);
+        setEditNameConflict(null);
     };
 
     const handleEdit = async (e) => {
@@ -183,7 +194,11 @@ const Services = () => {
             showToast("Service updated", `${res.data.name} was saved.`, "success");
         }
         catch (err) {
-            showToast("Couldn't update service", getErrorMessage(err));
+            if (err.response?.status === 409) {
+                setEditNameConflict(getErrorMessage(err));
+            } else {
+                showToast("Couldn't update service", getErrorMessage(err));
+            }
         }
         finally {
             setSubmitting(false);
@@ -315,9 +330,9 @@ const Services = () => {
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Name *</label>
-                                <input className={`form-input${cTitleError ? " form-input--invalid" : ""}`} placeholder="e.g. Haircut & Beard Trim"
-                                    maxLength={NAME_MAX} value={title} onChange={(e) => setTitle(e.target.value)} />
-                                {cTitleError && <span className="form-error">{cTitleError}</span>}
+                                <input className={`form-input${(cTitleError || createNameConflict) ? " form-input--invalid" : ""}`} placeholder="e.g. Haircut & Beard Trim"
+                                    maxLength={NAME_MAX} value={title} onChange={(e) => { setTitle(e.target.value); setCreateNameConflict(null); }} />
+                                {(cTitleError || createNameConflict) && <span className="form-error">{cTitleError || createNameConflict}</span>}
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Description *</label>
@@ -383,9 +398,9 @@ const Services = () => {
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Name *</label>
-                                <input className={`form-input${eTitleError ? " form-input--invalid" : ""}`} maxLength={NAME_MAX}
-                                    value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
-                                {eTitleError && <span className="form-error">{eTitleError}</span>}
+                                <input className={`form-input${(eTitleError || editNameConflict) ? " form-input--invalid" : ""}`} maxLength={NAME_MAX}
+                                    value={editTitle} onChange={(e) => { setEditTitle(e.target.value); setEditNameConflict(null); }} />
+                                {(eTitleError || editNameConflict) && <span className="form-error">{eTitleError || editNameConflict}</span>}
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Description *</label>
