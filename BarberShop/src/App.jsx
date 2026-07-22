@@ -38,7 +38,7 @@ function App() {
                     <Route element={<RequireRole Roles = {["ADMIN", "BARBER"]} spinnerBg="var(--background)" spinnerColor="var(--primary-500)"/>}>
                         <Route path="/datetime/:bookingId" element={<BarberDateAndTime />} />
                     </Route>
-                    <Route path="/checkout/:bookingId" element={<Checkout key={location.key} />} />
+                    <Route path="/checkout/:bookingId" element={<Checkout />} />
                     <Route path="/datetime" element={<BarberDateAndTime />} />
                     <Route path="/cancelledorcompleted/:bookingId" element={<AlreadyPaid />} />
                     <Route path="/booking/success/:bookingId" element={<BookingConfirmation/>}/>

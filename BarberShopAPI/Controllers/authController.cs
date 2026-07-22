@@ -10,6 +10,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using Hangfire;
 using BarberShopAPI.Services;
 
@@ -29,6 +30,7 @@ namespace BarberShopAPI.Controllers
             _env = env;
         }
         [HttpPost("login")]
+        [EnableRateLimiting("login")]
         public async Task <IActionResult> Login([FromBody] LoginEmailPasswordViewModel request)
         {
             try
@@ -264,12 +266,25 @@ namespace BarberShopAPI.Controllers
                 var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == request.Email);
                 if (user != null && (user.Role.ToString() == "ADMIN" || user.Role.ToString() == "BARBER"))
                 {
-                    var rawToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-                    user.PasswordResetTokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawToken)));
-                    user.PasswordResetTokenExpiresAt = DateTime.UtcNow.AddMinutes(30);
-                    await _context.SaveChangesAsync();
+                    // Per-email send throttle: don't send another reset email to this address if one went
+                    // out within the last ResetEmailThrottleMinutes. This blunts inbox-bombing a victim
+                    // regardless of the caller's IP - unlike a per-IP limit, which an attacker sidesteps by
+                    // rotating IPs and which can block legit users behind a shared IP. "Issued at" is derived
+                    // from the 30-minute token expiry (expiry = issued + 30), so no extra column is needed.
+                    const int TokenLifetimeMinutes = 30;
+                    const int ResetEmailThrottleMinutes = 2;
+                    var sentWithinThrottle = user.PasswordResetTokenExpiresAt != null
+                        && user.PasswordResetTokenExpiresAt > DateTime.UtcNow.AddMinutes(TokenLifetimeMinutes - ResetEmailThrottleMinutes);
 
-                    BackgroundJob.Enqueue<IEmailService>(service => service.sendPasswordResetEmailAsync(user.Id, rawToken));
+                    if (!sentWithinThrottle)
+                    {
+                        var rawToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+                        user.PasswordResetTokenHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawToken)));
+                        user.PasswordResetTokenExpiresAt = DateTime.UtcNow.AddMinutes(TokenLifetimeMinutes);
+                        await _context.SaveChangesAsync();
+
+                        BackgroundJob.Enqueue<IEmailService>(service => service.sendPasswordResetEmailAsync(user.Id, rawToken));
+                    }
                 }
 
                 // Always return the same generic message, whether or not the email

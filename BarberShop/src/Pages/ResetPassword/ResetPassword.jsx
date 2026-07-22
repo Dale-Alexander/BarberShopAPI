@@ -20,6 +20,9 @@ const ResetPassword = () => {
     const navigate = useNavigate();
     const { showToast } = useContext(ToastContext);
     const [submitting, setSubmitting] = useState(false);
+    // On success we show a durable confirmation screen (below) instead of a transient toast, so the
+    // "log in with your new password" message can't be missed mid-redirect.
+    const [success, setSuccess] = useState(false);
 
     // Live inline validation (max 40 mirrors ResetPasswordViewModel). Errors stay quiet on a pristine
     // empty field and appear as the user types; the button unlocks only when both fields agree and pass.
@@ -35,10 +38,10 @@ const ResetPassword = () => {
         try {
             await axios.post("/api/auth/reset-password", { token, newPassword, confirmNewPassword });
             // No cookie/session is set by this request on purpose (see ResetPassword in
-            // authController.cs) - send them to log in fresh with the new password
-            // instead of trusting this request alone to establish a session.
-            showToast("Password updated", "Please log in with your new password", "success");
-            navigate("/login", { replace: true });
+            // authController.cs) - they log in fresh with the new password instead of this request
+            // establishing a session. Show a confirmation screen with a "Go to Login" button rather
+            // than a toast + auto-redirect, so the instruction is durable and user-driven.
+            setSuccess(true);
         }
         catch (err) {
             // Covers both "token expired/already used" and validation errors
@@ -48,6 +51,24 @@ const ResetPassword = () => {
             // Only reset on failure - a success navigates to /login and unmounts this component.
             setSubmitting(false);
         }
+    }
+
+    if (success) {
+        return (
+            <div className="login-page">
+                <div className="forgot-card">
+                    <div className="slide-wrapper">
+                        <div className="slide-form slide-form-1">
+                            <h1 className="login-title">Password Updated</h1>
+                            <p className="forgot-confirmation">Your password has been updated. You can now log in with your new password.</p>
+                            <button className="login-button" onClick={() => navigate("/login", { replace: true })}>
+                                Go to Login
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
     }
 
     if (!token) {

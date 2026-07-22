@@ -12,6 +12,7 @@ using Resend;
 using Stripe;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 
 
 DotNetEnv.Env.Load();
@@ -149,6 +150,32 @@ builder.Services.AddHangfire(config => config.UseSqlServerStorage(connectionStri
 builder.Services.AddHangfireServer();
 builder.Services.AddScoped<BookingExpiryJob>();
 
+// Per-IP throttling on the auth entry points. Login is brute-force bait; forgot-password can be used
+// to email-bomb a victim's inbox. We partition each policy by the caller's IP so one abuser can't
+// exhaust a bucket shared with everyone else. NOTE: behind a reverse proxy, RemoteIpAddress is the
+// proxy unless ForwardedHeaders is configured - revisit the partition key when deploying behind one.
+builder.Services.AddRateLimiter(options =>
+{
+    options.OnRejected = async (context, token) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new { message = "Too many attempts. Please wait a moment and try again." }, token);
+    };
+
+    options.AddPolicy("login", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
+    // forgot-password is protected by a per-EMAIL send throttle in authController (RequestPasswordReset)
+    // instead of a per-IP limiter - see the comment there for why per-IP is the wrong tool for email bombing.
+});
+
 var app = builder.Build();
 
 if (args.Contains("--seed-admin"))
@@ -255,6 +282,9 @@ app.UseAuthorization();
 */
 
 //This means that .UseAuthentication needs to be before .UseAuthorization()
+
+// Enforces the [EnableRateLimiting] policies declared above (login / forgot-password).
+app.UseRateLimiter();
 
 app.MapControllers();
 
