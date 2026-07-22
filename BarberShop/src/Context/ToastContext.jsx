@@ -5,11 +5,9 @@ export const ToastContext = createContext();
 
 export const ToastProvider = ({ children }) => {
     const [toast, setToast] = useState(null);
-    const showToast = useCallback((title, message, duration = 4000) => {
-        setToast({title, message, duration });
-        /* setToast({
-        message:message,
-        duration:duration}) */
+    // type: "error" (default) | "success" | "info" -> drives the toast's colour + icon.
+    const showToast = useCallback((title, message, type = "error", duration = 4000) => {
+        setToast({ title, message, type, duration });
     }, []);
     /* useCallback returns a memoized version of 
     a function  meangin React will keep the same 
@@ -27,6 +25,7 @@ export const ToastProvider = ({ children }) => {
                 <Toast
                     title={toast.title}
                     message={toast.message}
+                    type={toast.type}
                     duration={toast.duration}
                     onClose={hideToast} />
             )

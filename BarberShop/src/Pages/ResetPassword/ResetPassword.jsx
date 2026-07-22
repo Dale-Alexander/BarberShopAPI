@@ -7,6 +7,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { ToastContext } from "../../Context/ToastContext";
 import { useContext } from "react";
 import { validatePassword } from "../../utils/validation";
+import { getErrorMessage } from "../../utils/errorMessage.js";
 
 // Step 2 of the password reset flow, reached only via the link emailed by
 // RequestPasswordReset (authController.cs) - the token in the URL is what proves this
@@ -36,15 +37,14 @@ const ResetPassword = () => {
             // No cookie/session is set by this request on purpose (see ResetPassword in
             // authController.cs) - send them to log in fresh with the new password
             // instead of trusting this request alone to establish a session.
-            showToast("Password updated", "Please log in with your new password");
+            showToast("Password updated", "Please log in with your new password", "success");
             navigate("/login", { replace: true });
         }
         catch (err) {
             // Covers both "token expired/already used" and validation errors
             // (e.g. passwords don't match) - the backend message is specific enough
             // to show directly.
-            const message = err.response?.data?.message || "Something went wrong. Please try again";
-            showToast("Failed to reset password", message);
+            showToast("Failed to reset password", getErrorMessage(err));
             // Only reset on failure - a success navigates to /login and unmounts this component.
             setSubmitting(false);
         }

@@ -5,6 +5,7 @@ import { adminAxios } from "../../../Hooks/AxiosInterceptor";
 import { ToastContext } from "../../../Context/ToastContext";
 import LoadingSpinner from "../../../Components/LoadingSpinner/LoadingSpinner";
 import ErrorState from "../../../Components/ErrorState/ErrorState";
+import { getErrorMessage } from "../../../utils/errorMessage.js";
 import "./Settings.css";
 
 const Settings = () => {
@@ -28,15 +29,15 @@ const Settings = () => {
         const durationValue = Number(defaultAdminDuration);
         const graceValue = Number(graceAfterClose);
         if (!Number.isInteger(value) || value < 0 || value > 120) {
-            showToast("Buffer must be a whole number between 0 and 120 minutes");
+            showToast("Invalid buffer", "Buffer must be a whole number between 0 and 120 minutes.");
             return;
         }
         if (!Number.isInteger(durationValue) || durationValue < 5 || durationValue > 240) {
-            showToast("Default admin booking duration must be a whole number between 5 and 240 minutes");
+            showToast("Invalid duration", "Default admin booking duration must be a whole number between 5 and 240 minutes.");
             return;
         }
         if (!Number.isInteger(graceValue) || graceValue < 0 || graceValue > 120) {
-            showToast("Grace after close must be a whole number between 0 and 120 minutes");
+            showToast("Invalid grace period", "Grace after close must be a whole number between 0 and 120 minutes.");
             return;
         }
         try {
@@ -49,10 +50,10 @@ const Settings = () => {
             setBufferMin(res.data.bufferMin);
             setDefaultAdminDuration(res.data.defaultAdminBookingDurationMin);
             setGraceAfterClose(res.data.graceMinutesAfterClose);
-            showToast("Settings saved");
+            showToast("Settings saved", "Your booking rules have been updated.", "success");
         }
         catch (err) {
-            showToast(err.response?.data?.message ?? "Failed to save settings");
+            showToast("Couldn't save settings", getErrorMessage(err));
         }
         finally {
             setSaving(false);

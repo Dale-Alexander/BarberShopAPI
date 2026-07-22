@@ -1,11 +1,12 @@
 import { useParams, useNavigate} from "react-router-dom";
 import { format } from "date-fns";
-import { useContext, useState, useEffect } from "react";
+import { useContext, useState, useEffect, useCallback } from "react";
 import { usePersistentFilters } from "../../Hooks/UsePersistentFilters.js";
 import { BarberBookings as BarberBookingsContext } from "../../Context/BarberContext";
 import "./BarberBookings.css";
 import { ArrowLeft, UserX, Filter } from "lucide-react";
 import LoadingSpinner from "../../Components/LoadingSpinner/LoadingSpinner";
+import ErrorState from "../../Components/ErrorState/ErrorState";
 import useFetchBarberBookings from "../../Hooks/UseFetchBarberBookings.js";
 import { fetchBarberSummary } from "../../utils/FetchBarberSummary.js";
 import Pagination from "../../Components/Pagination/Pagination.jsx";
@@ -13,7 +14,7 @@ import { resolveBarberImage, handleBarberImageError } from "../../utils/barberIm
 import FilterModal from "../AdminDashboard/DashboardComponents/Filter/Filter.jsx";
 const BarberBookings = () => {
     const { id } = useParams();
-    const { load, loading } = useFetchBarberBookings();
+    const { load, loading, error } = useFetchBarberBookings();
     const { filters, applyFilters, resetFilters } = usePersistentFilters();
     const { viewBookingsBarber } = useContext(BarberBookingsContext);
     const navigate = useNavigate();
@@ -29,22 +30,23 @@ const BarberBookings = () => {
     // A filter or barber change restarts paging at page 1.
     useEffect(() => { setPage(1); }, [filters.fromDate, filters.toDate, filters.status, id]);
 
-    useEffect(() => {
-        const loadBookings = async () => {
-            const data = await load({
-                fromDate: filters.fromDate,
-                toDate: filters.toDate,
-                status: filters.status,
-                barberId: Number(id),
-                page,
-            })
-            if (data) {
-                setBarberBookings(data);
-                setTotalPages(data.totalPages ?? 1);
-            }
+    // Hoisted so the error state's Retry can re-run it. `load` is left out of the deps on purpose
+    // (re-created each render but closes over stable values); the real triggers are filters/id/page.
+    const loadBookings = useCallback(async () => {
+        const data = await load({
+            fromDate: filters.fromDate,
+            toDate: filters.toDate,
+            status: filters.status,
+            barberId: Number(id),
+            page,
+        })
+        if (data) {
+            setBarberBookings(data);
+            setTotalPages(data.totalPages ?? 1);
         }
-        loadBookings();
     }, [filters.fromDate, filters.toDate, filters.status, id, page]);
+
+    useEffect(() => { loadBookings(); }, [loadBookings]);
 
     useEffect(() => {
         const loadSummary = async () => {
@@ -73,6 +75,15 @@ const BarberBookings = () => {
     if (loading && !barberBookings) {
         return <LoadingSpinner message={"Loading Barber Data"} color="#e0e0e0"/>
     }
+
+    // A real failed load (network / 500) shouldn't masquerade as a missing barber - offer a Retry.
+    if (!barberBookings && error && error.response?.status !== 404) return (
+        <ErrorState
+            title="Couldn't load barber"
+            message="We couldn't load this barber's bookings. Please try again."
+            onRetry={loadBookings}
+        />
+    );
 
     if (!barberBookings) return (
         <div className="barber-error-state">

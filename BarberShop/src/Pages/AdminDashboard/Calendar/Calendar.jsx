@@ -13,6 +13,7 @@ import { Trash2, X, Menu, Mail, Phone, AlertTriangle, RotateCw } from "lucide-re
 import { AuthContext } from "../../../Context/AuthContext.jsx";
 import { ToastContext } from "../../../Context/ToastContext.jsx";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
+import { getErrorMessage } from "../../../utils/errorMessage.js";
 
 const AdminCalendar = () => {
     const { user } = useContext(AuthContext);
@@ -238,7 +239,7 @@ const AdminCalendar = () => {
             if (err.response?.status === 409 && err.response.data?.requiresConfirmation) {
                 setConflictData({ ...err.response.data, closureData: payload });
             } else {
-                showToast("Couldn't create closure", err.response?.data?.message || "An unexpected error occurred. Please try again.");
+                showToast("Couldn't create closure", getErrorMessage(err));
             }
         }
         finally {
@@ -263,7 +264,7 @@ const AdminCalendar = () => {
         catch (err) {
             console.log(err);
             // Leave the modal open so the admin can retry; tell them it failed rather than silently no-op.
-            showToast("Couldn't delete event", err.response?.data?.message || "An unexpected error occurred. Please try again.");
+            showToast("Couldn't delete event", getErrorMessage(err));
         }
     }
 

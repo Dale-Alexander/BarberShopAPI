@@ -10,6 +10,7 @@ import FancyPhoneInput from "../../../Components/FancyPhoneInput/FancyPhoneInput
 import usePhone from "../../../Hooks/usePhone";
 import { resolveBarberImage, handleBarberImageError } from "../../../utils/barberImage.js";
 import { validateName, validateNameInline, validateEmail } from "../../../utils/validation.js";
+import { getErrorMessage } from "../../../utils/errorMessage.js";
 const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, setClientSecret, paymentMethod, setPaymentMethod, phone, setPhone, fullName, setFullName }) => {
     const stripeRef = useRef(null);
     const [loadingPayment, setLoadingPayment] = useState(false);
@@ -107,7 +108,7 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
             const message = err.response?.data?.message || "";
             if (/already being processed/i.test(message)) {
                 setPaymentInProgress(true);
-                showToast("Payment in progress", "A payment is already being processed for this booking. Please wait a moment, then refresh.");
+                showToast("Payment in progress", "A payment is already being processed for this booking. Please wait a moment, then refresh.", "info");
             } else {
                 // Genuine setup failure with no payment in flight - drop back to cash so the customer isn't
                 // stranded on a card form that can't load.
@@ -139,7 +140,7 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
         catch (err) {
             console.error(err);
             if (isBookingNoLongerPending(err)) return goToCancelledScreen();
-            showToast("Error Confirming Payment", err.response?.data?.message);
+            showToast("Couldn't confirm booking", getErrorMessage(err, "We couldn't confirm your booking and you haven't been charged. Please try again."));
             setHasClickedConfirm(false);
         }
     }
@@ -269,7 +270,7 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
                             </div>
                             {clientSecret && !loadingPayment ? (
                                 <StripePaymentSection ref={stripeRef} bookingId={bookingId} onPaymentError={(msg) =>
-                                    showToast("Payment Error", msg)
+                                    showToast("Payment Error", msg || "Your payment couldn't be completed. Please check your card details and try again.")
                                 }/>
                             ) : paymentInProgress ? (/* ▎ The customer opens the checkout for a booking in a different browser or tab than the one where they already started a card payment — and that earlier payment is already going through (processing or completed) on Stripe's side.
 

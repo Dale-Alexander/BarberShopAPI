@@ -9,6 +9,7 @@ import LoadingSpinner from "../../../Components/LoadingSpinner/LoadingSpinner";
 import ErrorState from "../../../Components/ErrorState/ErrorState";
 import { PulseLoader } from "react-spinners";
 import { resolveServiceImage } from "../../../utils/serviceImage.js";
+import { getErrorMessage } from "../../../utils/errorMessage.js";
 
 /* Client-side bounds mirror the backend (CreateServiceViewModel / UpdateServiceViewModel data
  * annotations) so a bad value is caught before the round-trip. The server still re-validates. */
@@ -131,10 +132,10 @@ const Services = () => {
             const res = await adminAxios.post("/api/services/create-service", formData);
             setServices((prev) => [...prev, res.data]);
             resetCreate();
-            showToast("Service created", `${res.data.name} was added to your catalogue.`);
+            showToast("Service created", `${res.data.name} was added to your catalogue.`, "success");
         }
         catch (err) {
-            showToast(err.response?.data?.message || "Something went wrong. Please try again.");
+            showToast("Couldn't create service", getErrorMessage(err));
         }
         finally {
             setSubmitting(false);
@@ -179,10 +180,10 @@ const Services = () => {
             const res = await adminAxios.patch(`/api/services/update-service/${editService.id}`, formData);
             setServices((prev) => prev.map((s) => s.id === editService.id ? { ...s, ...res.data } : s));
             closeEdit();
-            showToast("Service updated", `${res.data.name} was saved.`);
+            showToast("Service updated", `${res.data.name} was saved.`, "success");
         }
         catch (err) {
-            showToast(err.response?.data?.message || "Something went wrong. Please try again.");
+            showToast("Couldn't update service", getErrorMessage(err));
         }
         finally {
             setSubmitting(false);
@@ -196,10 +197,10 @@ const Services = () => {
             await adminAxios.delete(`/api/services/delete/${id}`);
             setServices((prev) => prev.filter((s) => s.id !== id));
             setDeleteServiceId(null);
-            showToast("Service deleted", "The service was removed from your catalogue.");
+            showToast("Service deleted", "The service was removed from your catalogue.", "success");
         }
         catch (err) {
-            showToast(err.response?.data?.message || "An unexpected error occurred");
+            showToast("Couldn't delete service", getErrorMessage(err));
         }
         finally {
             setSubmitting(false);

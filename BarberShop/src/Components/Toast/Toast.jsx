@@ -1,10 +1,20 @@
 import {useState, useEffect, useRef} from "react";
 import "./Toast.css";
 
-const Toast = ({title, message, duration = 5000, onClose}) =>{
+// Severity -> accent colour + icon path. `error` keeps the original red look so untyped toasts are
+// unchanged; success/info give the user the standard "this worked" / "heads up" signal instead of
+// every toast reading as a failure.
+const TOAST_TYPES = {
+    error:   { color: "#e53e3e", icon: "M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" },
+    success: { color: "#22c55e", icon: "M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" },
+    info:    { color: "#6870fa", icon: "M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" },
+};
+
+const Toast = ({title, message, type = "error", duration = 5000, onClose}) =>{
     const [visible, setVisible] = useState(true);
     const [dismissing, setDismissing] = useState(false);
     const timerRef = useRef(null);
+    const { color, icon } = TOAST_TYPES[type] ?? TOAST_TYPES.error;
 
     const dismiss = () => {
         if (dismissing) return;
@@ -49,7 +59,7 @@ return(
                 overflow: "hidden",
                 borderRadius: 12,
                 background: "#1a1a1a",
-                border: "1px solid rgba(229, 62, 62, 0.25)",
+                border: `1px solid ${color}40`,
                 minWidth: 320,
                 maxWidth: 400,
                 opacity: dismissing ? 0 : 1,
@@ -66,14 +76,14 @@ return(
                     left: 0, top: 0, bottom: 0,
                     width: 4,
                     borderRadius: "12px 0 0 12px",
-                    background: "#e53e3e",
+                    background: color,
                 }}
             />
 
             {/* Body */}
             <div style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "16px 16px 16px 20px" }}>
-                <svg style={{ flexShrink: 0, width: 18, height: 18, marginTop: 2, color: "#e53e3e" }} viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                <svg style={{ flexShrink: 0, width: 18, height: 18, marginTop: 2, color }} viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d={icon} clipRule="evenodd" />
                 </svg>
 
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -103,7 +113,7 @@ return(
                     style={{
                         height: "100%",
                         borderRadius: 9999,
-                        background: "rgba(229,62,62,0.6)",
+                        background: `${color}99`,
                         animation: `shrink ${duration}ms linear forwards`,
                     }}
                 />

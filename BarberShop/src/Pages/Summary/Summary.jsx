@@ -8,6 +8,7 @@ import axios from "axios";
 import { useParams, useNavigate } from "react-router-dom";
 import { useState, useEffect, useContext } from "react";
 import LoadingSpinner from "../../Components/LoadingSpinner/LoadingSpinner";
+import { getErrorMessage } from "../../utils/errorMessage.js";
 import { ToastContext } from "../../Context/ToastContext";
 const AlreadyPaid = () => {
     const { bookingId } = useParams();
@@ -24,7 +25,7 @@ const AlreadyPaid = () => {
             if (status === 404) {
                 navigate("/404", { replace: true });//you can use any invalid url, the convention is either 404 or not-found
             } else {
-                showToast("Error Fetching Booking", error?.response?.data?.message || "Something went wrong");
+                showToast("Couldn't load booking", getErrorMessage(error, "We couldn't load this booking. Please refresh and try again."));
                 return;
             }
         }

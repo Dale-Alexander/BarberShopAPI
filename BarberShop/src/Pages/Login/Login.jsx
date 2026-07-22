@@ -6,6 +6,7 @@ import { Mail, Lock } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { AuthContext } from "../../Context/AuthContext";
 import { ToastContext } from "../../Context/ToastContext";
+import { getErrorMessage } from "../../utils/errorMessage.js";
 const Login = () => {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
@@ -40,9 +41,9 @@ const Login = () => {
             }
         }
         catch (err) {
-            const message = err.response?.data?.message || "Something went wrong. Please try again";
-            //the fallback message is unnecessary here i think since the backend has a response for every error.
-            showToast("Login Failed", message);
+            // getErrorMessage adds offline detection ("couldn't reach the server") on top of the
+            // backend's message, which matters on a login page where a dead connection is common.
+            showToast("Login Failed", getErrorMessage(err, "Something went wrong. Please try again."));
             console.log(err);
             // Only reset on failure - a success navigates away and unmounts this component.
             setSubmitting(false);

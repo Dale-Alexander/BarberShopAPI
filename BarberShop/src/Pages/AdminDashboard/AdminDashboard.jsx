@@ -12,6 +12,8 @@ import BookingsTable from "./DashboardComponents/BookingsTable/BookingsTable.jsx
 import { ChevronRight } from 'lucide-react';
 import useFetchBookings from "../../Hooks/UseFetchBookings.js";
 import { fetchAdminSummary } from "../../utils/FetchAdminSummary.js";
+import { getErrorMessage } from "../../utils/errorMessage.js";
+import ErrorState from "../../Components/ErrorState/ErrorState.jsx";
 import { ToastContext } from "../../Context/ToastContext.jsx";
 
 
@@ -26,6 +28,9 @@ const AdminDashboard = () => {
      * exactly what pagination removed. */
     const [summary, setSummary] = useState(null);
     const [summaryLoading, setSummaryLoading] = useState(false);
+    // A failed initial stats load shows an inline retry (not just a vanishing toast); same for the table.
+    const [summaryError, setSummaryError] = useState(false);
+    const [bookingsError, setBookingsError] = useState(false);
     const { filters, applyFilters, resetFilters } = usePersistentFilters();
     const [isRevenue, setIsRevenue] = useState(true);
     const [yearOpen, setYearOpen] = useState(false);
@@ -62,11 +67,14 @@ const AdminDashboard = () => {
                 month: selectedMonth != null ? selectedMonth + 1 : null,
             });
             setSummary(data);
+            setSummaryError(false);
         }
         catch (err) {
-            if (err.response?.status !== 401) {
-                showToast("Couldn't load dashboard stats", err.response?.data?.message || "An unexpected error occurred");
-            }
+            if (err.response?.status === 401) return; // logout race - the interceptor handles it
+            // A silent (action-triggered) refresh already has a chart on screen, so a full error panel
+            // would be jarring - toast instead. An initial load with nothing to show gets the retry panel.
+            if (silent) showToast("Couldn't refresh stats", getErrorMessage(err));
+            else setSummaryError(true);
         }
         finally {
             if (!silent) setSummaryLoading(false);
@@ -82,22 +90,28 @@ const AdminDashboard = () => {
     // A filter change starts the table back at page 1; the fetch effect below picks it up.
     useEffect(() => { setPage(1); }, [filters.fromDate, filters.toDate, filters.status]);
 
-    // Paginated table rows only.
-    useEffect(() => {
-        const loadBookings = async () => {
-            const data = await load({
-                fromDate: filters.fromDate,
-                toDate: filters.toDate,
-                status: filters.status,
-                page,
-            });
-            if (data) {
-                setBookings(data.bookings ?? []);
-                setTotalPages(data.totalPages ?? 1);
-            }
-        };
-        loadBookings();
+    // Paginated table rows only. Hoisted so the table's Retry button can re-run it. `load` is
+    // intentionally left out of the deps (it's re-created each render but only closes over stable
+    // values); the effect below re-runs on the filter/page changes that actually matter.
+    const loadBookings = useCallback(async () => {
+        const data = await load({
+            fromDate: filters.fromDate,
+            toDate: filters.toDate,
+            status: filters.status,
+            page,
+        });
+        if (data) {
+            setBookings(data.bookings ?? []);
+            setTotalPages(data.totalPages ?? 1);
+            setBookingsError(false);
+        } else {
+            // load() returns undefined on failure (the hook toasts). Flag it; the table only shows the
+            // retry panel when there are also no rows to fall back on (see BookingsTable).
+            setBookingsError(true);
+        }
     }, [filters.fromDate, filters.toDate, filters.status, page]);
+
+    useEffect(() => { loadBookings(); }, [loadBookings]);
 
     const getIncreaseOrDecreaseSign = (current, previous) => {
         if (current > previous) return "+";
@@ -225,6 +239,8 @@ const AdminDashboard = () => {
                         <div className="linechart-wrapper">
                             {summaryLoading ? (
                                 <LoadingSpinner message={"Loading Chart Information"} color="#e0e0e0"/>
+                            ) : summaryError ? (
+                                <ErrorState inline title="Couldn't load stats" message="We couldn't load your dashboard stats. Please try again." onRetry={() => loadSummary()} />
                             ) : (
                                 <div className="graph-container">
                                     <LineChart
@@ -242,7 +258,7 @@ const AdminDashboard = () => {
                     </div>
                 </div>
                 <div className="bookings-table-container">
-                    <BookingsTable bookings={bookings} setBookings={setBookings} filters={filters} resetFilters={resetFilters} applyFilters={applyFilters} needsReviewCount={needsReviewCount} refreshNeedsReviewCount={refreshNeedsReviewCount} refreshSummary={refreshSummary} page={page} totalPages={totalPages} onPageChange={setPage} loading={loading} />
+                    <BookingsTable bookings={bookings} setBookings={setBookings} filters={filters} resetFilters={resetFilters} applyFilters={applyFilters} needsReviewCount={needsReviewCount} refreshNeedsReviewCount={refreshNeedsReviewCount} refreshSummary={refreshSummary} page={page} totalPages={totalPages} onPageChange={setPage} loading={loading} error={bookingsError} onRetry={loadBookings} />
                 </div>
             </div>
         </div>

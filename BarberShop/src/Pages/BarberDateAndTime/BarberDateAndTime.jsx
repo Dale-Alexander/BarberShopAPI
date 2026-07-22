@@ -31,6 +31,7 @@ import { AuthContext } from "../../Context/AuthContext.jsx";
 import { ToastContext } from "../../Context/ToastContext.jsx";
 import Navlinks from "../../Components/NavLinks/Navlinks";
 import { BookingDetailsContext } from "../../Context/BookingDetailsContext.jsx";
+import { getErrorMessage } from "../../utils/errorMessage.js";
 
 const TIME_SLOTS = [
     "09:00", "09:30", "10:00", "10:30",
@@ -146,7 +147,7 @@ const BarberDateAndTime = () => {
        them back to the dashboard. 401 is left to the axios interceptor, which redirects to login. */
     useEffect(() => {
         if (isEditMode && editBookingError && editBookingError.response?.status !== 401) {
-            showToast("Couldn't load booking", editBookingError.response?.data?.message || "This booking may no longer exist.");
+            showToast("Couldn't load booking", getErrorMessage(editBookingError, "This booking may no longer exist."));
             navigate("/admin", { replace: true });
         }
     }, [isEditMode, editBookingError]);
@@ -397,7 +398,7 @@ const BarberDateAndTime = () => {
         // Validate the raw text (not the last-valid number) so an empty/blank box is still blocked.
         const durationToSend = Number(adminDurationInput);
         if (!Number.isInteger(durationToSend) || durationToSend < 5 || durationToSend > 240) {
-            showToast("Booking Failed", "Please enter a booking duration between 5 and 240 minutes");
+            showToast("Invalid duration", "Please enter a booking duration between 5 and 240 minutes.");
             return;
         }
         const newDateFormatted = format(selectedDate, "yyyy-MM-dd");
@@ -418,7 +419,7 @@ const BarberDateAndTime = () => {
             navigate(`/admin/${booking.data.id}`);
         } catch (err) {
             console.error(err.response?.data?.message || err.response?.data);
-            showToast("Booking Failed", err.response?.data?.message || "An unexpected error occurred");
+            showToast("Booking Failed", getErrorMessage(err));
         }
         finally {
             setBookingLoading(false);
@@ -440,7 +441,7 @@ const BarberDateAndTime = () => {
             
         } catch (err) {
             console.error(err.response?.data?.message || err.response?.data);
-            showToast("Booking Failed", err.response?.data?.message || "An unexpected error occurred");
+            showToast("Booking Failed", getErrorMessage(err));
         }
         finally {
             setBookingLoading(false);

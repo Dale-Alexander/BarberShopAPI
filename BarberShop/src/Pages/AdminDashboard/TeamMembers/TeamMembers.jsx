@@ -10,6 +10,7 @@ import ErrorState from "../../../Components/ErrorState/ErrorState";
 import { PulseLoader } from "react-spinners";
 import { resolveBarberImage } from "../../../utils/barberImage.js";
 import { validateName, validateNameInline, validateEmail, validatePassword } from "../../../utils/validation.js";
+import { getErrorMessage } from "../../../utils/errorMessage.js";
 const TeamMembers = () => {
     const {data, loading, error, reFetch} = useFetch("/api/barbers/admin", true);
     const [barbers, setBarbers] = useState([]);
@@ -56,12 +57,7 @@ stored i the browser's memory which the backend cant access*/
             setDeleteBarberId(null);
         }
         catch(err){
-            if(err.response?.data?.message){
-                showToast(err.response.data.message);
-            }
-            else{
-                showToast("An unexpected error occurred");
-            }
+            showToast("Couldn't delete barber", getErrorMessage(err));
         }
         finally{
             setSubmitting(false);
@@ -72,12 +68,12 @@ stored i the browser's memory which the backend cant access*/
         // The submit button is disabled until these pass, so this is just a safety net.
         const fieldError = validateName(newName) || validateEmail(email) || validatePassword(password);
         if (fieldError) {
-            showToast(fieldError);
+            showToast("Invalid details", fieldError);
             return;
         }
 
     if (!imageFile && !newImage?.trim()) {
-        showToast("Please provide an image");
+        showToast("Image required", "Please provide an image.");
         return;
     }
     if (submitting) return;
@@ -106,12 +102,7 @@ stored i the browser's memory which the backend cant access*/
         setShowCreate(false);
     }
     catch(err){
-        if(err.response?.data?.message){
-            showToast(err.response.data.message);
-        }
-        else{
-            showToast("Something went wrong. Please refresh or try inputting a different email");
-        }
+        showToast("Couldn't add barber", getErrorMessage(err, "Something went wrong. Please refresh or try a different email."));
     }
     finally{
         setSubmitting(false);
@@ -166,7 +157,7 @@ stored i the browser's memory which the backend cant access*/
         e.preventDefault();
         const nameError = validateName(editName);
         if (nameError) {
-            showToast(nameError);
+            showToast("Invalid name", nameError);
             return;
         }
         if (submitting) return;
@@ -191,7 +182,7 @@ stored i the browser's memory which the backend cant access*/
             closeEdit();
         }
         catch (err) {
-            showToast(err.response?.data?.message || "Something went wrong");
+            showToast("Couldn't update barber", getErrorMessage(err));
         }
         finally {
             setSubmitting(false);

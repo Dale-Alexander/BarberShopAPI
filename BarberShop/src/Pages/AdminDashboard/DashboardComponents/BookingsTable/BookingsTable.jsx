@@ -8,6 +8,8 @@ import { adminAxios } from "../../../../Hooks/AxiosInterceptor";
 import { ToastContext } from "../../../../Context/ToastContext.jsx";
 import Pagination from "../../../../Components/Pagination/Pagination.jsx";
 import LoadingSpinner from "../../../../Components/LoadingSpinner/LoadingSpinner.jsx";
+import ErrorState from "../../../../Components/ErrorState/ErrorState.jsx";
+import { getErrorMessage } from "../../../../utils/errorMessage.js";
 
 /* Cancelling within this many hours of the appointment forfeits the customer's refund (mirrors the
  * backend RefundCutoff in BookingCanceller). Compared against Malta wall-clock, since startDateTime is
@@ -16,7 +18,7 @@ const REFUND_CUTOFF_HOURS = 24;
 const getMaltaNow = () =>
     new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Malta" }));
 
-const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filters, needsReviewCount = 0, refreshNeedsReviewCount, refreshSummary, page = 1, totalPages = 1, onPageChange, loading = false }) => {
+const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filters, needsReviewCount = 0, refreshNeedsReviewCount, refreshSummary, page = 1, totalPages = 1, onPageChange, loading = false, error = false, onRetry }) => {
     const [openMenuId, setOpenMenuId] = useState(null);
     /* The action menu is positioned fixed (viewport-relative) so it escapes the table's
      * overflow-x:auto wrapper, which otherwise clips it on narrow screens / for the last row. */
@@ -87,12 +89,12 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
             // Pull the chart/stat cards back down so the now-cancelled booking leaves the COMPLETED-only
             // series immediately, instead of lingering until the next page load.
             refreshSummary?.();
-            showToast("Booking cancelled", res.data?.message || "The booking was cancelled.");
+            showToast("Booking cancelled", res.data?.message || "The booking was cancelled.", "success");
         }
         catch (err) {
             /* Surface the server's reason (e.g. a failed Stripe refund on a 502) instead of only logging it -
              * otherwise the admin sees the modal close with the booking still listed and no explanation. */
-            showToast("Cancellation failed", err.response?.data?.message || "An unexpected error occurred. Please try again.");
+            showToast("Cancellation failed", getErrorMessage(err));
         }
     }
 
@@ -125,10 +127,10 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                     : prev.map(b => b.id === bookingId ? { ...b, needsReview: false, reviewReason: null } : b)
             );
             refreshNeedsReviewCount?.();
-            showToast("Marked as reviewed", `Booking #${bookingId} was cleared from the review list.`);
+            showToast("Marked as reviewed", `Booking #${bookingId} was cleared from the review list.`, "success");
         }
         catch (err) {
-            showToast("Couldn't mark as reviewed", err.response?.data?.message || "An unexpected error occurred. Please try again.");
+            showToast("Couldn't mark as reviewed", getErrorMessage(err));
         }
     }
 
@@ -156,10 +158,10 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
             // A phone booking has no amount on file until it's marked paid, so collecting it adds that
             // revenue to the chart's COMPLETED series. Refresh so the chart/cards reflect it immediately.
             refreshSummary?.();
-            showToast("Marked as paid", res.data?.message || `Booking #${bookingId} was marked as collected.`);
+            showToast("Marked as paid", res.data?.message || `Booking #${bookingId} was marked as collected.`, "success");
         }
         catch (err) {
-            showToast("Couldn't mark as paid", err.response?.data?.message || "An unexpected error occurred. Please try again.");
+            showToast("Couldn't mark as paid", getErrorMessage(err));
         }
     }
 
@@ -233,7 +235,9 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
             {/* First load has no rows yet, so take over the table area with a spinner. A page/filter
                 refetch keeps the current rows visible under a subtle busy overlay (see the overlay
                 below) rather than blanking data the admin is already looking at. */}
-            {loading && bookings.length === 0 ? (
+            {error && bookings.length === 0 ? (
+                <ErrorState inline title="Couldn't load bookings" message="We couldn't load your bookings. Please try again." onRetry={onRetry} />
+            ) : loading && bookings.length === 0 ? (
                 <LoadingSpinner message="Loading Bookings" color="#e0e0e0" inline />
             ) : (
             <div style={{ position: "relative", overflowX: "auto" }}>

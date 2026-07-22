@@ -1,6 +1,7 @@
 ﻿import { useState, useContext } from "react";
 import { ToastContext } from "../Context/ToastContext.jsx";
 import {fetchBookings } from "../utils/FetchBookings.js";
+import { getErrorMessage } from "../utils/errorMessage.js";
 
 const useFetchBookings = () => {
     const { showToast } = useContext(ToastContext);
@@ -29,7 +30,7 @@ const useFetchBookings = () => {
 8. No 401 check there → shows "Error getting bookings, An unexpected error occurred" toast
 So the toast was showing because useFetchBookings had no idea the 401 was from a logout — it just saw an error and toasted it. 
 The interceptor correctly stayed silent but the error kept bubbling up to useFetchBookings which had nothing to stop it from showing the toast. */
-            showToast("Error getting bookings", err.response?.data?.message || "An unexpected error occurred");
+            showToast("Couldn't load bookings", getErrorMessage(err));
         }
         finally {
             setLoading(false);
