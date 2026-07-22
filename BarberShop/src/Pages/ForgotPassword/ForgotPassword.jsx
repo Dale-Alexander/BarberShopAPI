@@ -1,9 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import "./ForgotPassword.css";
 import axios from "axios";
 import { PulseLoader } from "react-spinners";
 import { Mail } from "lucide-react";
 import { validateEmail } from "../../utils/validation";
+
+// Matches the backend's per-email send throttle (RequestPasswordReset), so "Resend" only re-enables
+// once a fresh email would actually be sent rather than being silently throttled.
+const RESEND_SECONDS = 120;
 
 // Step 1 of the password reset flow: just collects an email and asks the backend to
 // send a reset link. This page never sees or sets a new password - that only happens
@@ -13,26 +17,39 @@ const ForgotPassword = () => {
     const [email, setEmail] = useState("");
     const [submitted, setSubmitted] = useState(false);
     const [submitting, setSubmitting] = useState(false);
+    const [secondsLeft, setSecondsLeft] = useState(0);
 
     // Shown live once the user starts typing; the button stays locked until the address is well-formed.
     const emailError = email ? validateEmail(email) : null;
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        if (validateEmail(email)) return; // safety net; the button is disabled until the email is valid
-        if (submitting) return;
+    // Tick the resend cooldown down to zero.
+    useEffect(() => {
+        if (secondsLeft <= 0) return;
+        const t = setTimeout(() => setSecondsLeft((s) => s - 1), 1000);
+        return () => clearTimeout(t);
+    }, [secondsLeft]);
+
+    // Shared by the first submit and the "Resend" button - the email is already in state either way.
+    const sendResetLink = async () => {
+        if (validateEmail(email) || submitting || secondsLeft > 0) return; // safety net; UI already gates these
         setSubmitting(true);
         try {
             await axios.post("/api/auth/forgot-password", { email });
         }
         finally {
-            // Always show the same confirmation regardless of outcome - the backend
-            // intentionally never reveals whether the email exists, so the UI
-            // shouldn't either (even a failed request looks identical to a success).
+            // Always show the same confirmation regardless of outcome - the backend intentionally never
+            // reveals whether the email exists, so the UI shouldn't either. Start the resend cooldown so
+            // the "Resend" button lines up with the backend's per-email throttle.
             setSubmitting(false);
             setSubmitted(true);
+            setSecondsLeft(RESEND_SECONDS);
         }
-    }
+    };
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        sendResetLink();
+    };
 
     return (
         <div className="login-page">
@@ -43,6 +60,18 @@ const ForgotPassword = () => {
                             <>
                                 <h1 className="login-title">Check your email</h1>
                                 <p className="forgot-confirmation">If an account with that email exists, we've sent a password reset link. It expires in 30 minutes.</p>
+                                <p className="forgot-confirmation">Didn't get it? You can resend once the timer is up.</p>
+                                <button
+                                    className="login-button"
+                                    onClick={sendResetLink}
+                                    disabled={secondsLeft > 0 || submitting}
+                                >
+                                    {secondsLeft > 0
+                                        ? `Resend in ${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, "0")}`
+                                        : submitting
+                                            ? <PulseLoader size={8} color="#2b2e38" />
+                                            : "Resend email"}
+                                </button>
                             </>
                         ) : (
                             <>
