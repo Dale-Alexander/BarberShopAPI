@@ -13,22 +13,32 @@ import { ToastContext } from "../../Context/ToastContext";
 const AlreadyPaid = () => {
     const { bookingId } = useParams();
     const [bookingDetails, setBookingDetails] = useState(null);
+    // True while we're waiting out the webhook: a card booking is flipped PENDING->COMPLETED by the
+    // async webhook, but Stripe redirects here the instant the card succeeds, so the booking can still
+    // be PENDING (the endpoint 400s) for a beat. We poll rather than error out - see the effect below.
+    const [finalising, setFinalising] = useState(false);
     const { data, loading, error } = useFetch(`/api/bookings/alreadypaid/${bookingId}`, false);
     const { showToast } = useContext(ToastContext);
     const navigate = useNavigate();
 
 
     useEffect(() => {
-        if (error) {
-
-            const status = error.response?.status;
-            if (status === 404) {
-                navigate("/404", { replace: true });//you can use any invalid url, the convention is either 404 or not-found
-            } else {
-                showToast("Couldn't load booking", getErrorMessage(error, "We couldn't load this booking. Please refresh and try again."));
-                return;
-            }
+        if (!error) return;
+        const status = error.response?.status;
+        if (status === 404) {
+            navigate("/404", { replace: true });//you can use any invalid url, the convention is either 404 or not-found
+            return;
         }
+        // 400 = "still pending". Don't toast/blank the page - enter the finalising state and let the
+        // poll below wait for the webhook to settle it (or send them to checkout if it never does).
+        if (status === 400) {
+            setFinalising(true);
+            return;
+        }
+        showToast("Couldn't load booking", getErrorMessage(error, "We couldn't load this booking. Please refresh and try again."));
+    }, [error, bookingId, navigate, showToast]);
+
+    useEffect(() => {
         if (!data) return;
         /* The card can succeed but the booking still end up CANCELLED: a closure landed on the slot in the
            payment window, so the webhook refunded and cancelled it (see WebHookController closure guard).
@@ -39,7 +49,42 @@ const AlreadyPaid = () => {
             return;
         }
         setBookingDetails(data);
-    }, [bookingId, data, error])
+    }, [bookingId, data, navigate])
+
+    /* Waits out the webhook when the booking is still PENDING on arrival (the 400 case above). A card
+       payment's PENDING->COMPLETED flip is done by the async webhook, but Stripe redirects here the
+       instant the card succeeds, so we can beat it. Poll the endpoint directly (not useFetch) until it
+       settles: COMPLETED -> show the confirmation; CANCELLED -> the cancelled screen; still pending after
+       a few tries -> the payment never went through, so send them to checkout to pay. */
+    useEffect(() => {
+        if (!finalising) return;
+        let stopped = false;
+        const poll = async () => {
+            for (let tries = 0; tries < 5 && !stopped; tries++) {
+                await new Promise((r) => setTimeout(r, 2000));//polls the backend every 2 seconds
+                if (stopped) return;
+                try {
+                    const res = await axios.get(`/api/bookings/alreadypaid/${bookingId}`);
+                    if (stopped) return;
+                    if (res.data?.status === "CANCELLED") {
+                        navigate(`/cancelledorcompleted/${bookingId}`, { replace: true });
+                        return;
+                    }
+                    // 200 -> COMPLETED (the endpoint 400s while still pending), so the webhook has landed.
+                    setBookingDetails(res.data);
+                    setFinalising(false);
+                    return;
+                } catch (err) {
+                    // Still 400 = still pending -> keep polling. Anything else -> stop waiting.
+                    if (err.response?.status !== 400) break;
+                }
+            }
+            // Never settled to paid -> the card payment didn't complete; let them finish it at checkout.
+            if (!stopped) navigate(`/checkout/${bookingId}`, { replace: true });
+        };
+        poll();
+        return () => { stopped = true; };
+    }, [finalising, bookingId, navigate])
 
     /* The check above only catches a booking that was ALREADY cancelled when the page first loaded. But the
        webhook that cancels+refunds a closure-conflicted booking runs asynchronously, and Stripe redirects us
@@ -48,7 +93,9 @@ const AlreadyPaid = () => {
        component state. Can't fully close the window - the webhook is inherently async - but shrinks it to a
        couple of seconds; either way the booking is cancelled server-side and the customer gets the email. */
     useEffect(() => {
-        if (!data || data.status !== "COMPLETED") return;
+        // Keyed on bookingDetails (not `data`) so it also covers a booking that arrived COMPLETED via the
+        // finalising poll above, whose result never flows through useFetch's `data`.
+        if (bookingDetails?.status !== "COMPLETED") return;
         let stopped = false;
         const poll = async () => {
             for (let tries = 0; tries < 4 && !stopped; tries++) {
@@ -69,11 +116,15 @@ const AlreadyPaid = () => {
         poll();
         return () => { stopped = true; };//hit when component unmounts, not when we navigate. For example React StrictMode remounts the component in dev
         //or the other effect redirects(eg: booking was already cancelled on load)
-    }, [bookingId, data, navigate])
+    }, [bookingId, bookingDetails, navigate])
 
     //early returns after all hooks. Loading after useEffect
     // Match the page's background (.ap-page) so the loading state doesn't flash white first.
     if (loading) return <LoadingSpinner message="Loading Booking Details" color="#000000" fullscreen background="#f9f8f6" />
+    // Still waiting for the webhook to flip the just-paid card booking to COMPLETED (the 400/pending case).
+    if (finalising && !bookingDetails) return <LoadingSpinner message="Finalising your booking..." color="#000000" fullscreen background="#f9f8f6" />
+    // Error paths (network / 500) show a toast; render nothing behind it rather than a blank "Confirmed" card.
+    if (!bookingDetails) return null;
 
 
 

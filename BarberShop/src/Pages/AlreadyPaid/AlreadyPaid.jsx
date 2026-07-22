@@ -22,10 +22,17 @@ const AlreadyPaid = () => {
             const status = error.response?.status;
             if (status === 404) {
                 navigate("/404", { replace: true });//you can use any invalid url, the convention is either 404 or not-found
-            } else {
-                showToast("Couldn't load booking", getErrorMessage(error, "We couldn't load this booking. Please refresh and try again."));
                 return;
             }
+            // A still-PENDING booking (400) isn't paid or cancelled, so it doesn't belong on this page -
+            // send them to checkout to finish paying. Unlike the success page, you never land here right
+            // after a card payment, so there's no webhook race to wait out.
+            if (status === 400) {
+                navigate(`/checkout/${bookingId}`, { replace: true });
+                return;
+            }
+            showToast("Couldn't load booking", getErrorMessage(error, "We couldn't load this booking. Please refresh and try again."));
+            return;
         }
         if (!data) return;
         setBookingDetails(data);
