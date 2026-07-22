@@ -416,7 +416,7 @@ const BarberDateAndTime = () => {
 
         setBookingLoading(true);
         try {
-            const booking = await adminAxios.post('/api/bookings/create-admin-booking', {
+            await adminAxios.post('/api/bookings/create-admin-booking', {
                 BarberId: selectedBarberId,
                 StartDateTime: `${newDateFormatted}T${selectedTime}:00`,
                 // Duration is now chosen on this page (adminDurationMin) rather than in the modal,
@@ -426,7 +426,7 @@ const BarberDateAndTime = () => {
                 Phone: phone,
             });
             setShowModal(false);
-            navigate(`/admin/${booking.data.id}`);
+            navigate("/admin");
         } catch (err) {
             console.error(err.response?.data?.message || err.response?.data);
             showToast("Booking Failed", getErrorMessage(err));

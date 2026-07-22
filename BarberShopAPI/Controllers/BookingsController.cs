@@ -164,7 +164,10 @@ namespace BarberShopAPI.Controllers
                     StartDateTime = model.StartDateTime,
                     Status = BookingStatus.COMPLETED,
                     DurationMin = durationMinutes,
-                    UserId = user.Id
+                    UserId = user.Id,
+                    // Required (NOT NULL + unique) even though admin bookings aren't reached via a guest
+                    // slug URL - without it this insert would violate the PublicId constraint.
+                    PublicId = Guid.NewGuid().ToString("N")
                 };
                 _context.Bookings.Add(booking);
                 await _context.SaveChangesAsync();
