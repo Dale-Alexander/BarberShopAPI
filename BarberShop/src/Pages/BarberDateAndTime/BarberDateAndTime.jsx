@@ -447,7 +447,7 @@ const BarberDateAndTime = () => {
                 StartDateTime: `${newDateFormatted}T${selectedTime}:00`,
                 ServiceIds: chosenServiceIds,
             });
-            navigate(`/checkout/${booking.data.id}`);
+            navigate(`/checkout/${booking.data.publicId}`);
             
         } catch (err) {
             console.error(err.response?.data?.message || err.response?.data);

@@ -91,7 +91,6 @@ namespace BarberShopAPI.Controllers
         [HttpPost("create-admin-booking")]
         public async Task<IActionResult> CreateAdminBookings([FromBody] AdminCreateBookingCreateViewModel model)
         {
-            Console.WriteLine($"{model.StartDateTime}");
             if (model.DefaultDurationMin == null || model.DefaultDurationMin <= 0)
                 return BadRequest(new { message = "Default booking duration is required for admin bookings" });
 
@@ -259,7 +258,9 @@ namespace BarberShopAPI.Controllers
                 BarberId = barber.Id,
                 StartDateTime = model.StartDateTime,
                 Status = BookingStatus.PENDING,
-                DurationMin = durationMinutes
+                DurationMin = durationMinutes,
+                // Non-guessable public id for the guest URLs (see Booking.PublicId).
+                PublicId = Guid.NewGuid().ToString("N")
             };
 
                 booking.Services = services.Select(s => new BookingService
@@ -279,10 +280,15 @@ namespace BarberShopAPI.Controllers
             {
                 return BadRequest(new { message = "This slot was just booked by someone else, please try again" });
             }
+            catch(Exception ex)
+            {
+                return StatusCode(500, new { message = "An unexpected server error occurred." });
+            }
 
             return Ok(new
             {
-                booking.Id,
+                // PublicId is what the frontend puts in the /checkout URL; the int Id is not exposed.
+                PublicId = booking.PublicId,
                 booking.StartDateTime,
                 booking.Status,
                 BarberId = barber.Id,
@@ -291,12 +297,12 @@ namespace BarberShopAPI.Controllers
             });
         }
         [HttpGet("alreadypaid/{bookingId}")]
-        public async Task<IActionResult> GetAlreadyPaidBookingDetails(int bookingId)
+        public async Task<IActionResult> GetAlreadyPaidBookingDetails(string bookingId)
         {
             try
             {
                 var booking = await _context.Bookings
-                    .Where(b => b.Id == bookingId)
+                    .Where(b => b.PublicId == bookingId)
                     .Select(b => new
                     {
                         b.Status,
@@ -334,7 +340,7 @@ namespace BarberShopAPI.Controllers
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
-                var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.Id == model.BookingId);
+                var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.PublicId == model.BookingId);
                 if (booking == null) return BadRequest(new { message = "Booking not found" });
                 if (booking.Status != BookingStatus.PENDING) return BadRequest(new { message = "Only Pending Bookings can be confirmed" });
 
@@ -352,7 +358,7 @@ namespace BarberShopAPI.Controllers
 
                 if (closure != null) return BadRequest(new { message = "This slot now falls on a shop closure and can no longer be confirmed" });
                 //The closure checks is for when the admin created a closure between PENDING and COMPLETED stage
-                var existingPayment = await _context.Payments.FirstOrDefaultAsync(p => p.BookingId == model.BookingId);
+                var existingPayment = await _context.Payments.FirstOrDefaultAsync(p => p.BookingId == booking.Id);
                 if (existingPayment != null) return BadRequest(new { message = "A payment already exists for this booking" });
 
                 if (!IsValidName(model.FullName))
@@ -367,7 +373,7 @@ namespace BarberShopAPI.Controllers
                 // Recorded total comes from the booking's own services, never from the request body, so the
                 // amount that lands on the payment/receipt/dashboard can't be tampered with by the client.
                 var realTotal = await _context.Bookings
-                    .Where(b => b.Id == model.BookingId)
+                    .Where(b => b.Id == booking.Id)
                     .Select(b => b.Services.Sum(bs => bs.Service.Price))
                     .FirstOrDefaultAsync();
                 if (realTotal <= 0)
@@ -503,7 +509,7 @@ namespace BarberShopAPI.Controllers
             Console.WriteLine($"{request.BookingId}, {request.FullName}, {request.Phone}");
             try
             {
-                var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.Id == request.BookingId);
+                var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.PublicId == request.BookingId);
                 if (booking == null) return BadRequest(new { message = "Booking not found" });
                 if (booking.Status != BookingStatus.PENDING)
                     return BadRequest(new { message = "This booking can no longer be paid for" });
@@ -519,7 +525,7 @@ namespace BarberShopAPI.Controllers
                 // so a customer can't POST a smaller amount and underpay for their appointment. Stripe works
                 // in cents, hence *100.
                 var realTotal = await _context.Bookings
-                    .Where(b => b.Id == request.BookingId)
+                    .Where(b => b.Id == booking.Id)
                     .Select(b => b.Services.Sum(bs => bs.Service.Price))
                     .FirstOrDefaultAsync();
                 if (realTotal <= 0)
@@ -531,7 +537,9 @@ namespace BarberShopAPI.Controllers
                     Currency = "eur",
                     PaymentMethodTypes = new List<string> { "card" },
                     Metadata = new Dictionary<string, string> {
-                            {"BookingId", request.BookingId.ToString() },
+                            // The INTERNAL int id goes in the metadata (the webhook parses it as an int),
+                            // not the public slug - keeps the webhook path unchanged.
+                            {"BookingId", booking.Id.ToString() },
                             {"FullName", request.FullName },
                             {"Phone", request.Phone },
                             {"Email", request.Email }
@@ -960,7 +968,7 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
         }
 
         [HttpGet("checkout/{bookingId}")]
-        public async Task<IActionResult> GetBookingDetailsForCheckout(int bookingId)
+        public async Task<IActionResult> GetBookingDetailsForCheckout(string bookingId)
         {
             Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
             Response.Headers["Pragma"] = "no-cache";
@@ -971,7 +979,7 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
             try
             {
                 var booking = await _context.Bookings
-                    .Where(b => b.Id == bookingId)
+                    .Where(b => b.PublicId == bookingId)
                     .Select(b => new
                     {
                         b.Status,

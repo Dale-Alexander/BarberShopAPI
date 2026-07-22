@@ -8,6 +8,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace BarberShopAPI.Models
 {
     [Index(nameof(BarberId), nameof(StartDateTime), IsUnique = true)]
+    [Index(nameof(PublicId), IsUnique = true)]
     public class Booking
     {
         [Key]
@@ -15,6 +16,14 @@ namespace BarberShopAPI.Models
          * By default, it is auto-incremented
          * */
         public int Id { get; set; }
+
+        /* Non-guessable public identifier (32-char hex, Guid "N") used in guest-facing URLs
+         * (/checkout, /booking/success, /cancelledorcompleted) and the guest payment endpoints instead
+         * of the sequential int Id. Stops URL id-enumeration (IDOR) - e.g. reading another customer's
+         * confirmation via a guessed id. The int Id stays internal: DB relations, Stripe metadata, and
+         * the admin [Authorize] endpoints all keep using it. */
+        [MaxLength(32)]
+        public string PublicId { get; set; }
         public DateTime StartDateTime { get; set; }
         public BookingStatus Status { get; set; } = BookingStatus.PENDING;
         public int? UserId { get; set; }
