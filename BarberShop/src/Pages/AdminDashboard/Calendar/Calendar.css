@@ -1,4 +1,12 @@
-﻿.fc-daygrid-day,
+﻿/* The calendar sits in the admin content column, which is ~270px narrower than the window once the
+   app sidebar is inline (and ~190px wider when it's collapsed). A window media query can't see that,
+   so the responsive switch below is a CONTAINER query against this element's real width instead. */
+#calendar-page {
+    container-type: inline-size;
+    container-name: calpage;
+}
+
+.fc-daygrid-day,
 .fc-timegrid-slot {
     cursor: pointer;
 }
@@ -96,9 +104,10 @@
 }
 
 /* ══════════════════════════════════════
-   MOBILE: ≤ 740px
+   NARROW: stack + drawer whenever the calendar's own column is too tight for the
+   side-by-side Events panel + grid (not the window - see #calendar-page container above).
 ══════════════════════════════════════ */
-@media (max-width: 740px) {
+@container calpage (max-width: 860px) {
 
     /* Force toolbar to single row filling full width */
     .fc .fc-toolbar {
