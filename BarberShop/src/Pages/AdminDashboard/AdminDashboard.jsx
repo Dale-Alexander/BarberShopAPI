@@ -88,7 +88,7 @@ const AdminDashboard = () => {
     const refreshSummary = useCallback(() => loadSummary({ silent: true }), [loadSummary]);
 
     // A filter change starts the table back at page 1; the fetch effect below picks it up.
-    useEffect(() => { setPage(1); }, [filters.fromDate, filters.toDate, filters.status]);
+    useEffect(() => { setPage(1); }, [filters.fromDate, filters.toDate, filters.bookingStatus, filters.paymentStatus, filters.needsReview]);
 
     // Paginated table rows only. Hoisted so the table's Retry button can re-run it. `load` is
     // intentionally left out of the deps (it's re-created each render but only closes over stable
@@ -97,7 +97,9 @@ const AdminDashboard = () => {
         const data = await load({
             fromDate: filters.fromDate,
             toDate: filters.toDate,
-            status: filters.status,
+            bookingStatus: filters.bookingStatus,
+            paymentStatus: filters.paymentStatus,
+            needsReview: filters.needsReview,
             page,
         });
         if (data) {
@@ -109,7 +111,7 @@ const AdminDashboard = () => {
             // retry panel when there are also no rows to fall back on (see BookingsTable).
             setBookingsError(true);
         }
-    }, [filters.fromDate, filters.toDate, filters.status, page]);
+    }, [filters.fromDate, filters.toDate, filters.bookingStatus, filters.paymentStatus, filters.needsReview, page]);
 
     useEffect(() => { loadBookings(); }, [loadBookings]);
 

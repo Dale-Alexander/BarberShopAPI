@@ -260,6 +260,12 @@
     color: #a0a0b0;
 }
 
+/* Cancelled wins over the date-derived Upcoming/Fulfilled labels - red so it reads as terminal. */
+.booking-status.cancelled {
+    background-color: rgba(231, 76, 60, 0.15);
+    color: #e57373;
+}
+
 .barber-error-state {
     display: flex;
     flex-direction: column;

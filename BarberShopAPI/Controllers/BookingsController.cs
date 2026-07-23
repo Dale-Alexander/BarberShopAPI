@@ -608,22 +608,47 @@ namespace BarberShopAPI.Controllers
             }
         }
 
-        /* Shared filter for a single barber's bookings so the paginated list (barber-fetch) and the summary
-         * tiles (barber-summary) always agree on which bookings they're describing. Mirrors the admin filter:
-         * defaults to COMPLETED unless CANCELLED is asked for, with optional PAID/PENDING payment narrowing
-         * and an optional date window. */
-        private IQueryable<Booking> BuildBarberBookingsQuery(int barberId, DateTime? from, DateTime? to, string? status)
+        /* The two filter axes the admin/barber tables expose. They used to share one `status` param, which
+         * made "All" a lie - it meant "all payment statuses of CONFIRMED bookings" and silently hid every
+         * cancellation. They're orthogonal (a cancelled booking can still read as paid when the refund
+         * failed, which is exactly the row worth finding), so they're filtered independently here.
+         *
+         * bookingStatus: CANCELLED -> cancellations only; ALL -> confirmed + cancelled; anything else
+         * (including null) -> CONFIRMED, which stays the default so the table doesn't lead with cancellations.
+         * ALL still excludes BookingStatus.PENDING - a checkout that's currently in flight isn't a booking yet.
+         *
+         * paymentStatus: PAID / UNPAID narrow by the payment row; null means any. */
+        private static IQueryable<Booking> ApplyStatusFilters(IQueryable<Booking> query, string? bookingStatus, string? paymentStatus)
         {
-            var query = _context.Bookings.Where(b => b.BarberId == barberId);
-            if (status == "CANCELLED")
+            /* Only ever show bookings that actually became real. A booking gets its User and its Payment at
+             * the moment it's confirmed - admin create, cash confirm, or the card webhook - so a null Payment
+             * means the customer opened checkout and never finished. BookingExpiryJob marks those CANCELLED,
+             * the same status a staff cancellation uses, so without this the Cancelled and All views fill up
+             * with abandoned checkouts. They stay CANCELLED on purpose: that's what frees the slot again, and
+             * every availability query keys off it. */
+            query = query.Where(b => b.Payment != null);
+
+            if (bookingStatus == "CANCELLED")
                 query = query.Where(b => b.Status == BookingStatus.CANCELLED);
+            else if (bookingStatus == "ALL")
+                query = query.Where(b => b.Status != BookingStatus.PENDING);
             else
                 query = query.Where(b => b.Status == BookingStatus.COMPLETED); // default
 
-            if (status == "PAID")
+            if (paymentStatus == "PAID")
                 query = query.Where(b => b.Payment.Status == PaymentStatus.COMPLETED);
-            else if (status == "PENDING")
+            else if (paymentStatus == "UNPAID")
                 query = query.Where(b => b.Payment.Status == PaymentStatus.PENDING);
+
+            return query;
+        }
+
+        /* Shared filter for a single barber's bookings so the paginated list (barber-fetch) and the summary
+         * tiles (barber-summary) always agree on which bookings they're describing - including when the
+         * admin widens the filter to ALL, at which point the tiles count cancellations too. */
+        private IQueryable<Booking> BuildBarberBookingsQuery(int barberId, DateTime? from, DateTime? to, string? bookingStatus, string? paymentStatus)
+        {
+            var query = ApplyStatusFilters(_context.Bookings.Where(b => b.BarberId == barberId), bookingStatus, paymentStatus);
 
             if (from.HasValue && to.HasValue)
                 query = query.Where(b => b.StartDateTime >= from.Value && b.StartDateTime <= to.Value);
@@ -684,7 +709,8 @@ namespace BarberShopAPI.Controllers
         [HttpGet("barber-fetch/{barberId}")]
         public async Task<IActionResult> GetBarberBookings([FromQuery] DateTime? fromDate,
             [FromQuery] DateTime? toDate,
-            [FromQuery] string? status,
+            [FromQuery] string? bookingStatus,
+            [FromQuery] string? paymentStatus,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 20,
             int barberId = 0)
@@ -704,7 +730,7 @@ namespace BarberShopAPI.Controllers
             if (barber == null) return NotFound(new { message = "Barber not found" });
 
             (page, pageSize) = NormalisePaging(page, pageSize);
-            var query = BuildBarberBookingsQuery(barberId, from, to, status);
+            var query = BuildBarberBookingsQuery(barberId, from, to, bookingStatus, paymentStatus);
             var totalCount = await query.CountAsync();
             var bookings = await query
                 .OrderByDescending(b => b.StartDateTime)
@@ -718,6 +744,10 @@ namespace BarberShopAPI.Controllers
                     Name = b.User.Name,
                     Surname = b.User.Surname,
                     Phone = b.User.Phone,
+                    // Booking lifecycle (CONFIRMED/CANCELLED), separate from the payment status below. The
+                    // table badges each row with it so an ALL view reads correctly and cancelled rows don't
+                    // offer actions the backend will reject.
+                    Status = b.Status.ToString(),
                     // Payment info so a barber's own-bookings table can show status and drive
                     // mark-as-paid, mirroring the admin admin-fetch projection. Payment is a LEFT JOIN
                     // here, so these are null-safe for any booking without a payment row.
@@ -754,7 +784,8 @@ namespace BarberShopAPI.Controllers
         public async Task<IActionResult> GetBarberSummary(int barberId,
             [FromQuery] DateTime? fromDate,
             [FromQuery] DateTime? toDate,
-            [FromQuery] string? status)
+            [FromQuery] string? bookingStatus,
+            [FromQuery] string? paymentStatus)
         {
             try
             {
@@ -763,7 +794,7 @@ namespace BarberShopAPI.Controllers
                 if (fromDate.HasValue && toDate.HasValue && fromDate.Value > toDate.Value) return BadRequest(new { message = "From Date cannot be after To Date" });
                 var (from, to) = ToMaltaDayWindow(fromDate, toDate);
 
-                var query = BuildBarberBookingsQuery(barberId, from, to, status);
+                var query = BuildBarberBookingsQuery(barberId, from, to, bookingStatus, paymentStatus);
                 var totalBookings = await query.CountAsync();
                 var distinctClients = await query.Select(b => b.UserId).Distinct().CountAsync();
                 var distinctServices = await query.SelectMany(b => b.Services).Select(bs => bs.ServiceId).Distinct().CountAsync();
@@ -782,7 +813,9 @@ namespace BarberShopAPI.Controllers
         public async Task<IActionResult> GetBookingsForAdmin(
             [FromQuery] DateTime? fromDate,
             [FromQuery] DateTime? toDate,
-            [FromQuery] string? status,
+            [FromQuery] string? bookingStatus,
+            [FromQuery] string? paymentStatus,
+            [FromQuery] bool needsReview = false,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 20)
         {
@@ -793,25 +826,12 @@ namespace BarberShopAPI.Controllers
                 var (from, to) = ToMaltaDayWindow(fromDate, toDate);
                 var query = _context.Bookings.AsQueryable();
 
-                // NEEDS_REVIEW is a cross-status worklist (a flagged booking can be any status), so it
-                // bypasses the status/payment defaulting below rather than layering on top of it.
-                if (status == "NEEDS_REVIEW")
-                {
+                /* Needs-review is a cross-cutting worklist (a flagged booking can be any status), not a value
+                 * on either filter axis - so it's its own flag and bypasses both rather than layering on top. */
+                if (needsReview)
                     query = query.Where(b => b.NeedsReview);
-                }
                 else
-                {
-                    // Default to COMPLETED unless bookingStatus is explicitly passed
-                    if (status == "CANCELLED")
-                        query = query.Where(b => b.Status == BookingStatus.CANCELLED);
-                    else
-                        query = query.Where(b => b.Status == BookingStatus.COMPLETED); // default
-
-                    if (status == "PAID")
-                        query = query.Where(b => b.Payment.Status == PaymentStatus.COMPLETED);
-                    else if (status == "PENDING")
-                        query = query.Where(b => b.Payment.Status == PaymentStatus.PENDING);
-                }
+                    query = ApplyStatusFilters(query, bookingStatus, paymentStatus);
 
                 if (from.HasValue && to.HasValue)
                 {
@@ -833,6 +853,7 @@ namespace BarberShopAPI.Controllers
                         FirstName = b.User.Name,
                         LastName = b.User.Surname,
                         StartDateTime = b.StartDateTime,
+                        Status = b.Status.ToString(),
                         Amount = b.Payment.Amount,
                         PaymentMethod = b.Payment.Method.ToString(),//without .ToString the frontend would receive numbers like 0 or 1
                         PaymentStatus = b.Payment.Status.ToString(),

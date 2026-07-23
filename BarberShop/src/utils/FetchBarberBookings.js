@@ -1,9 +1,11 @@
 import { adminAxios } from "../Hooks/AxiosInterceptor.js";
-export const fetchBarberBookings = async ({ fromDate, toDate, status, barberId, page = 1, pageSize = 20 }) => {
+export const fetchBarberBookings = async ({ fromDate, toDate, bookingStatus, paymentStatus, barberId, page = 1, pageSize = 20 }) => {
     const params = new URLSearchParams();
     if (fromDate) params.append("fromDate", fromDate.toISOString());
     if (toDate) params.append("toDate", toDate.toISOString());
-    if (status) params.append("status", status);
+    // Omitted params take the server's defaults: CONFIRMED bookings, any payment status.
+    if (bookingStatus) params.append("bookingStatus", bookingStatus);
+    if (paymentStatus) params.append("paymentStatus", paymentStatus);
     params.append("page", page);
     params.append("pageSize", pageSize);
     const res = await adminAxios.get(`/api/bookings/barber-fetch/${barberId}?${params.toString()}`);

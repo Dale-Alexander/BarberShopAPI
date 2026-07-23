@@ -7,9 +7,15 @@ export const usePersistentFilters = () => {
     // -----------------------------
     // READ FILTERS FROM URL
     // -----------------------------
+    /* Two independent axes, not one `status`: bookingStatus is the lifecycle (CONFIRMED / CANCELLED / ALL,
+     * null meaning the CONFIRMED default) and paymentStatus is PAID / UNPAID (null meaning any). They used
+     * to share a single param, which made the "All" pill mean "any payment status, confirmed only" and hid
+     * every cancellation. needsReview is a separate cross-cutting worklist that ignores both. */
     const filters = useMemo(() => {
         return {
-            status: params.get("status") || null,
+            bookingStatus: params.get("bookingStatus") || null,
+            paymentStatus: params.get("paymentStatus") || null,
+            needsReview: params.get("needsReview") === "true",
             fromDate: params.get("fromDate")
                 ? new Date(params.get("fromDate"))
                 : null,
@@ -22,11 +28,19 @@ export const usePersistentFilters = () => {
     // -----------------------------
     // APPLY FILTERS (WRITE TO URL)
     // -----------------------------
-    const applyFilters = ({ status, fromDate, toDate }) => {
+    const applyFilters = ({ bookingStatus, paymentStatus, needsReview, fromDate, toDate }) => {
         const newParams = new URLSearchParams();
 
-        if (status) {
-            newParams.set("status", status);
+        if (bookingStatus) {
+            newParams.set("bookingStatus", bookingStatus);
+        }
+
+        if (paymentStatus) {
+            newParams.set("paymentStatus", paymentStatus);
+        }
+
+        if (needsReview) {
+            newParams.set("needsReview", "true");
         }
 
         if (fromDate) {

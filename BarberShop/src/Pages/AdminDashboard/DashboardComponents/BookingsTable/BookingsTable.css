@@ -285,6 +285,44 @@
     cursor: help;
 }
 
+/* ── Row status badges ──
+   Booking lifecycle and payment are separate axes in the filter, so each gets its own badge rather than
+   printing the raw enum. Also imported by BarberBookings, which reuses these classes. */
+.booking-status-badge,
+.payment-status-badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.status-confirmed {
+    background-color: rgba(0, 200, 150, 0.15);
+    color: #00c896;
+}
+
+.status-cancelled {
+    background-color: rgba(231, 76, 60, 0.15);
+    color: #e57373;
+}
+
+.payment-paid {
+    background-color: rgba(0, 200, 150, 0.15);
+    color: #00c896;
+}
+
+.payment-unpaid {
+    background-color: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;
+}
+
+/* Cancelled rows keep the Actions cell so the mobile card layout stays aligned. */
+.no-actions {
+    color: #6b7280;
+}
+
 /* ── Table – tablet (hide less important columns) ── */
 @media (max-width: 768px) {
     .bookings-admin-table-container {

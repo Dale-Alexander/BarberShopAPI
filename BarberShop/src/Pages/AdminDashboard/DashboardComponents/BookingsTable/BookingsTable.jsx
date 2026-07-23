@@ -44,6 +44,17 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
      * (UpdateBooking / GetBooking guard on ShopClock.Now), so we grey the actions out instead of letting
      * the admin click through to an error. Malta-vs-Malta comparison, same as isWithinRefundCutoff. */
     const isPast = (booking) => new Date(booking.startDateTime) < getMaltaNow();
+
+    /* A cancelled booking is terminal: the backend rejects edit, cancel and mark-as-paid on it
+     * (UpdateBooking / CancelBooking / MarkCashPaid all guard on Status), so the row offers no actions
+     * rather than letting the admin click through to an error toast. These rows only appear at all under
+     * the Cancelled / All booking-status filters. */
+    const isCancelled = (booking) => booking.status === "CANCELLED";
+
+    /* Whether the row has any action left to offer. A cancelled booking keeps only "Mark reviewed", so one
+     * that isn't flagged has an empty menu - show a dash instead of a button that opens nothing. */
+    const hasActions = (booking) => !isCancelled(booking) || booking.needsReview;
+
     useEffect(() => {
         if (openMenuId == null) return;
         const close = () => setOpenMenuId(null);
@@ -85,7 +96,15 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
     const onCancel = async (bookingId, forceRefund = false) => {
         try {
             const res = await adminAxios.patch(`/api/bookings/cancel/${bookingId}${forceRefund ? "?refundAnyway=true" : ""}`);
-            setBookings(prev => prev.filter(b => b.id !== bookingId));
+            /* The row only stops belonging in the (default) confirmed-only view. Under All - or in the
+             * needs-review worklist, which a cancelled booking stays flagged in - keep it and flip its
+             * status so it re-badges as Cancelled instead of vanishing. */
+            const rowStillBelongs = filters.needsReview || filters.bookingStatus === "ALL";
+            setBookings(prev =>
+                rowStillBelongs
+                    ? prev.map(b => b.id === bookingId ? { ...b, status: "CANCELLED" } : b)
+                    : prev.filter(b => b.id !== bookingId)
+            );
             // Pull the chart/stat cards back down so the now-cancelled booking leaves the COMPLETED-only
             // series immediately, instead of lingering until the next page load.
             refreshSummary?.();
@@ -106,11 +125,14 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
         setCancelTarget(null);
     }
 
-    /* NEEDS_REVIEW isn't a payment status in the filter modal - it's a dedicated worklist toggle. Clicking
-     * the header button switches the table in/out of that view via the same URL-param filter plumbing. */
+    /* Needs-review isn't a value on either filter axis - it's a cross-cutting worklist that ignores both
+     * (a flagged booking can be any status). Clicking the header button switches the table in/out of that
+     * view via the same URL-param filter plumbing, clearing the other filters on the way in. */
     const toggleNeedsReview = () => {
         applyFilters({
-            status: filters.status === "NEEDS_REVIEW" ? null : "NEEDS_REVIEW",
+            needsReview: !filters.needsReview,
+            bookingStatus: null,
+            paymentStatus: null,
             fromDate: null,
             toDate: null,
         });
@@ -122,7 +144,7 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
             /* In the review view the row no longer belongs, so drop it; in any other view keep the row but
              * clear the flag so the warning marker disappears. Either way, refresh the badge count. */
             setBookings(prev =>
-                filters.status === "NEEDS_REVIEW"
+                filters.needsReview
                     ? prev.filter(b => b.id !== bookingId)
                     : prev.map(b => b.id === bookingId ? { ...b, needsReview: false, reviewReason: null } : b)
             );
@@ -146,10 +168,10 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
     const onMarkPaid = async (bookingId, amount) => {
         try {
             const res = await adminAxios.patch(`/api/bookings/mark-cash-paid/${bookingId}`, amount != null ? { amount } : {});
-            /* In the PENDING (unpaid) view the row no longer belongs, so drop it; in any other view keep
+            /* In the Unpaid view the row no longer belongs, so drop it; in any other view keep
              * it but flip the status and reflect any amount the admin just entered. Mirrors mark-reviewed. */
             setBookings(prev =>
-                filters.status === "PENDING"
+                filters.paymentStatus === "UNPAID"
                     ? prev.filter(b => b.id !== bookingId)
                     : prev.map(b => b.id === bookingId
                         ? { ...b, paymentStatus: "COMPLETED", amount: res.data?.amount ?? b.amount }
@@ -209,7 +231,7 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                             <button
                                 onClick={toggleNeedsReview}
                                 title="Bookings whose money couldn't be reconciled automatically - check Stripe and reconcile by hand"
-                                className={`bookings-admin-table-btn bookings-admin-table-btn-review ${filters.status === "NEEDS_REVIEW" ? "review-active" : ""}`}
+                                className={`bookings-admin-table-btn bookings-admin-table-btn-review ${filters.needsReview ? "review-active" : ""}`}
                             >
                                 <span className="bookings-admin-table-btn-icon"><AlertTriangle size={16} /></span>
                                 <span className="btn-label">Needs Review</span>
@@ -250,7 +272,8 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                             <th className="table-header">Name</th>
                             <th className="table-header">Date & Time</th>
                             <th className="table-header">Amount</th>
-                            <th className="table-header">Payment Status</th>
+                            <th className="table-header">Status</th>
+                            <th className="table-header">Payment</th>
                             <th className="table-header">Actions</th>
                         </tr>
                     </thead>
@@ -275,27 +298,54 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                                     {format(new Date(b.startDateTime), "HH:mm")}
                                 </td>
                                 <td className="table-data" data-label="Amount">{b.amount}</td>
-                                <td className="table-data" data-label="Payment Status">{b.paymentStatus}</td>
+                                <td className="table-data" data-label="Status">
+                                    <span className={`booking-status-badge ${isCancelled(b) ? "status-cancelled" : "status-confirmed"}`}>
+                                        {isCancelled(b) ? "Cancelled" : "Confirmed"}
+                                    </span>
+                                </td>
+                                {/* Labels match the filter's Paid/Unpaid pills - the raw enum used to read
+                                    "COMPLETED" for a row the Paid filter had just returned. Payment is a
+                                    LEFT JOIN, so a booking with no payment row at all reads null - that's a
+                                    dash, not "Unpaid", which would imply there's money still to collect. */}
+                                <td className="table-data" data-label="Payment">
+                                    {b.paymentStatus == null ? (
+                                        <span className="no-actions">&mdash;</span>
+                                    ) : (
+                                        <span className={`payment-status-badge ${b.paymentStatus === "COMPLETED" ? "payment-paid" : "payment-unpaid"}`}>
+                                            {b.paymentStatus === "COMPLETED" ? "Paid" : "Unpaid"}
+                                        </span>
+                                    )}
+                                </td>
                                 <td className="table-data" data-label="Actions">
                                     <div className="action-menu-container">
+                                        {/* Edit / Cancel / Mark-as-paid are all rejected by the backend once a
+                                            booking is cancelled, so they're dropped rather than left to fail.
+                                            Mark reviewed stays: a cancelled booking is exactly what gets
+                                            flagged when its cancellation email couldn't be delivered. */}
+                                        {hasActions(b) ? (
+                                        <>
                                         <button className="three-dots-btn"
                                             onClick={(e) => toggleActionMenu(e, b.id)}
                                         >⋮
                                         </button>
                                             {openMenuId === b.id && (
                                                 <div className="action-dropdown-menu" style={menuStyle}>
+                                                    {!isCancelled(b) && (
+                                                    <>
                                                     <button className="action-dropdown-item edit-item" disabled={isPast(b)} title={isPast(b) ? "This booking has already passed" : undefined} onClick={() => {
                                                     navigate(`/datetime/${b.id}`); setOpenMenuId(null);
                                                     }}><SquarePen size={14}/> Edit</button>
                                                 <button className="action-dropdown-item cancel-item" disabled={isPast(b)} title={isPast(b) ? "This booking has already passed" : undefined} onClick={() => {
                                                     setCancelTarget(b); setRefundAnyway(false); setOpenMenuId(null);
                                                     }}><Trash2 size={14} /> Cancel</button>
+                                                    </>
+                                                    )}
                                                 {b.needsReview && (
                                                     <button className="action-dropdown-item review-item" onClick={() => {
                                                         setReviewTarget(b); setOpenMenuId(null);
                                                     }}><CheckCircle2 size={14} /> Mark reviewed</button>
                                                 )}
-                                                {b.paymentMethod === "CASH" && b.paymentStatus === "PENDING" && (
+                                                {!isCancelled(b) && b.paymentMethod === "CASH" && b.paymentStatus === "PENDING" && (
                                                     <button className="action-dropdown-item mark-paid-item" onClick={() => {
                                                         setOpenMenuId(null);
                                                         /* Customer cash bookings already have an amount on file -> one-click.
@@ -309,6 +359,10 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                                                 )}
                                                 </div>
                                             )}
+                                        </>
+                                        ) : (
+                                            <span className="no-actions">&mdash;</span>
+                                        )}
                                     </div>
                                 </td>
                             </tr>

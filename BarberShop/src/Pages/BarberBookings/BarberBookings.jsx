@@ -56,7 +56,7 @@ const BarberBookings = () => {
     const [markPaidAmount, setMarkPaidAmount] = useState("");
 
     // A filter or barber change restarts paging at page 1.
-    useEffect(() => { setPage(1); }, [filters.fromDate, filters.toDate, filters.status, id]);
+    useEffect(() => { setPage(1); }, [filters.fromDate, filters.toDate, filters.bookingStatus, filters.paymentStatus, id]);
 
     // Hoisted so the error state's Retry can re-run it. `load` is left out of the deps on purpose
     // (re-created each render but closes over stable values); the real triggers are filters/id/page.
@@ -64,7 +64,8 @@ const BarberBookings = () => {
         const data = await load({
             fromDate: filters.fromDate,
             toDate: filters.toDate,
-            status: filters.status,
+            bookingStatus: filters.bookingStatus,
+            paymentStatus: filters.paymentStatus,
             barberId: Number(id),
             page,
         })
@@ -72,7 +73,7 @@ const BarberBookings = () => {
             setBarberBookings(data);
             setTotalPages(data.totalPages ?? 1);
         }
-    }, [filters.fromDate, filters.toDate, filters.status, id, page]);
+    }, [filters.fromDate, filters.toDate, filters.bookingStatus, filters.paymentStatus, id, page]);
 
     useEffect(() => { loadBookings(); }, [loadBookings]);
 
@@ -82,7 +83,8 @@ const BarberBookings = () => {
                 barberId: Number(id),
                 fromDate: filters.fromDate,
                 toDate: filters.toDate,
-                status: filters.status,
+                bookingStatus: filters.bookingStatus,
+                paymentStatus: filters.paymentStatus,
             });
             setSummary(data);
         }
@@ -90,7 +92,7 @@ const BarberBookings = () => {
             // Non-critical tiles - leave them as-is rather than blocking the page on a toast.
             console.error(err.response?.data?.message || err);
         }
-    }, [filters.fromDate, filters.toDate, filters.status, id]);
+    }, [filters.fromDate, filters.toDate, filters.bookingStatus, filters.paymentStatus, id]);
 
     useEffect(() => { loadSummary(); }, [loadSummary]);
 
@@ -115,6 +117,12 @@ const BarberBookings = () => {
     /* A booking that has already passed can't be rescheduled or cancelled - the backend rejects both,
      * so we grey the actions out. Malta-vs-Malta comparison. */
     const isPast = (booking) => new Date(booking.startDateTime) < getMaltaNow();
+
+    /* A cancelled booking is terminal: the backend rejects edit, cancel and mark-as-paid on it, so the row
+     * offers nothing rather than buttons that error. These rows only appear under the Cancelled / All
+     * booking-status filters. Mirrors the admin BookingsTable. */
+    const isCancelled = (booking) => booking.status === "CANCELLED";
+
     const isWithinRefundCutoff = (booking) => {
         const diffHours = (new Date(booking.startDateTime) - getMaltaNow()) / (1000 * 60 * 60);
         return diffHours < REFUND_CUTOFF_HOURS;
@@ -152,8 +160,10 @@ const BarberBookings = () => {
     const onCancel = async (bookingId, forceRefund = false) => {
         try {
             const res = await adminAxios.patch(`/api/bookings/cancel/${bookingId}${forceRefund ? "?refundAnyway=true" : ""}`);
-            // Cancelling drops it out of the default COMPLETED view; refresh the tiles so counts follow.
-            removeRow(bookingId);
+            /* The row only stops belonging in the (default) confirmed-only view; under All it stays and
+             * re-badges as Cancelled. Either way refresh the tiles so the counts follow. */
+            if (filters.bookingStatus === "ALL") updateRow(bookingId, b => ({ ...b, status: "CANCELLED" }));
+            else removeRow(bookingId);
             loadSummary();
             showToast("Booking cancelled", res.data?.message || "The booking was cancelled.", "success");
         }
@@ -175,7 +185,9 @@ const BarberBookings = () => {
     const onMarkPaid = async (bookingId, amount) => {
         try {
             const res = await adminAxios.patch(`/api/bookings/mark-cash-paid/${bookingId}`, amount != null ? { amount } : {});
-            updateRow(bookingId, b => ({ ...b, paymentStatus: "COMPLETED", amount: res.data?.amount ?? b.amount }));
+            // In the Unpaid view the row no longer belongs, so drop it; otherwise flip it in place.
+            if (filters.paymentStatus === "UNPAID") removeRow(bookingId);
+            else updateRow(bookingId, b => ({ ...b, paymentStatus: "COMPLETED", amount: res.data?.amount ?? b.amount }));
             loadSummary();
             showToast("Marked as paid", res.data?.message || `Booking #${bookingId} was marked as collected.`, "success");
         }
@@ -310,7 +322,13 @@ const BarberBookings = () => {
                 </div>
 
                 {barberBookings?.bookings.length === 0 ? (
-                    <p className="no-bookings">No bookings yet for this barber.</p>
+                    /* "No bookings yet" is only true with no filter applied - with one it's a filter miss,
+                       and claiming the barber has never been booked is misleading. */
+                    <p className="no-bookings">
+                        {filters.bookingStatus || filters.paymentStatus || filters.fromDate
+                            ? "No bookings match this filter."
+                            : "No bookings yet for this barber."}
+                    </p>
                 ) : (
                     <div className="bookings-table-wrap" style={{ position: "relative" }}>
                         <table className="barber-bookings-table">
@@ -332,11 +350,15 @@ const BarberBookings = () => {
                                         <td className="barber-bookings-table-data" data-label="Date & Time">
                                             <div className="datetime-cell">
                                                 {format(new Date(b.startDateTime), "dd-MM-yyyy HH:mm")}
-                                                {new Date(b.startDateTime) > new Date() ? (
+                                                {/* Cancelled has to win over the date-derived label - a cancelled
+                                                    future booking is not "Upcoming", nobody is turning up. */}
+                                                {isCancelled(b) ? (
+                                                    <span className="booking-status cancelled">Cancelled</span>
+                                                ) : isPast(b) ? (
+                                                    <span className="booking-status fulfilled">Fulfilled</span>
+                                                ) : (
                                                     <span className="booking-status upcoming">Upcoming</span>
-                                                ): (
-                                                        <span className="booking-status fulfilled">Fulfilled</span>
-                                                ) }
+                                                )}
                                             </div>
                                         </td>
                                         <td className="barber-bookings-table-data" data-label="Service">
@@ -349,9 +371,28 @@ const BarberBookings = () => {
                                                 ))}
                                             </div>
                                         </td>
-                                        <td className="barber-bookings-table-data" data-label="Payment">{b.paymentStatus}</td>
+                                        {/* Labels match the filter's Paid/Unpaid pills - the raw enum used to
+                                            read "COMPLETED" for a row the Paid filter had just returned. */}
+                                        <td className="barber-bookings-table-data" data-label="Payment">
+                                            {/* Payment is a LEFT JOIN - no payment row reads null, which is a
+                                                dash rather than "Unpaid" (that would imply money to collect). */}
+                                            {b.paymentStatus == null ? (
+                                                <span className="no-actions">&mdash;</span>
+                                            ) : (
+                                                <span className={`payment-status-badge ${b.paymentStatus === "COMPLETED" ? "payment-paid" : "payment-unpaid"}`}>
+                                                    {b.paymentStatus === "COMPLETED" ? "Paid" : "Unpaid"}
+                                                </span>
+                                            )}
+                                        </td>
                                         <td className="barber-bookings-table-data" data-label="Actions">
                                             <div className="action-menu-container">
+                                                {/* Every action here is rejected once the booking is cancelled
+                                                    (there's no mark-reviewed on this table), so the row offers
+                                                    nothing rather than buttons that error. */}
+                                                {isCancelled(b) ? (
+                                                    <span className="no-actions">&mdash;</span>
+                                                ) : (
+                                                <>
                                                 <button className="three-dots-btn" onClick={(e) => toggleActionMenu(e, b.id)}>⋮</button>
                                                 {openMenuId === b.id && (
                                                     <div className="action-dropdown-menu" style={menuStyle}>
@@ -372,6 +413,8 @@ const BarberBookings = () => {
                                                             }}><Banknote size={14} /> Mark as paid</button>
                                                         )}
                                                     </div>
+                                                )}
+                                                </>
                                                 )}
                                             </div>
                                         </td>

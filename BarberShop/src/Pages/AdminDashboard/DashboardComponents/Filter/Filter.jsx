@@ -6,14 +6,16 @@ import { X, Calendar } from "lucide-react";
 import { ToastContext } from "../../../../Context/ToastContext.jsx";
 const FilterModal = ({ setFilterModalOpen,filters, resetFilters, applyFilters }) => {
     const { showToast } = useContext(ToastContext);
-    console.log(filters.fromDate);
     const [selectedFromDate, setSelectedFromDate] = useState(filters.fromDate);
     const [selectedToDate, setSelectedToDate] = useState(filters.toDate);
-    const [statusFilter, setStatusFilter] = useState(filters.status);
+    /* Two separate axes. null on either means its default: CONFIRMED bookings / any payment status. */
+    const [bookingStatusFilter, setBookingStatusFilter] = useState(filters.bookingStatus);
+    const [paymentStatusFilter, setPaymentStatusFilter] = useState(filters.paymentStatus);
     useEffect(() => {
         setSelectedFromDate(filters.fromDate);
         setSelectedToDate(filters.toDate);
-        setStatusFilter(filters.status);
+        setBookingStatusFilter(filters.bookingStatus);
+        setPaymentStatusFilter(filters.paymentStatus);
     }, [filters]);
     // single state
     // derive the params from it
@@ -45,8 +47,12 @@ const FilterModal = ({ setFilterModalOpen,filters, resetFilters, applyFilters })
 
     const ApplyFilter = async () => {
         if ((selectedFromDate && !selectedToDate) || (selectedToDate && !selectedFromDate)) { showToast("Filter Failed", "Both Dates need to be provided or empty"); return; }
+        /* Applying the filter always leaves the needs-review worklist - it ignores both axes, so staying in
+         * it would silently discard whatever the admin just picked here. */
         applyFilters({
-            status: statusFilter,
+            bookingStatus: bookingStatusFilter,
+            paymentStatus: paymentStatusFilter,
+            needsReview: false,
             fromDate: selectedFromDate,
             toDate: selectedToDate
         });
@@ -81,13 +87,23 @@ const FilterModal = ({ setFilterModalOpen,filters, resetFilters, applyFilters })
 
                 <div className="filter-modal-fields">
 
+                    {/* Booking status and payment are separate axes so any combination is reachable -
+                        e.g. cancelled-but-still-paid, the rows where a refund didn't go through. */}
                     <div>
-                        <label className="filter-field-label">Payment Status</label>
+                        <label className="filter-field-label">Booking Status</label>
                         <div className="pill-group">
-                            <button onClick={() => setStatusFilter(null)} className={`pill ${statusFilter === null ? "pill-active" : "pill-inactive"}`}>All</button>
-                            <button onClick={() => setStatusFilter("PAID")} className={`pill ${statusFilter === "PAID" ? "pill-active" : "pill-inactive"}`}>Paid</button>
-                            <button onClick={() => setStatusFilter("PENDING")} className={`pill ${statusFilter === "PENDING" ? "pill-active" : "pill-inactive"}`}>Pending</button>
-                            <button onClick={() => setStatusFilter("CANCELLED")} className={`pill ${statusFilter === "CANCELLED" ? "pill-active" : "pill-inactive"}`}>Cancelled</button>
+                            <button onClick={() => setBookingStatusFilter(null)} className={`pill ${bookingStatusFilter === null ? "pill-active" : "pill-inactive"}`}>Confirmed</button>
+                            <button onClick={() => setBookingStatusFilter("CANCELLED")} className={`pill ${bookingStatusFilter === "CANCELLED" ? "pill-active" : "pill-inactive"}`}>Cancelled</button>
+                            <button onClick={() => setBookingStatusFilter("ALL")} className={`pill ${bookingStatusFilter === "ALL" ? "pill-active" : "pill-inactive"}`}>All</button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="filter-field-label">Payment</label>
+                        <div className="pill-group">
+                            <button onClick={() => setPaymentStatusFilter(null)} className={`pill ${paymentStatusFilter === null ? "pill-active" : "pill-inactive"}`}>Any</button>
+                            <button onClick={() => setPaymentStatusFilter("PAID")} className={`pill ${paymentStatusFilter === "PAID" ? "pill-active" : "pill-inactive"}`}>Paid</button>
+                            <button onClick={() => setPaymentStatusFilter("UNPAID")} className={`pill ${paymentStatusFilter === "UNPAID" ? "pill-active" : "pill-inactive"}`}>Unpaid</button>
                         </div>
                     </div>
                     <div className="modal-calendar-shortcuts">
