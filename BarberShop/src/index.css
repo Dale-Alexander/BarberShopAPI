@@ -82,13 +82,28 @@
     padding: 0;
     box-sizing: border-box;
 }
+/* The dark base is what a route guard's redirect actually paints. A <Navigate> renders null and
+   navigates in an effect, so every guard redirect (login, logout, RedirectIfLoggedIn's bounce,
+   RequireRole's kickout) has one commit with the old page unmounted and the new one not yet
+   mounted. Nothing is mounted then, so body is the only surface painting - left transparent it
+   flashed white between two dark screens. */
 html, body, #root{
     height:100%;
     width:100%;
     font-family:var(--font-family);
+    background-color: var(--primary-500);
 }
 body{
     line-height:1.5;
+}
+
+/* The customer side needs the same treatment in reverse: its pages are light, and UserLayout used
+   to be a bare fragment, so during the commits where a page renders null (guard redirect, loading)
+   only the footer remained and the dark base above would show through. This wrapper is the
+   always-mounted light surface those moments fall back to. */
+.user-app{
+    min-height:100vh;
+    background-color:#f9f8f6;
 }
 
 
