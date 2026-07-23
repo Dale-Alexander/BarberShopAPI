@@ -108,55 +108,25 @@ namespace BarberShopAPI.Controllers
         [Authorize(Roles = "ADMIN")]
         public async Task<IActionResult> GetBarbersForAdmin()
         {
+            // Deliberately unfiltered: this admin-only screen shows deactivated barbers too, so the
+            // admin can reach an ex-barber's history and revive a wrongly-deleted one. The customer-
+            // facing barbers-with-bookings above stays active-only. Active first, then by name, so
+            // the working roster leads.
             var BarbersList = (from b in _context.Barbers
-                               where b.isActive == true
+                               orderby b.isActive descending, b.User.Name, b.User.Surname
                                select new BarbersForAdminDisplayViewModel
                                {
                                    Id = b.Id,
                                    FirstName = b.User.Name,
                                    LastName = b.User.Surname,
                                    ImageUrl = b.ImageUrl,
-                                   TotalBookings = b.Bookings.Count(bk => bk.Status == BookingStatus.COMPLETED)
+                                   TotalBookings = b.Bookings.Count(bk => bk.Status == BookingStatus.COMPLETED),
+                                   IsActive = b.isActive,
+                                   Email = b.User.Email
                                });
             var result = await BarbersList.ToListAsync();
             return Ok(result);
         }
-        [Authorize]
-        [HttpGet("{barberId}/bookings")]
-        public async Task<IActionResult> GetBarberBookings(int barberId)
-        //Here the parameter barberId in the function refers to the barberId in HttpGet(...). The barberId in HttpGet refers
-        //to the barberId being passed from the frontend
-        {
-            var barber = await _context.Barbers
-                .Where(b => b.Id == barberId && b.isActive == true)
-                .Select(b => new
-                {
-                    BarberName = b.User.Name,
-                    BarberSurname = b.User.Surname,
-                    BarberImageUrl = b.ImageUrl,
-                    BarberActive = b.isActive,
-                    Bookings = b.Bookings.Where(booking => booking.Status == BookingStatus.COMPLETED)
-                    .Select(bk => new
-                    {
-                        bk.UserId,
-                        Name = bk.User.Name,
-                        Surname = bk.User.Surname,
-                        bk.StartDateTime,
-                        Phone = bk.User.Phone,
-                        Services = bk.Services
-                            .Select(s => new
-                            {
-                                ServiceName = s.Service.Name,
-                                s.Service.Price
-                            })
-                    })
-                }).FirstOrDefaultAsync();
-
-            if (barber == null) return NotFound();
-            return Ok(barber);
-        }
-
-
         // Same rules customer names go through in BookingsController.IsValidName: non-empty,
         // at least 2 real characters, and no digits - a barber is a person, not "123".
         private bool IsValidName(string name)
@@ -259,17 +229,23 @@ namespace BarberShopAPI.Controllers
                         existingUser.Role = Role.BARBER;
                         existingUser.Barber.isActive = true;
 
-                        // Reviving overwrites the old image, so remember any locally-stored previous
-                        // file and delete it after the save succeeds - same cleanup as UpdateService and
-                        // DeleteBarber, so a superseded upload doesn't orphan in wwwroot. http URLs aren't
-                        // ours to delete, and we skip it if the path didn't actually change.
+                        // A new photo replaces the old one; supplying none KEEPS what's already there.
+                        // The admin team screen's Reactivate flow shows the barber's existing photo in the
+                        // modal, so nulling the column when no file is picked would silently wipe a photo
+                        // the admin was just looking at. Matches UpdateBarber's "leave as-is" semantics.
+                        // When we do replace a locally-stored file, remember it and delete it after the
+                        // save succeeds - same cleanup as UpdateService and DeleteBarber, so a superseded
+                        // upload doesn't orphan in wwwroot. http URLs aren't ours to delete.
                         string oldLocalImage = null;
-                        if (!string.IsNullOrWhiteSpace(existingUser.Barber.ImageUrl)
-                            && !existingUser.Barber.ImageUrl.StartsWith("http")
-                            && existingUser.Barber.ImageUrl != finalImageUrl)
-                            oldLocalImage = existingUser.Barber.ImageUrl;
+                        if (finalImageUrl != null)
+                        {
+                            if (!string.IsNullOrWhiteSpace(existingUser.Barber.ImageUrl)
+                                && !existingUser.Barber.ImageUrl.StartsWith("http")
+                                && existingUser.Barber.ImageUrl != finalImageUrl)
+                                oldLocalImage = existingUser.Barber.ImageUrl;
 
-                        existingUser.Barber.ImageUrl = finalImageUrl;
+                            existingUser.Barber.ImageUrl = finalImageUrl;
+                        }
                         existingUser.TokenVersion++;
                         /* Why increment instead of resetting to 0 ? 
                          * Resetting to 0 could theoretically match an old token that also had version 0 from before 
@@ -297,12 +273,23 @@ namespace BarberShopAPI.Controllers
                             if (System.IO.File.Exists(oldPath)) System.IO.File.Delete(oldPath);
                         }
 
+                        // Return the same shape as the create branch below, and the same shape the admin
+                        // team list is built from - the caller drops this straight into its list. The id
+                        // in particular was missing here, so a revived barber rendered with an undefined
+                        // id and dead row actions until a refresh.
                         return Ok(new
                         {
                             message = "Barber created successfully",
-                            imageUrl = finalImageUrl,
+                            id = existingUser.Barber.Id,
+                            // The persisted value, not finalImageUrl - those differ when no new photo
+                            // was supplied and the existing one was kept.
+                            imageUrl = existingUser.Barber.ImageUrl,
                             firstName = firstName,
-                            lastName = lastName
+                            lastName = lastName,
+                            email = existingUser.Email,
+                            isActive = true,
+                            totalBookings = await _context.Bookings.CountAsync(bk =>
+                                bk.BarberId == existingUser.Barber.Id && bk.Status == BookingStatus.COMPLETED)
                         });
 
                         //otherwise create a new barber
@@ -337,7 +324,10 @@ namespace BarberShopAPI.Controllers
                         id = barber.Id,
                         imageUrl = finalImageUrl,
                         firstName = firstName,
-                        lastName = lastName
+                        lastName = lastName,
+                        email = user.Email,
+                        isActive = true,
+                        totalBookings = 0
                     });
                 }
             }

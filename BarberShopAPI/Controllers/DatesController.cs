@@ -23,6 +23,18 @@ namespace BarberShopAPI.Controllers
         {
             _context = context;
         }
+
+        /* The caller's own Barber.Id when they're a BARBER, or null if they have no barber row - or if
+         * that row is deactivated. Kept in step with the identically-named helper in BookingsController;
+         * see the defence-in-depth note there. Returning null fails these guards closed, since a real
+         * barberId can never equal null.
+         * Keeps a barber's closure reads/deletes scoped to their own; ADMIN callers are handled
+         * with User.IsInRole and never rely on this. */
+        private async Task<int?> CallerBarberId()
+        {
+            var callerUserId = int.Parse(User.FindFirstValue("id") ?? "0");
+            return await _context.Barbers.Where(b => b.UserId == callerUserId && b.isActive).Select(b => (int?)b.Id).FirstOrDefaultAsync();
+        }
         [Authorize(Roles = "ADMIN,BARBER")]
         [HttpPost]
         public async Task<IActionResult> AddClosureAsync([FromBody] ShopClosureViewModel newClosure)
@@ -33,7 +45,10 @@ namespace BarberShopAPI.Controllers
                 if(role == "BARBER")
                 {
                     var userId = int.Parse(User.FindFirstValue("id"));
-                    var barber = await _context.Barbers.FirstOrDefaultAsync(b => b.UserId == userId);
+                    // isActive keeps this in step with CallerBarberId above and BookingsController's
+                    // guards: a deactivated barber can't book time off either. Returning early also
+                    // matters here - leaving BarberId unset would make this a SHOP-WIDE closure.
+                    var barber = await _context.Barbers.FirstOrDefaultAsync(b => b.UserId == userId && b.isActive);
                     if (barber == null) return NotFound(new { message = "Barber profile not found" });
                     newClosure.BarberId = barber.Id;
                 }
@@ -289,10 +304,13 @@ namespace BarberShopAPI.Controllers
             }
         }
 
-        [Authorize(Roles = "BARBER")]
+        [Authorize(Roles = "ADMIN,BARBER")]
         [HttpGet("barber/{barberId}/closures")]
         public async Task<IActionResult> GetBarberClosures(int barberId)
         {
+            // A barber may only view their own closures; an admin may view any barber's.
+            if (!User.IsInRole("ADMIN") && barberId != await CallerBarberId())
+                return StatusCode(403, new { message = "You can only view your own closures" });
             var todayDate = ShopClock.Today;
             try
             {
@@ -324,6 +342,14 @@ namespace BarberShopAPI.Controllers
             {
                 var shopClosure = await _context.ShopClosures.FirstOrDefaultAsync(c => c.IsActive == true && c.Id == closureId);
                 if (shopClosure == null) return NotFound(new { message = "This shop closure was not found" });
+                // Barbers may only delete their OWN barber-scoped closures; shop-wide (BarberId == null)
+                // and other barbers' closures are admin-only.
+                if (!User.IsInRole("ADMIN"))
+                {
+                    var callerBarberId = await CallerBarberId();
+                    if (shopClosure.BarberId == null || shopClosure.BarberId != callerBarberId)
+                        return StatusCode(403, new { message = "You can only delete your own closures" });
+                }
                 shopClosure.IsActive = false;
                 await _context.SaveChangesAsync();
                 return Ok(new { message = $"The event '{shopClosure.Reason}' was deleted" });

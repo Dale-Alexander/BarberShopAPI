@@ -1,16 +1,23 @@
-import {Eye, Pencil, Trash2 } from "lucide-react";
+import {Eye, Pencil, Trash2, RotateCcw } from "lucide-react";
 import { useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import "./MemberCard.css";
 import { BarberBookings } from "../../../../Context/BarberContext";
 import { resolveBarberImage, handleBarberImageError } from "../../../../utils/barberImage.js";
-const MemberCard = ({ barber, setDeleteBarberId, onEdit }) => {
+const MemberCard = ({ barber, setDeleteBarberId, onEdit, onReactivate }) => {
     const navigate = useNavigate();
     const {setViewBookingsBarber} = useContext(BarberBookings);
     //this might need to be passed as a prop from TeamMembers.jsx
 
+    /* Deactivated barbers get View + Reactivate only. Edit and Delete are hidden rather than disabled
+       because the backend rejects both outright for an inactive row (UpdateBarber filters on isActive,
+       DeleteBarber 400s "already inactive") - a fixable name is corrected on the way back in through
+       the reactivate modal. Viewing still works: their past bookings are real history. */
+    const isActive = barber.isActive;
+
     return (
-        <div className="barber-card">
+        <div className={`barber-card${isActive ? "" : " barber-card--inactive"}`}>
+            {!isActive && <span className="barber-card-badge">INACTIVE</span>}
             <div className="barber-card-img">
                 <img src={resolveBarberImage(barber.imageUrl)} onError={handleBarberImageError} />
             </div>
@@ -29,16 +36,26 @@ const MemberCard = ({ barber, setDeleteBarberId, onEdit }) => {
                     title="View Bookings">
                     <Eye size={16} />
                 </button>
-                <button className="barber-action-btn barber-action-edit"
-                    onClick={() => onEdit(barber)}
-                    title="Edit Barber">
-                    <Pencil size={16} />
-                </button>
-                <button className = "barber-action-btn barber-action-delete"
-                onClick = {() => setDeleteBarberId(barber.id)}
-                title = "Delete Barber">
-                    <Trash2 size = {16}/>
-                </button>
+                {isActive ? (
+                    <>
+                        <button className="barber-action-btn barber-action-edit"
+                            onClick={() => onEdit(barber)}
+                            title="Edit Barber">
+                            <Pencil size={16} />
+                        </button>
+                        <button className = "barber-action-btn barber-action-delete"
+                        onClick = {() => setDeleteBarberId(barber.id)}
+                        title = "Delete Barber">
+                            <Trash2 size = {16}/>
+                        </button>
+                    </>
+                ) : (
+                    <button className="barber-action-btn barber-action-reactivate"
+                        onClick={() => onReactivate(barber)}
+                        title="Reactivate Barber">
+                        <RotateCcw size={16} />
+                    </button>
+                )}
             </div>
         </div>
     )

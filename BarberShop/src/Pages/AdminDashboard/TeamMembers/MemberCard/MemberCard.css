@@ -85,3 +85,41 @@
     background: hsl(0, 84%, 60%);
     color:hsl(210, 20%, 90%);
 }
+.barber-action-reactivate{
+    background:hsl(220, 15%, 24%);
+    color:var(--green-500);
+}
+.barber-action-reactivate:hover{
+    background:var(--green-500);
+    color:hsl(220, 25%, 10%);
+}
+
+/* Deactivated barber: muted so the Inactive tab reads as an archive, but not so faint it looks
+   broken - the name and actions stay legible. The photo carries most of the dimming. */
+.barber-card--inactive{
+    opacity:0.72;
+}
+.barber-card--inactive:hover{
+    opacity:1;
+}
+.barber-card--inactive .barber-card-img{
+    border-color:hsl(215, 15%, 45%);
+}
+.barber-card--inactive .barber-card-img img{
+    filter:grayscale(1);
+}
+.barber-card--inactive .barber-card-bookings-count{
+    color:hsl(215, 15%, 55%);
+}
+.barber-card-badge{
+    position:absolute;
+    top:10px;
+    right:10px;
+    background:hsl(215, 15%, 30%);
+    color:hsl(210, 20%, 80%);
+    font-size:0.62rem;
+    font-weight:700;
+    letter-spacing:0.06em;
+    padding:3px 8px;
+    border-radius:999px;
+}

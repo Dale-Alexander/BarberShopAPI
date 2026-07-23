@@ -1,4 +1,4 @@
-import { Plus, Trash2, X, Users, Check } from "lucide-react";
+import { Plus, Trash2, X, Users, Check, RotateCcw, UserX } from "lucide-react";
 import { useState , useEffect, useContext, useRef} from "react";
 import MemberCard from "./MemberCard/MemberCard";
 import "./TeamMembers.css";
@@ -32,6 +32,16 @@ stored i the browser's memory which the backend cant access*/
     const { showToast } = useContext(ToastContext);
     const createModalContainerRef = useRef(null);
 
+    // Active / Inactive tabs. The list endpoint returns both, so switching is a pure client-side
+    // filter - no refetch. Active is the default because it's the working roster; deactivated barbers
+    // accumulate over time and would otherwise dilute the grid.
+    const [activeTab, setActiveTab] = useState("active");
+
+    // Reactivate reuses the create modal (and the backend's revive-by-email branch in CreateBarber),
+    // so this holds the barber being brought back; null = the modal is in plain "add" mode.
+    const [reactivateBarber, setReactivateBarber] = useState(null);
+    const isReactivate = !!reactivateBarber;
+
     // Edit flow. Kept in its own state so the edit modal never collides with the create modal's
     // fields. editBarber holds the row being edited (null = closed).
     const [editBarber, setEditBarber] = useState(null);
@@ -56,7 +66,9 @@ stored i the browser's memory which the backend cant access*/
         setSubmitting(true);
         try{
             await adminAxios.delete(`/api/barbers/delete/${id}`);
-            setBarbers(barbers.filter(b => b.id !== id));
+            // Soft delete server-side, so flip the flag in place rather than dropping the row - the card
+            // moves to the Inactive tab, where it can still be viewed or reactivated.
+            setBarbers(barbers.map(b => b.id === id ? { ...b, isActive: false } : b));
             setDeleteBarberId(null);
         }
         catch(err){
@@ -85,31 +97,81 @@ stored i the browser's memory which the backend cant access*/
         if(imageFile){
             formData.append("ImageFile", imageFile);//localUrl
         }
-        else if(newImage?.trim()){
+        else if(!isReactivate && newImage?.trim()){
+            /* Skipped when reactivating: there, newImage holds the barber's *existing* photo resolved to
+               an absolute URL purely for the preview. Sending it back would rewrite the stored path as an
+               http URL. Sending nothing means the backend keeps the photo it already has. */
             formData.append("ImageUrl", newImage.trim());
         }
-        
+
         const barber = await adminAxios.post("/api/barbers/create-barber",formData);
-        console.log(formData.entries());
-        console.log(barber, barber.data);
-        setBarbers([...barbers, barber.data]);
-        setNewName("");
-        setNewImage("");
-        setImageFile(null);
-        setEmail("");
-        setPassword("");
-        setShowCreate(false);
+        const row = barber.data;
+        if (isReactivate) {
+            // Same row, brought back to life - merge the server's canonical values in place instead of
+            // appending, then follow the barber to the tab they just moved to.
+            setBarbers(barbers.map(b => b.id === reactivateBarber.id
+                ? { ...b, firstName: row.firstName, lastName: row.lastName, imageUrl: row.imageUrl,
+                    email: row.email, totalBookings: row.totalBookings, isActive: true }
+                : b));
+            setActiveTab("active");
+        }
+        else {
+            setBarbers([...(barbers ?? []), row]);
+        }
+        closeCreate();
     }
     catch(err){
-        if (err.response?.status === 409) {
+        /* Inline-under-the-field only makes sense when the admin can edit the field. While reactivating
+           the email is locked, and a 409 there means someone else already revived this barber in another
+           session - nothing to retype, so it goes to a toast like any other failure. */
+        if (err.response?.status === 409 && !isReactivate) {
             setEmailConflict(getErrorMessage(err));
         } else {
-            showToast("Couldn't add barber", getErrorMessage(err, "Something went wrong. Please refresh or try a different email."));
+            showToast(isReactivate ? "Couldn't reactivate barber" : "Couldn't add barber",
+                getErrorMessage(err, "Something went wrong. Please refresh or try a different email."));
         }
     }
     finally{
         setSubmitting(false);
     }
+    }
+
+    const openCreate = () => {
+        setReactivateBarber(null);
+        setNewName("");
+        setEmail("");
+        setPassword("");
+        setNewImage("");
+        setImageFile(null);
+        setEmailConflict(null);
+        setShowCreate(true);
+    }
+
+    /* Reactivating posts to create-barber with the barber's original email, which the backend routes to
+       its revive branch: it flips isActive back, resets the name/photo, and bumps TokenVersion so the
+       barber must log in with the password set here. Hence email is prefilled and locked (changing it
+       would create a second barber instead of reviving this one) and password is required. */
+    const openReactivate = (barber) => {
+        setReactivateBarber(barber);
+        setNewName(`${barber.firstName ?? ""} ${barber.lastName ?? ""}`.trim());
+        setEmail(barber.email ?? "");
+        setPassword("");
+        // Preview only - never posted back. See the ImageUrl guard in handleCreate.
+        setNewImage(barber.imageUrl ? resolveBarberImage(barber.imageUrl) : "");
+        setImageFile(null);
+        setEmailConflict(null);
+        setShowCreate(true);
+    }
+
+    const closeCreate = () => {
+        setShowCreate(false);
+        setReactivateBarber(null);
+        setNewName("");
+        setEmail("");
+        setPassword("");
+        setNewImage("");
+        setImageFile(null);
+        setEmailConflict(null);
     }
 
     const openEdit = (barber) => {
@@ -232,6 +294,10 @@ stored i the browser's memory which the backend cant access*/
         && !validatePassword(password);
     const editNameError = editName ? validateNameInline(editName) : null;
 
+    const activeBarbers = barbers?.filter(b => b.isActive) ?? [];
+    const inactiveBarbers = barbers?.filter(b => !b.isActive) ?? [];
+    const visibleBarbers = activeTab === "active" ? activeBarbers : inactiveBarbers;
+
     if (loading) {
         return <LoadingSpinner message="Loading Team Data" color="#e0e0e0"/>
     }
@@ -254,22 +320,55 @@ stored i the browser's memory which the backend cant access*/
                     <h1 className="page-title">Manage Team</h1>
                     <p className="page-subtitle">Welcome to your team members</p>
                 </div>
-                <button className="create-barber" onClick={() => { setShowCreate(true); setEmailConflict(null); }}>
+                <button className="create-barber" onClick={openCreate}>
                     <Plus size={16} />
                     ADD BARBER
                 </button>
             </div>
             <div className="team-content-area">
+                <div className="team-tabs" role="tablist">
+                    <button role="tab"
+                        aria-selected={activeTab === "active"}
+                        className={`team-tab${activeTab === "active" ? " team-tab--selected" : ""}`}
+                        onClick={() => setActiveTab("active")}>
+                        Active <span className="team-tab-count">{activeBarbers.length}</span>
+                    </button>
+                    <button role="tab"
+                        aria-selected={activeTab === "inactive"}
+                        className={`team-tab${activeTab === "inactive" ? " team-tab--selected" : ""}`}
+                        onClick={() => setActiveTab("inactive")}>
+                        Inactive <span className="team-tab-count">{inactiveBarbers.length}</span>
+                    </button>
+                </div>
                 <div className="team-grid">
-                    {barbers?.length ? (
-                        barbers?.map((b) => (
-                        <MemberCard key={b.id} barber={b} setDeleteBarberId = {setDeleteBarberId} onEdit={openEdit}/>
-                        ))) : (
+                    {visibleBarbers.length ? (
+                        visibleBarbers.map((b) => (
+                        <MemberCard key={b.id} barber={b} setDeleteBarberId = {setDeleteBarberId} onEdit={openEdit} onReactivate={openReactivate}/>
+                        ))) : activeTab === "inactive" ? (
+                            /* Deliberately no action button - the way a barber lands here is by being
+                               deleted from the Active tab, so there's nothing to do from an empty one. */
+                            <div className="team-empty-state">
+                                <UserX size={48} />
+                                <h3>No deactivated barbers</h3>
+                                <p>Barbers you delete will appear here, and can be brought back</p>
+                            </div>
+                    ) : (
                             <div className="team-empty-state">
                                 <Users size={48} />
-                                <h3>No barbers yet</h3>
-                                <p>Get started by adding your first team member</p>
-                                <button className="create-barber" onClick={() => { setShowCreate(true); setEmailConflict(null); }}>
+                                {inactiveBarbers.length ? (
+                                    /* Not "no barbers yet" - there are barbers, they're just all
+                                       deactivated, and reactivating one is the likelier fix. */
+                                    <>
+                                        <h3>No active barbers</h3>
+                                        <p>Add a barber, or bring one back from the Inactive tab</p>
+                                    </>
+                                ) : (
+                                    <>
+                                        <h3>No barbers yet</h3>
+                                        <p>Get started by adding your first team member</p>
+                                    </>
+                                )}
+                                <button className="create-barber" onClick={openCreate}>
                                     <Plus size={16} />
                                     ADD BARBER
                                 </button>
@@ -282,19 +381,25 @@ stored i the browser's memory which the backend cant access*/
                     onMouseDown={(e) => createModalContainerRef.current = e.target}
                     onClick={(e) => {
                         if (createModalContainerRef.current === e.currentTarget) {
-                            setShowCreate(false);
+                            closeCreate();
                         }
                     }}
                 >
                     <div className="modal-content modal-content--wide"
                         onClick={(e) => e.stopPropagation()}>
                         <div className="modal-header">
-                            <h2>Add New Barber</h2>
-                            <button className="modal-close" onClick={() => setShowCreate(false)}>
+                            <h2>{isReactivate ? "Reactivate Barber" : "Add New Barber"}</h2>
+                            <button className="modal-close" onClick={closeCreate}>
                                 <X size={20} />
                             </button>
                         </div>
                         <div className="modal-body">
+                            {isReactivate && (
+                                <p className="modal-note">
+                                    This will restore {reactivateBarber.firstName}'s profile and past bookings.
+                                    They'll need to log in with the password you set below.
+                                </p>
+                            )}
                             <div className="form-group">
                                 <label className="form-label">Photo(optional)</label>
                                 <div className={`image-dropzone${dragActive ? " image-dropzone--active" : ""}`}
@@ -311,14 +416,22 @@ stored i the browser's memory which the backend cant access*/
                                     {newImage ? (
                                         <div className="image-preview-wrap">
                                             <img src={newImage} className="image-preview" />
-                                            <button type="button"
-                                                className="image-preview-remove"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    setNewImage(null);
-                                                }}>
-                                                <X size={14} />
-                                            </button>
+                                            {/* Hidden when this is the barber's existing photo being shown for
+                                                reactivation: create-barber has no "remove image" flag, so the X
+                                                would clear the preview without clearing anything server-side.
+                                                Uploading a replacement works; removing outright is Edit's job,
+                                                available again once they're active. */}
+                                            {!(isReactivate && !imageFile) && (
+                                                <button type="button"
+                                                    className="image-preview-remove"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setNewImage(null);
+                                                        setImageFile(null);
+                                                    }}>
+                                                    <X size={14} />
+                                                </button>
+                                            )}
                                         </div>
                                     ) : (
                                         <div className="image-dropzone-placeholder">
@@ -344,25 +457,29 @@ stored i the browser's memory which the backend cant access*/
                             </div>
                             <div className="form-group">
                                 <label className="form-label">Email *</label>
+                                {/* Locked when reactivating - the email is what identifies which barber the
+                                    backend revives, so editing it would silently create a second one. */}
                                 <input className={`form-input${(createEmailError || emailConflict) ? " form-input--invalid" : ""}`}
                                     placeholder="Enter barber's Email"
                                     value={email}
+                                    readOnly={isReactivate}
+                                    disabled={isReactivate}
                                     onChange={(e) => { setEmail(e.target.value); setEmailConflict(null); }} />
                                 {(createEmailError || emailConflict) && <span className="form-error">{createEmailError || emailConflict}</span>}
                             </div>
                             <div className="form-group">
-                                <label className="form-label">Password *</label>
+                                <label className="form-label">{isReactivate ? "New Password *" : "Password *"}</label>
                                 <input className={`form-input${createPasswordError ? " form-input--invalid" : ""}`}
                                     type="password"
-                                    placeholder="Enter barber's Password"
+                                    placeholder={isReactivate ? "Set a new password" : "Enter barber's Password"}
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)} />
                                 {createPasswordError && <span className="form-error">{createPasswordError}</span>}
                             </div>
                         </div>
                         <div className="modal-footer">
-                            <button className="btn-secondary" onClick={() => setShowCreate(false)}>Cancel</button>
-                            <button className="btn-primary" onClick={handleCreate} disabled={!createValid || submitting}>{submitting ? <PulseLoader size={8} color="hsl(220, 25%, 10%)" /> : <Plus size={16} />}</button>
+                            <button className="btn-secondary" onClick={closeCreate}>Cancel</button>
+                            <button className="btn-primary" onClick={handleCreate} disabled={!createValid || submitting}>{submitting ? <PulseLoader size={8} color="hsl(220, 25%, 10%)" /> : isReactivate ? <RotateCcw size={16} /> : <Plus size={16} />}</button>
                         </div>
                     </div>
                 </div>

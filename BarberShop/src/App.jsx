@@ -51,7 +51,6 @@ function App() {
                 <Route element={<RequireRole Roles={["ADMIN"]} />}>
                     <Route element={<AdminLayout />}>
                         <Route path="/admin" element={<AdminDashboard />} />
-                        <Route path="/admin/calendar" element={<AdminCalendar />} />
                         <Route path="/admin/team" element={<TeamMembers />} />
                         <Route path="/admin/services" element={<Services />} />
                         <Route path="/admin/settings" element={<Settings />} />
@@ -59,6 +58,9 @@ function App() {
                 </Route>
                 <Route element={<RequireRole Roles={["ADMIN", "BARBER"]} />}>
                     <Route element={<AdminLayout />}>
+                        {/* Calendar is open to barbers too: they manage their OWN closures here
+                            (the backend scopes reads/creates/deletes to their barber id). */}
+                        <Route path="/admin/calendar" element={<AdminCalendar />} />
                         <Route element={<RequireOwnBarber />}>
                             <Route path="/admin/team/:id" element={<BarberBookings/> }/>
                         </Route>

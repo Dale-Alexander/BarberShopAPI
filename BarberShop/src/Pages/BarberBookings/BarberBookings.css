@@ -73,6 +73,32 @@
     border: 3px solid hsl(220, 25%, 14%);
 }
 
+.barber-detail-status--inactive {
+    background: hsl(215, 15%, 45%);
+}
+
+/* Shown above the table when viewing a deactivated barber, so the missing Create Booking button
+   reads as intentional rather than as something failing to load. */
+.barber-inactive-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 20px;
+    padding: 12px 14px;
+    background: hsla(40, 90%, 60%, 0.08);
+    border-left: 2px solid hsl(40, 90%, 60%);
+    border-radius: 0.25rem;
+    color: var(--muted-fg);
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.barber-inactive-notice svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: hsl(40, 90%, 60%);
+}
+
 .barber-detail-meta {
     display: flex;
     flex-direction: column;
@@ -169,13 +195,24 @@
     border-bottom: 1px solid hsl(220, 20%, 20%);
 }
 
-.bookings-table .barber-bookings-table-data {
+/* The barber table has its OWN class (not the shared .bookings-table) so it doesn't inherit the admin
+   BookingsTable mobile rules - those hide the admin's 4th column and switch to a data-label card layout
+   tuned for the admin's columns, which knocked the barber table's booking info out of alignment. */
+.barber-bookings-table {
+    width: 100%;
+    border-collapse: collapse;
+    /* 6 columns don't fit a phone; force the wrapper to scroll horizontally instead of squishing/
+       wrapping the cells (which is what looked "out of line"). */
+    min-width: 720px;
+}
+
+.barber-bookings-table .barber-bookings-table-data {
     padding: 10px 12px;
     color: var(--grey-100);
     border-bottom: 1px solid hsl(220, 20%, 20%);
 }
 
-.bookings-table .barber-bookings-table-row:last-child .barber-bookings-table-data {
+.barber-bookings-table .barber-bookings-table-row:last-child .barber-bookings-table-data {
     border-bottom: none;
 }
 
@@ -245,7 +282,9 @@
 .barber-bookings-top-right{
     display:flex;
     align-items:center;
-    gap:5px;
+    gap:8px;
+    flex-wrap:wrap;
+    justify-content:flex-end;
 }
 
 .bookings-admin-table-btn {
@@ -278,4 +317,94 @@
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+/* Narrow screens: let the header controls drop below the title and fill the row, and give the table
+   its own horizontal scroll so nothing spills out of line. */
+@media (max-width: 640px) {
+    .barber-bookings-top-right {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .barber-bookings-top-right > section {
+        flex: 1 1 auto;
+    }
+
+    .barber-bookings-top-right .bookings-admin-table-btn {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .barber-bookings-top-right .back-to-team {
+        flex: 1 1 100%;
+        justify-content: center;
+    }
+}
+
+/* Narrow screens: instead of scrolling the 6-column table left-to-right, collapse each row into a
+   stacked "Label: value" card - same pattern as the admin BookingsTable. The 720px breakpoint matches
+   the table's desktop min-width, so above it the table shows normally and at/below it nothing scrolls
+   sideways. Each cell's label comes from its data-label attribute (set in BarberBookings.jsx). */
+@media (max-width: 720px) {
+    .barber-bookings-table {
+        min-width: 0;
+    }
+
+    .barber-bookings-table thead {
+        display: none;
+    }
+
+    .barber-bookings-table .barber-bookings-table-row {
+        display: block;
+        padding: 12px 0;
+        border-bottom: 1px solid hsl(220, 20%, 20%);
+    }
+
+    .barber-bookings-table .barber-bookings-table-row:last-child {
+        border-bottom: none;
+    }
+
+    .barber-bookings-table .barber-bookings-table-data {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 1rem;
+        padding: 6px 0;
+        border-bottom: none;
+        text-align: right;
+    }
+
+    .barber-bookings-table .barber-bookings-table-data::before {
+        content: attr(data-label);
+        color: var(--muted-fg);
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        white-space: nowrap;
+        flex-shrink: 0;
+        text-align: left;
+        /* nudge the label to line up with the top of a multi-line value (services / date + status) */
+        padding-top: 2px;
+    }
+
+    /* Value side: keep the date + status badge and the service list stacked and right-aligned. */
+    .barber-bookings-table .datetime-cell,
+    .barber-bookings-table .service-list {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+    }
+
+    .barber-bookings-table .booking-status {
+        margin-left: auto;
+    }
+
+    /* Drop the fixed 170px service-row width so services fit within the card. */
+    .barber-bookings-table .service-row {
+        width: auto;
+        margin-right: 0;
+        gap: 8px;
+    }
 }

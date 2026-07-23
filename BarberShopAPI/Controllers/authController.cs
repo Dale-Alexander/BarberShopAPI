@@ -49,6 +49,24 @@ namespace BarberShopAPI.Controllers
                 {
                     return Unauthorized(new { message = "Invalid email or password" });
                 }
+
+                /* Deactivating a barber (BarbersController.DeleteBarber) flips Barber.isActive and bumps
+                 * TokenVersion. The bump only revokes JWTs that ALREADY exist - it does nothing to stop a
+                 * fresh login, which mints a token carrying the new version. Without this check a
+                 * deactivated barber could simply log in again the next day and reach their dashboard at
+                 * /admin/team/{barberId} with full cancel / mark-paid / edit rights over their bookings,
+                 * because BarberCanAccess only proves the caller owns that barber id, not that the barber
+                 * is still employed. Blocking token issuance here is the whole fix: no new token can be
+                 * minted, and every old one is already dead.
+                 *
+                 * Placed deliberately AFTER the password check, so the specific message is only ever shown
+                 * to someone who already proved they know the password - it can't be used to enumerate
+                 * which emails belong to deactivated staff. */
+                if (user.Role.ToString() == "BARBER"
+                    && !await _context.Barbers.AnyAsync(b => b.UserId == user.Id && b.isActive))
+                {
+                    return StatusCode(403, new { message = "This account has been deactivated. Please contact the shop." });
+                }
                 //Create JWT
 
                 var TokenHandler = new JwtSecurityTokenHandler();

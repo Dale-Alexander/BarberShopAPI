@@ -74,7 +74,14 @@ const BarberDateAndTime = () => {
     const { user, loading } = useContext(AuthContext);
     const [searchParams] = useSearchParams();
     const isAdminBooking = searchParams.get("adminBooking") === "true";
-    const isAdminMode = user?.role === "ADMIN" && isAdminBooking;
+    const isAdmin = user?.role === "ADMIN";
+    // Staff (admin OR barber) create bookings from the dashboard; customers use the public flow.
+    const isStaffMode = (isAdmin || user?.role === "BARBER") && isAdminBooking;
+    // When a barber CREATES a booking it goes on their own chair, so lock the picker to themselves
+    // (the backend pins it too). Editing is exempt: a barber may reassign their own booking to another
+    // barber - the target barber's booked slots and closures are greyed out in the picker, and the
+    // backend re-validates the overlap/closure against the new barber.
+    const lockBarberToSelf = user?.role === "BARBER" && isStaffMode;
     const [showModal, setShowModal] = useState(false);
     const { showToast } = useContext(ToastContext);
     const [bookingLoading, setBookingLoading] = useState(false);
@@ -107,7 +114,8 @@ const BarberDateAndTime = () => {
     //admin/{bookingId} is [Authorize(ADMIN,BARBER)], so it always needs credentials (isProtected = true)
     /* Admin-only: pull the default booking duration so the on-page duration control starts at the
      * shop's configured default (admin auth is required, so this uses adminAxios via isProtected). */
-    const { data: shopSettings } = useFetch(isAdminMode ? `/api/Settings` : null, true);
+    // /api/Settings is admin-only, so only an admin seeds the duration from it; barbers use the default.
+    const { data: shopSettings } = useFetch(isAdmin && isAdminBooking ? `/api/Settings` : null, true);
 
 
 
@@ -142,13 +150,35 @@ const BarberDateAndTime = () => {
         }
     }, [shopSettings]);
 
+    // Entering a fresh booking (not edit): clear any picker state left over in BookingDetailsContext
+    // from a previous flow - e.g. the admin just edited a booking, then hit "Create Booking"; those
+    // date/time/barber selections must not carry over. Edit mode re-populates from the booking being
+    // edited (below), so it's exempt. A barber's own chair is re-applied by the auto-select effect.
+    useEffect(() => {
+        if (!isEditMode) {
+            setSelectedDate(null);
+            setSelectedTime(null);
+            setSelectedBarberId(null);
+        }
+        // Run once on mount; the deps are stable for this page instance.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Barber staff-create: pre-select their own chair (they can't pick anyone else). Edit mode already
+    // seeds the barber from the booking being edited, so this only runs for the create flow.
+    useEffect(() => {
+        if (lockBarberToSelf && !isEditMode && user?.barberId != null) {
+            setSelectedBarberId(user.barberId);
+        }
+    }, [lockBarberToSelf, isEditMode, user?.barberId]);
+
     /* Edit mode couldn't load the booking being edited (e.g. it was cancelled, or the id is bad -> 404).
        Without the booking there's nothing to prefill or save against, so tell the staff member and send
        them back to the dashboard. 401 is left to the axios interceptor, which redirects to login. */
     useEffect(() => {
         if (isEditMode && editBookingError && editBookingError.response?.status !== 401) {
             showToast("Couldn't load booking", getErrorMessage(editBookingError, "This booking may no longer exist."));
-            navigate("/admin", { replace: true });
+            navigate(isAdmin ? "/admin" : `/admin/team/${user?.barberId}`, { replace: true });
         }
     }, [isEditMode, editBookingError]);
 
@@ -158,19 +188,15 @@ const BarberDateAndTime = () => {
     const DEFAULT_SLOT_MIN = 30;
     const slotDurationMin =
         isEditMode ? (editBooking?.durationMin ?? DEFAULT_SLOT_MIN)
-        // Uses the last VALID admin duration, so greying stays put (e.g. at 60) while the field is
+        // Uses the last VALID staff duration, so greying stays put (e.g. at 60) while the field is
         // temporarily empty during editing rather than snapping to the default.
-        : isAdminMode ? (adminDurationMin || DEFAULT_SLOT_MIN)
+        : isStaffMode ? (adminDurationMin || DEFAULT_SLOT_MIN)
         : (chosenServicesDurationMin || DEFAULT_SLOT_MIN);
-
-    /* Suggested values for the admin duration input's datalist. The field is a free number input,
-     * so the admin can also type any value (e.g. a one-off 75) - these are just quick picks. */
-    const DURATION_PRESETS = [15, 30, 45, 60, 90];
 
     /* Admin-only inline validation for the on-page duration box (mirrors the backend 5-240 bound).
      * Shown under the field and used to gate the "Next" button, so a bad value is caught here rather
      * than as a toast after the details modal. Number("") is 0, so an empty box is flagged too. */
-    const adminDurationError = isAdminMode
+    const adminDurationError = isStaffMode
         ? (() => {
             const n = Number(adminDurationInput);
             return (!Number.isInteger(n) || n < 5 || n > 240)
@@ -185,7 +211,7 @@ const BarberDateAndTime = () => {
 
     /* The 90-min buffer and 60-day horizon are a customer-only rule; staff booking (admin mode) and staff
      * rescheduling (edit mode) are only blocked from picking a past slot - matching the backend. */
-    const isCustomer = !isAdminMode && !isEditMode;
+    const isCustomer = !isStaffMode && !isEditMode;
     const maxCustomerDate = isCustomer ? addDays(today, MAX_ADVANCE_DAYS) : null;
     const isDateBeyondHorizon = (day) => !!maxCustomerDate && isAfter(startOfDay(day), maxCustomerDate);
 
@@ -259,7 +285,9 @@ const BarberDateAndTime = () => {
                 const slotEnd = addMinutes(slotStart, slotDurationMin);
 
                 return barbers.some(b => {
-                    const bookingsOnDay = b?.bookings?.filter(bk => isSameDay(new Date(bk.startDateTime), date));
+                    // ?? [] guards the brief window where a barber is selected but `barbers` hasn't
+                    // loaded yet (or a booking has no bookings array) - otherwise .some throws on undefined.
+                    const bookingsOnDay = b?.bookings?.filter(bk => isSameDay(new Date(bk.startDateTime), date)) ?? [];
                     return !bookingsOnDay.some(bk => {
                         const bkStart = new Date(bk.startDateTime);
                         /* Expand each booking's blocked window by the buffer on both sides so a slot
@@ -273,7 +301,9 @@ const BarberDateAndTime = () => {
             });
         }
         const barber = barbers.find(b => selectedBarberId === b.barberId);
-        const barberBookingsOnDay = barber?.bookings?.filter(bk => isSameDay(new Date(bk.startDateTime), date));
+        // ?? [] guards the window where selectedBarberId is set (e.g. a barber auto-selected onto their
+        // own chair) but `barbers` hasn't loaded yet, so `barber` is momentarily undefined.
+        const barberBookingsOnDay = barber?.bookings?.filter(bk => isSameDay(new Date(bk.startDateTime), date)) ?? [];
         return TIME_SLOTS.filter(slot => {
             /* this returns the filtered array of available slots back to whoever 
             called getAvailableSlots*/
@@ -399,7 +429,7 @@ const BarberDateAndTime = () => {
                 StartDateTime: `${newDateFormatted}T${selectedTime}:00`,
                 BarberId: selectedBarberId
             })
-            navigate("/admin");
+            navigate(isAdmin ? "/admin" : `/admin/team/${user?.barberId}`);
         }
         catch (err) {
             console.error(err.response?.data?.message || "Something went wrong");
@@ -417,6 +447,7 @@ const BarberDateAndTime = () => {
         setBookingLoading(true);
         try {
             await adminAxios.post('/api/bookings/create-admin-booking', {
+                // For a barber this is their own id (auto-selected + locked); the backend also pins it.
                 BarberId: selectedBarberId,
                 StartDateTime: `${newDateFormatted}T${selectedTime}:00`,
                 // Duration is now chosen on this page (adminDurationMin) rather than in the modal,
@@ -426,7 +457,7 @@ const BarberDateAndTime = () => {
                 Phone: phone,
             });
             setShowModal(false);
-            navigate("/admin");
+            navigate(isAdmin ? "/admin" : `/admin/team/${user?.barberId}`);
         } catch (err) {
             console.error(err.response?.data?.message || err.response?.data);
             showToast("Booking Failed", getErrorMessage(err));
@@ -507,7 +538,7 @@ const BarberDateAndTime = () => {
                 </motion.div>
             </section>
             <main className="bp-main">
-                {!isAdminMode && !isEditMode && (
+                {!isStaffMode && !isEditMode && (
                     <Navlinks currentScreen="barberdatetime" />
                 )}
                 <div className="barber-datetime-main-next-container">
@@ -557,14 +588,16 @@ const BarberDateAndTime = () => {
                                             onRetry={reFetchBarbers}
                                         />
                                     </div>
-                                ) : barbers.map((barber) => {
+                                ) : barbers.filter((b) => !lockBarberToSelf || b.barberId === user?.barberId).map((barber) => {
                                     /*const available = isBarberAvailable(barber, selectedDate, selectedTime);*/
                                     /* when wrapping in JSX curly brackets you need to return */
+                                    /* A barber locked to themselves can't change the selection - the card is shown
+                                     * pre-selected but clicking is a no-op. */
                                     return (
                                         <motion.button
                                             key={barber.barberId}
                                             className={`bp-barber-card ${selectedBarberId === barber.barberId ? "selected" : ""}`}
-                                            onClick={() => setSelectedBarberId(barber.barberId)}
+                                            onClick={() => { if (!lockBarberToSelf) setSelectedBarberId(barber.barberId); }}
                                             whileHover={{ y: -4 }}
                                             whileTap={{ scale: 0.97 }}
                                         >
@@ -588,19 +621,19 @@ const BarberDateAndTime = () => {
                                 <h2 className="bp-section-title">Pick a Date & Time</h2>
                                 <p className="bp-section-sub">Choose your preferred appointment slot</p>
 
-                                {isAdminMode && (
+                                {isStaffMode && (
                                     <div className="bp-admin-duration">
                                         <label htmlFor="bp-admin-duration-input">Booking duration (minutes)</label>
                                         <input
                                             id="bp-admin-duration-input"
-                                            type="number"
-                                            min={5}
-                                            max={240}
-                                            step={5}
-                                            list="bp-duration-presets"
+                                            // Plain text (not type=number) so there are no spinner arrows;
+                                            // inputMode="numeric" still brings up the number keypad on mobile,
+                                            // and the onChange strips non-digits to keep it numbers-only.
+                                            type="text"
+                                            inputMode="numeric"
                                             value={adminDurationInput}
                                             onChange={(e) => {
-                                                const raw = e.target.value;
+                                                const raw = e.target.value.replace(/\D/g, "");
                                                 setAdminDurationInput(raw);
                                                 // Only commit the parsed value on valid input, so an
                                                 // empty box keeps the previous duration for greying.
@@ -608,11 +641,6 @@ const BarberDateAndTime = () => {
                                                 if (raw !== "" && Number.isFinite(n)) setAdminDurationMin(n);
                                             }}
                                         />
-                                        <datalist id="bp-duration-presets">
-                                            {DURATION_PRESETS.map((min) => (
-                                                <option key={min} value={min} />
-                                            ))}
-                                        </datalist>
                                         {adminDurationError && (
                                             <span style={{ display: "block", marginTop: 6, color: "#e53e3e", fontSize: 12 }}>
                                                 {adminDurationError}
@@ -728,21 +756,21 @@ const BarberDateAndTime = () => {
                             </motion.section>                     
                     </motion.div>
                     <div className="barber-datetime-proceed">
-                        <button onClick={isEditMode ? handleEdit : isAdminMode ? () => setShowModal(true) : handleUserCreate} disabled={loading || bookingLoading || !(selectedBarberId && selectedDate && selectedTime) || (isAdminMode && !!adminDurationError)} className={`next-details-btn ${!(selectedBarberId && selectedDate && selectedTime) || (isAdminMode && !!adminDurationError) ? "disabled" : ""}`}>
+                        <button onClick={isEditMode ? handleEdit : isStaffMode ? () => setShowModal(true) : handleUserCreate} disabled={loading || bookingLoading || !(selectedBarberId && selectedDate && selectedTime) || (isStaffMode && !!adminDurationError)} className={`next-details-btn ${!(selectedBarberId && selectedDate && selectedTime) || (isStaffMode && !!adminDurationError) ? "disabled" : ""}`}>
                             {isEditMode ? (
                                 <>
                                     Confirm Edit <SquarePen size={18} />
                                 </>
                             ) : (
                                 <>
-                                    Next: {isAdminMode ? "User's Details" : "Your Details"} <ArrowRight size={18} />
+                                    Next: {isStaffMode ? "User's Details" : "Your Details"} <ArrowRight size={18} />
                                 </>
                             )}
                         </button>
                     </div>
                 </div>
             </main>
-            {showModal && isAdminMode && (
+            {showModal && isStaffMode && (
                 <UserFormModal
                     onConfirm={handleAdminCreate}
                     onCancel={handleCancel}/>

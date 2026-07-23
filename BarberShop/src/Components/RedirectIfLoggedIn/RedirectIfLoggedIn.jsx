@@ -12,7 +12,11 @@ const RedirectIfLoggedIn = () => {
     if (loading) return <LoadingSpinner message={"Fetching user information"} color="var(--grey-100)" fullscreen />;
 
     if (user) {
-        if (user.role === "ADMIN") return <Navigate to={fromPath || "/admin"} replace />;
+        // Don't honor a barber-scoped `from` (/admin/team/:id) for an admin - it's usually a stale path
+        // from a previous barber session, and would send the admin to that barber's page instead of the
+        // dashboard (same guard as Login.jsx).
+        const isBarberScoped = /^\/admin\/team\/[^/]+$/.test(fromPath || "");
+        if (user.role === "ADMIN") return <Navigate to={fromPath && !isBarberScoped ? fromPath : "/admin"} replace />;
         else if (user.role === "BARBER") return <Navigate to={`/admin/team/${user.barberId}`} replace />;
     }
     // if no user, allow access

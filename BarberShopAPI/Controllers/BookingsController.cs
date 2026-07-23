@@ -91,6 +91,15 @@ namespace BarberShopAPI.Controllers
         [HttpPost("create-admin-booking")]
         public async Task<IActionResult> CreateAdminBookings([FromBody] AdminCreateBookingCreateViewModel model)
         {
+            // A barber may only place bookings on their own chair: ignore any BarberId in the body and
+            // pin it to the caller. Admins may book for any barber.
+            if (!User.IsInRole("ADMIN"))
+            {
+                var callerBarberId = await CallerBarberId();
+                if (callerBarberId == null) return StatusCode(403, new { message = "You do not have a barber profile" });
+                model.BarberId = callerBarberId.Value;
+            }
+
             if (model.DefaultDurationMin == null || model.DefaultDurationMin <= 0)
                 return BadRequest(new { message = "Default booking duration is required for admin bookings" });
 
@@ -129,7 +138,10 @@ namespace BarberShopAPI.Controllers
                 if (overlap) return BadRequest(new { message = "The chosen slot overlaps with an existing booking" });
 
 
-                if (!IsValidName(model.FullName))
+                // Name is optional for staff bookings (e.g. a walk-in known only by phone). Validate it
+                // only when one was actually provided; a blank name is allowed through.
+                var hasName = !string.IsNullOrWhiteSpace(model.FullName);
+                if (hasName && !IsValidName(model.FullName))
                     return BadRequest(new { message = "Please enter a valid full name" });
                 if (!IsValidPhoneNumber(model.Phone))
                     return BadRequest(new { message = "Invalid phone number" });
@@ -150,10 +162,9 @@ namespace BarberShopAPI.Controllers
                 }
                 else
                 {
-                    // Returning customer (matched by phone): refresh the name so a corrected spelling -
-                    // or a different person sharing the phone - is reflected on this booking instead of
-                    // silently keeping the name from their first ever booking. FullName is already
-                    // validated above, so these are never empty.
+                    // Returning customer (matched by phone): always overwrite the name with whatever was
+                    // entered on this booking - even a blank one - so the record reflects the latest input.
+                    // A provided name is validated above; a blank name is allowed and clears it.
                     user.Name = firstName;
                     user.Surname = lastName;
                 }
@@ -469,6 +480,13 @@ namespace BarberShopAPI.Controllers
         {
             try
             {
+                // A barber may only mark their own bookings' cash payments; an admin may mark any.
+                if (!User.IsInRole("ADMIN"))
+                {
+                    var callerBarberId = await CallerBarberId();
+                    var ownsBooking = await _context.Bookings.AnyAsync(b => b.Id == bookingId && b.BarberId == callerBarberId);
+                    if (!ownsBooking) return StatusCode(403, new { message = "You can only update your own bookings" });
+                }
                 var payment = await _context.Payments.FirstOrDefaultAsync(p => p.BookingId == bookingId);
                 if (payment == null) return NotFound(new { message = "Payment not found for this booking" });
                 if (payment.Method != Models.Enums.PaymentMethod.CASH)
@@ -636,12 +654,30 @@ namespace BarberShopAPI.Controllers
         /* Ownership guard for the barber-scoped endpoints below. Both are open to ADMIN and
          * BARBER, but the {barberId} comes straight from the URL - without this, any logged-in
          * barber could read another barber's clients/phone numbers just by editing the id (IDOR).
-         * Admins may view any barber; a barber may only view the barberId tied to their own user. */
+         * Admins may view any barber; a barber may only view the barberId tied to their own user.
+         *
+         * The isActive predicate is defence in depth. A deactivated barber shouldn't be able to reach
+         * these endpoints anyway - Login refuses to issue them a token and DeleteBarber's TokenVersion
+         * bump kills any they still hold - but that leans entirely on login being the only place a token
+         * is minted. This costs nothing (it's one more predicate on a query that already runs) and keeps
+         * the guard honest if a refresh-token or SSO path is ever added. */
         private async Task<bool> BarberCanAccess(int barberId)
         {
             if (User.IsInRole("ADMIN")) return true;
             var callerUserId = int.Parse(User.FindFirst("id")?.Value ?? "0");
-            return await _context.Barbers.AnyAsync(b => b.Id == barberId && b.UserId == callerUserId);
+            return await _context.Barbers.AnyAsync(b => b.Id == barberId && b.UserId == callerUserId && b.isActive);
+        }
+
+        /* The caller's own Barber.Id when they're a BARBER, or null if they have no barber row - or if
+         * that row is deactivated, same defence-in-depth reasoning as BarberCanAccess above. Returning
+         * null makes the ownership checks in cancel / mark-cash-paid / update-booking fail closed, since
+         * booking.BarberId can never equal null.
+         * Used by the booking-mutation endpoints below to keep a barber's actions to their own
+         * chair; ADMIN callers are checked with User.IsInRole and never rely on this. */
+        private async Task<int?> CallerBarberId()
+        {
+            var callerUserId = int.Parse(User.FindFirst("id")?.Value ?? "0");
+            return await _context.Barbers.Where(b => b.UserId == callerUserId && b.isActive).Select(b => (int?)b.Id).FirstOrDefaultAsync();
         }
 
         [Authorize(Roles ="ADMIN,BARBER")]
@@ -658,8 +694,13 @@ namespace BarberShopAPI.Controllers
             if (fromDate.HasValue && toDate.HasValue && fromDate.Value > toDate.Value) return BadRequest(new { message = "From Date cannot be after To Date" });
             var (from, to) = ToMaltaDayWindow(fromDate, toDate);
 
-            var barber = await _context.Barbers.Where(b => b.Id == barberId && b.isActive == true)
-                .Select(b => new { b.Id, b.User.Name, b.User.Surname, b.ImageUrl }).FirstOrDefaultAsync();
+            // Deliberately not filtered on isActive: a deactivated barber's past bookings are still real
+            // history the admin needs to reach from the Inactive tab of the team screen. Access is gated
+            // by BarberCanAccess above, and a deactivated barber can't obtain a session at all - Login
+            // refuses to issue them a token and DeleteBarber's TokenVersion bump killed any they held -
+            // so in practice this only ever serves the admin.
+            var barber = await _context.Barbers.Where(b => b.Id == barberId)
+                .Select(b => new { b.Id, b.User.Name, b.User.Surname, b.ImageUrl, b.isActive }).FirstOrDefaultAsync();
             if (barber == null) return NotFound(new { message = "Barber not found" });
 
             (page, pageSize) = NormalisePaging(page, pageSize);
@@ -677,6 +718,12 @@ namespace BarberShopAPI.Controllers
                     Name = b.User.Name,
                     Surname = b.User.Surname,
                     Phone = b.User.Phone,
+                    // Payment info so a barber's own-bookings table can show status and drive
+                    // mark-as-paid, mirroring the admin admin-fetch projection. Payment is a LEFT JOIN
+                    // here, so these are null-safe for any booking without a payment row.
+                    Amount = b.Payment.Amount,
+                    PaymentMethod = b.Payment.Method.ToString(),
+                    PaymentStatus = b.Payment.Status.ToString(),
                     Services = b.Services.Select(bs => new
                     {
                         ServiceName = bs.Service.Name,
@@ -688,6 +735,9 @@ namespace BarberShopAPI.Controllers
                 barberName = barber.Name,
                 barberSurname = barber.Surname,
                 barberImageUrl = barber.ImageUrl,
+                // Drives the page's read-mostly state (no Create Booking, deactivated notice). Sourced
+                // from here rather than the navigation context so a deep link or refresh still knows.
+                barberIsActive = barber.isActive,
                 bookings,
                 totalCount,
                 page,
@@ -820,8 +870,9 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
 
         /* Server-side aggregates for the admin dashboard's stat cards and performance chart. These used to be
          * computed in the browser over the full booking list - exactly the unbounded fetch pagination removes -
-         * so they now come from SQL. Everything is over COMPLETED bookings, and the month/day buckets read
-         * StartDateTime directly (Malta wall-clock, same basis as ShopClock.Now). */
+         * so they now come from SQL. Counts are over confirmed bookings and revenue over money actually
+         * collected (see the two queries below); the month/day buckets read StartDateTime directly (Malta
+         * wall-clock, same basis as ShopClock.Now). */
         [Authorize(Roles = "ADMIN")]
         [HttpGet("admin-summary")]
         public async Task<IActionResult> GetAdminSummary([FromQuery] int? year, [FromQuery] int? month)
@@ -835,7 +886,12 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 if (month.HasValue && (month.Value < 1 || month.Value > 12))
                     return BadRequest(new { message = "Month must be between 1 and 12" });
 
-                var completed = _context.Bookings.Where(b => b.Status == BookingStatus.COMPLETED);
+                // A confirmed booking (Status == COMPLETED) counts toward the "Bookings" metric whether or
+                // not its money is in yet - this covers upcoming bookings and cash bookings not yet collected,
+                // matching the bookings table. Revenue is stricter: only bookings whose payment is also
+                // COMPLETED, so uncollected cash never inflates the euros. `paid` is a subset of `booked`.
+                var booked = _context.Bookings.Where(b => b.Status == BookingStatus.COMPLETED);
+                var paid = booked.Where(b => b.Payment.Status == PaymentStatus.COMPLETED);
 
                 // Stat cards: this month vs last month.
                 var nowMalta = ShopClock.Now;
@@ -843,22 +899,22 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 var nextMonthStart = thisMonthStart.AddMonths(1);
                 var lastMonthStart = thisMonthStart.AddMonths(-1);
 
-                var thisMonthQuery = completed.Where(b => b.StartDateTime >= thisMonthStart && b.StartDateTime < nextMonthStart);
-                var lastMonthQuery = completed.Where(b => b.StartDateTime >= lastMonthStart && b.StartDateTime < thisMonthStart);
+                // Bookings count over all confirmed bookings; revenue over money actually collected only.
+                var thisMonthBookings = await booked.CountAsync(b => b.StartDateTime >= thisMonthStart && b.StartDateTime < nextMonthStart);
+                var lastMonthBookings = await booked.CountAsync(b => b.StartDateTime >= lastMonthStart && b.StartDateTime < thisMonthStart);
+                var thisMonthRevenue = await paid.Where(b => b.StartDateTime >= thisMonthStart && b.StartDateTime < nextMonthStart).SumAsync(b => (decimal?)b.Payment.Amount) ?? 0m;
+                var lastMonthRevenue = await paid.Where(b => b.StartDateTime >= lastMonthStart && b.StartDateTime < thisMonthStart).SumAsync(b => (decimal?)b.Payment.Amount) ?? 0m;
 
-                var thisMonthBookings = await thisMonthQuery.CountAsync();
-                var thisMonthRevenue = await thisMonthQuery.SumAsync(b => (decimal?)b.Payment.Amount) ?? 0m;
-                var lastMonthBookings = await lastMonthQuery.CountAsync();
-                var lastMonthRevenue = await lastMonthQuery.SumAsync(b => (decimal?)b.Payment.Amount) ?? 0m;
+                // Year dropdown covers any year that has confirmed bookings (the count-oriented view).
+                var availableYears = await booked.Select(b => b.StartDateTime.Year).Distinct().OrderBy(y => y).ToListAsync();
 
-                var availableYears = await completed.Select(b => b.StartDateTime.Year).Distinct().OrderBy(y => y).ToListAsync();
-
-                // Monthly series for the requested year (default: current year).
+                // Monthly series for the requested year (default: current year). count = every confirmed
+                // booking that month; revenue = only the ones whose payment is collected.
                 var targetYear = year ?? nowMalta.Year;
-                var monthlyRaw = await completed
+                var monthlyRaw = await booked
                     .Where(b => b.StartDateTime.Year == targetYear)
                     .GroupBy(b => b.StartDateTime.Month)
-                    .Select(g => new { Month = g.Key, Count = g.Count(), Revenue = g.Sum(b => (decimal?)b.Payment.Amount) ?? 0m })
+                    .Select(g => new { Month = g.Key, Count = g.Count(), Revenue = g.Sum(b => b.Payment.Status == PaymentStatus.COMPLETED ? b.Payment.Amount : 0m) })
                     .ToListAsync();
                 var monthly = Enumerable.Range(1, 12).Select(m =>
                 {
@@ -870,10 +926,10 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 object daily = null;
                 if (month.HasValue)
                 {
-                    var dailyRaw = await completed
+                    var dailyRaw = await booked
                         .Where(b => b.StartDateTime.Year == targetYear && b.StartDateTime.Month == month.Value)
                         .GroupBy(b => b.StartDateTime.Day)
-                        .Select(g => new { Day = g.Key, Count = g.Count(), Revenue = g.Sum(b => (decimal?)b.Payment.Amount) ?? 0m })
+                        .Select(g => new { Day = g.Key, Count = g.Count(), Revenue = g.Sum(b => b.Payment.Status == PaymentStatus.COMPLETED ? b.Payment.Amount : 0m) })
                         .ToListAsync();
                     var daysInMonth = DateTime.DaysInMonth(targetYear, month.Value);
                     daily = Enumerable.Range(1, daysInMonth).Select(d =>
@@ -952,6 +1008,9 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
             {
                 var booking = await _context.Bookings.Where(b => b.Id == bookingId).FirstOrDefaultAsync();
                 if (booking == null) return NotFound("The booking to edit was not found");
+                // A barber may only edit their own bookings; an admin may edit any.
+                if (!User.IsInRole("ADMIN") && booking.BarberId != await CallerBarberId())
+                    return StatusCode(403, new { message = "You can only edit your own bookings" });
                 if (booking.Status == BookingStatus.PENDING) return BadRequest(new { message = "Cannot edit a pending booking"});
                 if (booking.Status == BookingStatus.CANCELLED) return BadRequest(new { message = "Cannot edit a cancelled booking"});
                 if (booking.StartDateTime <= ShopClock.Now) return BadRequest(new {message = "Cannot edit a booking that has passed"});
@@ -1019,6 +1078,13 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
         {
             try
             {
+                // A barber may only cancel their own bookings; an admin may cancel any.
+                if (!User.IsInRole("ADMIN"))
+                {
+                    var callerBarberId = await CallerBarberId();
+                    var ownsBooking = await _context.Bookings.AnyAsync(b => b.Id == bookingId && b.BarberId == callerBarberId);
+                    if (!ownsBooking) return StatusCode(403, new { message = "You can only cancel your own bookings" });
+                }
                 /* The refund + reminder-job-delete + cancel + email logic lives in BookingCanceller so
                  * the shop-closure flow (which cancels the same way) shares one code path. We just map
                  * its Outcome to the right HTTP response here.*/
@@ -1053,6 +1119,15 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
             {
                 var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.Id == bookingId);
                 if (booking == null) return NotFound(new {message = "Booking not found"});
+                // A barber may only edit a booking that is currently their own; from there they may
+                // reschedule it or reassign it to another barber (the overlap/closure checks below
+                // re-validate against whatever barber it ends up on). Admins are unrestricted.
+                if (!User.IsInRole("ADMIN"))
+                {
+                    var callerBarberId = await CallerBarberId();
+                    if (booking.BarberId != callerBarberId)
+                        return StatusCode(403, new { message = "You can only edit your own bookings" });
+                }
                 if (booking.Status != BookingStatus.COMPLETED) return BadRequest(new { message = "Only confirmed bookings can be updated" });
 
 

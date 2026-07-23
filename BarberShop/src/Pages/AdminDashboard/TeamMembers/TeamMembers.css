@@ -170,3 +170,64 @@
         margin: 0;
         font-size: 0.9rem;
     }
+
+/* Active / Inactive tabs above the grid. Underline-style so they read as a filter on one list
+   rather than as navigation to another page. */
+.team-tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid hsl(220, 20%, 20%);
+}
+
+.team-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px; /* sit the underline on top of the container's border, not below it */
+    padding: 10px 14px;
+    color: hsl(215, 15%, 55%);
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+}
+
+.team-tab:hover {
+    color: hsl(210, 20%, 90%);
+}
+
+.team-tab--selected {
+    color: var(--green-500);
+    border-bottom-color: var(--green-500);
+}
+
+.team-tab-count {
+    background: hsl(220, 15%, 24%);
+    color: hsl(210, 20%, 80%);
+    font-size: 0.72rem;
+    font-weight: 700;
+    min-width: 20px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    text-align: center;
+}
+
+.team-tab--selected .team-tab-count {
+    background: var(--green-500);
+    color: hsl(220, 25%, 10%);
+}
+
+/* Explains what reactivating actually does before the admin commits to it. */
+.modal-note {
+    margin: 0 0 16px;
+    padding: 10px 12px;
+    background: hsla(170, 70%, 45%, 0.08);
+    border-left: 2px solid var(--green-500);
+    border-radius: 0.25rem;
+    color: var(--muted-fg);
+    font-size: 0.85rem;
+    line-height: 1.5;
+}

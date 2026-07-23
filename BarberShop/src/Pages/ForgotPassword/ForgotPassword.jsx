@@ -60,6 +60,7 @@ const ForgotPassword = () => {
                             <>
                                 <h1 className="login-title">Check your email</h1>
                                 <p className="forgot-confirmation">If an account with that email exists, we've sent a password reset link. It expires in 30 minutes.</p>
+                                <p className="forgot-confirmation">You can close this tab if you want — or once you've set your new password, log in below.</p>
                                 <p className="forgot-confirmation">Didn't get it? You can resend once the timer is up.</p>
                                 <button
                                     className="login-button"

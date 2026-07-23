@@ -1,14 +1,4 @@
-write notes about the graph used
-
-Fix a little bit responsive design and padding for forgetPassword.jsx and Login.jsx
-
-Add Login link on forget Password component to navigate back to login and fix the CSS for the forgot Password component
-
-Make the calendar responsive design
-
-do the appropriate toasts messages for the edit and cancel booking and other functions for that matter. Check the inline error messages aswell
-
-In BookingsDateAndTable, dont forget to change the serviceIds when creating a pending booking
+In BookingsDateAndTable, dont forget to change the serviceIds when creating a pending booking(after Services page is created)
 
 Format form inputs on the frontend like transform an all capitalised input to proper casing
 
@@ -20,9 +10,7 @@ Change the links from NotFound to /services and not to /datetime
 
 See if you are going to leave payment-intent endpoint like that specifically, the part about idempotencyKey because what if the user clicks the card payment and then refreshes
 then when he wants to pay again and he clicks card payment method, it will show a toast saying error because that idempotencyKey with that bookingId was already generated
-and you cant have duplicate idempotency keys
-
-If a booking is pending and someone navigates to /already-paid or /summary, it will show a toast saying this is still pending. Should it be like this or should it navigate to 404
+and you cant have duplicate idempote
 
 If you forget the stripe terminal to run and confirm a payment using the card, it will redirect you to the bookin success page and it will have empty details. It will also
 display an error saying this booking is still pending. You can navigate back
@@ -30,37 +18,15 @@ display an error saying this booking is still pending. You can navigate back
 When paying with card and filling all your details, make sure the optional stuff doesnt get rendered like the fullname.
 Claude says it doesnt show the name but double check. Apparently the Postcode is shown, should you remove this.If you do Stripe's validation for payments from correct address wont work anymore.
 
-Maybe for TeamMembers.jsx, display all barbers, active or not active but make sure you indicate which ones arent active and which ones are. If you are going to 
-do this then edit the endpoint where you get the bookings for a particular barber because that endpoint only fetches active barbers.
-
 A stripe refund or a closure job auto-cancelling doesnt automatically update the chart but i think its better because you would have to poll constantly.
 Not worth the result for the performance
 
-Instead of showing Ids of certain entities in the URL, show a random string.
-
 For Services creation or update, inform the user to click on the box to visit his files on his pc or he can drag and drop to replace the image/create the image for the first time
-
-Fix action button for each bookin in dashboard when screen is really small
-
-Fix burger menu to be well aligned with the drawer. When screen is really small, fix the buttons for Services, Team and Individual barbers so filter and creation buttons
-still stay on the right. Make sure all of the pages' titles have identical font sizes, font boldness and identical spaces from the edges of the screen. Calendar is the one that is really different
-
-Check if the login actually works like traiditonal systems. Meaning like if you are logged in and you visit /login, does it redirect you to 
-dashboard or stay in login
-
-Check which functionalities can be done by the barber and admin and by the admin only and make sure they are correct. The editing a booking on the frontend 
-ensures an admin only can edit a booking but the backend allows a barber and an admin. Check about this and any other functionality for that matter. Check that
-frontend and backend authorization match. For all functionalities see if you want to implement per-owner check. Any authenticated Barber can edit any booking,
-including another barber's.
-
-
-When for example you login and the credentials are invalid and you retry immediately after, make sure the toast timer restarts. Also you should probably
-reset the password/email when credentials are wrong. You should make this for other examples aswell like for example when user types a name that is 1 character long.
-I dont think you need to do it for phone and email because they are validated inline and you cant submit until they are correct, but for examples where once you submit,
-an error occurs i think you should probably reset the inputs. 
 
 I think when creating a closure the admin cant close slots for other barbers, he can only do shop-wide closures. I think though im not sure. Either way should it be like this?
 
-After resetting a password and taken back to login a toast is shown saying to login with new password and i have 2 browsers open. Is that how you usually do it?
+Change the resend 2 minute timer
 
-Burger menu should stay fixed at the top when scrolling up and down in the sidebar
+As an action, should I make a refund option?
+
+Sometimes I need to visit All Mail to see the reset password link and not to inbox. 

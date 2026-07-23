@@ -54,3 +54,4 @@ Check the "if you had to start over what would you do" list in the A5 booklet in
 
 When checking for conflicts with closures, should you inform the user/admin to pick another barber in case the closure happened due to a barber only?
 
+Should MaxAdvanceBooking and MinAdvanceBooking be made into Settings? 

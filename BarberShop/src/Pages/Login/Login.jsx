@@ -33,7 +33,11 @@ const Login = () => {
                 barberId: response.data.barberId
             }))
             if (response.data.role === "ADMIN") {
-                    navigate(fromPath || "/admin", { replace: true });
+                    // Don't honor a barber-scoped `from` (/admin/team/:id) for an admin: it's almost
+                    // always a stale path left behind when a barber's session ended on their dashboard,
+                    // and sending the admin there instead of their own dashboard is a cross-account leak.
+                    const isBarberScoped = /^\/admin\/team\/[^/]+$/.test(fromPath || "");
+                    navigate(fromPath && !isBarberScoped ? fromPath : "/admin", { replace: true });
             }
             else {
                 // A barber's own bookings live at /admin/team/{barberId} (BarberBookings).

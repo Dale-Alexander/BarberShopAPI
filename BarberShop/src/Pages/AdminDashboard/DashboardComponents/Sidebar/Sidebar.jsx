@@ -44,7 +44,7 @@ const Item = ({ title, to, icon, selected, setSelected, handleLogout = null }) =
     );
 };
 
-const SidebarContent = ({ collapsed, showCollapseToggle = false, isCollapsed, setIsCollapsed, selected, setSelected, handleLogout = null }) => (
+const SidebarContent = ({ collapsed, showCollapseToggle = false, isCollapsed, setIsCollapsed, selected, setSelected, handleLogout = null, role, barberId }) => (
     <Box
         className="admin-sidebar-box"
         sx={{
@@ -117,85 +117,109 @@ const SidebarContent = ({ collapsed, showCollapseToggle = false, isCollapsed, se
                                 </Box>
                             </Box>
                         )}
-                        <Item
-                            title="Dashboard"
-                            to="/admin"
-                            icon={<HomeOutlinedIcon />}
-                            selected={selected}
-                            setSelected={setSelected}
-                        />
+                        {role === "BARBER" ? (
+                            // Barbers only get the pages they can actually reach: their own bookings and
+                            // their own closures (Calendar). The admin-only pages are hidden rather than
+                            // shown-and-bounced.
+                            <>
+                                <Item
+                                    title="My Bookings"
+                                    to={`/admin/team/${barberId}`}
+                                    icon={<PeopleOutlinedIcon />}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
+                                <Item
+                                    title="Calendar"
+                                    to="/admin/calendar"
+                                    icon={<CalendarTodayOutlinedIcon />}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
+                            </>
+                        ) : (
+                            <>
+                                <Item
+                                    title="Dashboard"
+                                    to="/admin"
+                                    icon={<HomeOutlinedIcon />}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
 
-                        <Typography
-                            variant="h6"
-                            color="var(--grey-300)"
-                            sx={{ m: "15px 0 5px 20px" }}
-                        >
-                            Data
-                        </Typography>
-                        <Item
-                            title="Manage Team"
-                            to="/admin/team"
-                            icon={<PeopleOutlinedIcon />}
-                            selected={selected}
-                            setSelected={setSelected}
-                        />
-                        <Item
-                            title="Manage Services"
-                            to="/admin/services"
-                            icon={<ContentCutOutlinedIcon />}
-                            selected={selected}
-                            setSelected={setSelected}
-                        />
-                        <Item
-                            title="Contacts Information"
-                            to="/contacts"
-                            icon={<ContactsOutlinedIcon />}
-                            selected={selected}
-                            setSelected={setSelected}
-                        />
-                        <Item
-                            title="Invoices Balances"
-                            to="/invoices"
-                            icon={<ReceiptOutlinedIcon />}
-                            selected={selected}
-                            setSelected={setSelected}
-                        />
+                                <Typography
+                                    variant="h6"
+                                    color="var(--grey-300)"
+                                    sx={{ m: "15px 0 5px 20px" }}
+                                >
+                                    Data
+                                </Typography>
+                                <Item
+                                    title="Manage Team"
+                                    to="/admin/team"
+                                    icon={<PeopleOutlinedIcon />}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
+                                <Item
+                                    title="Manage Services"
+                                    to="/admin/services"
+                                    icon={<ContentCutOutlinedIcon />}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
+                                <Item
+                                    title="Contacts Information"
+                                    to="/contacts"
+                                    icon={<ContactsOutlinedIcon />}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
+                                <Item
+                                    title="Invoices Balances"
+                                    to="/invoices"
+                                    icon={<ReceiptOutlinedIcon />}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
 
-                        <Typography
-                            variant="h6"
-                            color="var(--grey-300)"
-                            sx={{ m: "15px 0 5px 20px" }}
-                        >
-                            Pages
-                        </Typography>
-                        <Item
-                            title="Profile Form"
-                            to="/form"
-                            icon={<PersonOutlinedIcon />}
-                            selected={selected}
-                            setSelected={setSelected}
-                        />
-                        <Item
-                            title="Calendar"
-                            to="/admin/calendar"
-                            icon={<CalendarTodayOutlinedIcon />}
-                            selected={selected}
-                            setSelected={setSelected}
-                        />
-                        <Item
-                            title="Settings"
-                            to="/admin/settings"
-                            icon={<SettingsOutlinedIcon />}
-                            selected={selected}
-                            setSelected={setSelected}
-                        />
-                        <Item
-                            title="FAQ Page"
-                            to="/faq"
-                            icon={<HelpOutlineOutlinedIcon />}
-                            selected={selected}
-                            setSelected={setSelected}
-                        />
+                                <Typography
+                                    variant="h6"
+                                    color="var(--grey-300)"
+                                    sx={{ m: "15px 0 5px 20px" }}
+                                >
+                                    Pages
+                                </Typography>
+                                <Item
+                                    title="Profile Form"
+                                    to="/form"
+                                    icon={<PersonOutlinedIcon />}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
+                                <Item
+                                    title="Calendar"
+                                    to="/admin/calendar"
+                                    icon={<CalendarTodayOutlinedIcon />}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
+                                <Item
+                                    title="Settings"
+                                    to="/admin/settings"
+                                    icon={<SettingsOutlinedIcon />}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
+                                <Item
+                                    title="FAQ Page"
+                                    to="/faq"
+                                    icon={<HelpOutlineOutlinedIcon />}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
+                            </>
+                        )}
                     </Box>
                 </Menu>
             </ProSidebarContent>
@@ -229,7 +253,7 @@ const Sidebar = () => {
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [isCollapsed, setIsCollapsed] = useState(false); // desktop-only: collapse the rail to icons
     const [selected, setSelected] = useState("Dashboard");
-    const { setUser } = useContext(AuthContext);
+    const { user, setUser } = useContext(AuthContext);
     const location = useLocation();
     const titleRoutes = {
         "/admin": "Dashboard",
@@ -239,9 +263,12 @@ const Sidebar = () => {
         "/admin/settings": "Settings"
     };
     useEffect(() => {
-        const title = titleRoutes[location.pathname] ?? titleRoutes[location.pathname.split("/").slice(0, 3).join("/")];;
+        let title = titleRoutes[location.pathname] ?? titleRoutes[location.pathname.split("/").slice(0, 3).join("/")];
+        // Barbers reach /admin/team/:id via their own "My Bookings" item, not the admin "Manage Team",
+        // so highlight that instead when a barber is on their bookings page.
+        if (user?.role === "BARBER" && location.pathname.startsWith("/admin/team")) title = "My Bookings";
         if (title) setSelected(title);
-    }, [location.pathname]);
+    }, [location.pathname, user?.role]);
     /* the above is used so that when the user goes directly to /admin/team without using the sidebar, the correct link on the sidebar 
     gets highlighted*/
 
@@ -306,6 +333,8 @@ const Sidebar = () => {
                     <SidebarContent
                         collapsed={false}
                         showCollapseToggle={false}
+                        role={user?.role}
+                        barberId={user?.barberId}
                         selected={selected}
                         setSelected={(val) => {
                             setSelected(val);
@@ -328,6 +357,8 @@ const Sidebar = () => {
             showCollapseToggle={true}
             isCollapsed={isCollapsed}
             setIsCollapsed={setIsCollapsed}
+            role={user?.role}
+            barberId={user?.barberId}
             selected={selected}
             setSelected={setSelected}
             handleLogout={handleLogout}

@@ -19,7 +19,7 @@ const AdminCalendar = () => {
     const { user } = useContext(AuthContext);
     const { showToast } = useContext(ToastContext);
     const closuresUrl = user?.role === 'BARBER'
-        ? `/api/dates/barber/${user?.id}/closures`
+        ? `/api/dates/barber/${user?.barberId}/closures`
         : '/api/dates/admin/closures';
     const { data, loading, error, reFetch } = useFetch(closuresUrl, true);
     const [deleteSelectedEvent, setDeleteSelectedEvent] = useState(null);
