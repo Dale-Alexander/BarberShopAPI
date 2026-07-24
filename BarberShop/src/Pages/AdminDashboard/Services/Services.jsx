@@ -310,12 +310,15 @@ const Services = () => {
                                     onDrop={(e) => { setDragActive(false); handleDrop(e); }}
                                     onClick={() => document.getElementById("service-image-input")?.click()}>
                                     {newImage ? (
-                                        <div className="image-preview-wrap">
-                                            <img src={newImage} className="service-image-preview" alt="" />
-                                            <button type="button" className="image-preview-remove"
-                                                onClick={(e) => { e.stopPropagation(); setNewImage(""); setImageFile(null); }}>
-                                                <X size={14} />
-                                            </button>
+                                        <div className="image-preview-stack">
+                                            <div className="image-preview-wrap">
+                                                <img src={newImage} className="service-image-preview" alt="" />
+                                                <button type="button" className="image-preview-remove"
+                                                    onClick={(e) => { e.stopPropagation(); setNewImage(""); setImageFile(null); }}>
+                                                    <X size={14} />
+                                                </button>
+                                            </div>
+                                            <span className="image-dropzone-hint">Drag &amp; Drop or click to replace</span>
                                         </div>
                                     ) : (
                                         <div className="image-dropzone-placeholder">
@@ -383,8 +386,11 @@ const Services = () => {
                                     onDrop={(e) => { setEditDragActive(false); handleEditDrop(e); }}
                                     onClick={() => document.getElementById("service-edit-image-input")?.click()}>
                                     {editImage ? (
-                                        <div className="image-preview-wrap">
-                                            <img src={editImage} className="service-image-preview" alt="" />
+                                        <div className="image-preview-stack">
+                                            <div className="image-preview-wrap">
+                                                <img src={editImage} className="service-image-preview" alt="" />
+                                            </div>
+                                            <span className="image-dropzone-hint">Drag &amp; Drop or click to replace</span>
                                         </div>
                                     ) : (
                                         <div className="image-dropzone-placeholder">
