@@ -51,14 +51,17 @@ export const usePersistentFilters = () => {
             newParams.set("toDate", toDate.toISOString());
         }
 
-        setParams(newParams);
+        // replace, not push: filters are view state, so they shouldn't stack
+        // history entries (otherwise the browser back button just toggles filters
+        // instead of leaving the page).
+        setParams(newParams, { replace: true });
     };
 
     // -----------------------------
     // RESET FILTERS
     // -----------------------------
     const resetFilters = () => {
-        setParams(new URLSearchParams());
+        setParams(new URLSearchParams(), { replace: true });
     };
 
     return {
