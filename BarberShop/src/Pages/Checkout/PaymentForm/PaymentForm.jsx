@@ -80,9 +80,10 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
 
 
     const startCardFlow = async () => {//called when user clicks visa or mastercard
-        if (clientSecret) return clientSecret; /* This is so if the user tries to confirm a booking but something went wrong and it didnt create a payment record
-        and navigates back to checkout from /booking/success he gets to r etry. Without this, if he navigated back and clicked the Card option, that would attempt
-        to create another paymentIntent/clientSecret which would fail because an idempotencyKey with that bookingId was already created*/
+        if (clientSecret) return clientSecret; /* Reuse the clientSecret we already have (kept in state and
+        restored from sessionStorage on refresh) instead of hitting payment-intent again. Re-calling isn't an
+        error - the endpoint void-and-recreates the PaymentIntent - but it's a needless extra call and a new
+        PaymentIntent when the existing one is still perfectly usable. */
         try {
             // No amount is sent: the server charges the booking's own service total (guards against a
             // tampered amount). bookingDetails.price is display-only.
