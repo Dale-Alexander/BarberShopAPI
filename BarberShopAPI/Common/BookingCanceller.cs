@@ -24,7 +24,7 @@ namespace BarberShopAPI.Common
          * anyway (forceRefund) - e.g. goodwill, or an ad-hoc shop-side cancel like a barber calling in sick. */
         private static readonly TimeSpan RefundCutoff = TimeSpan.FromHours(24);
 
-        public static async Task<Outcome> CancelAsync(BarberShopContext context, int bookingId, bool dueToClosure, bool forceRefund = false)
+        public static async Task<Outcome> CancelAsync(BarberShopContext context, int bookingId, bool dueToClosure, bool forceRefund = false, CancellationReason reason = CancellationReason.None)
         {
             var booking = await context.Bookings
                 .Include(b => b.Payment)
@@ -67,9 +67,15 @@ namespace BarberShopAPI.Common
                 booking.ReminderJobId = null;
             }
             booking.Status = BookingStatus.CANCELLED;
+            booking.CancellationReason = reason;
             await context.SaveChangesAsync();
 
-            if (dueToClosure)
+            /* Reason-specific wording where we have it, generic otherwise. BarberUnavailable tells the
+             * customer their barber left (this is their only notice for a confirmed booking); the closure
+             * email explains a shop closure; everything else is the plain cancellation notice. */
+            if (reason == CancellationReason.BarberUnavailable)
+                BackgroundJob.Enqueue<IEmailService>(s => s.sendBookingCancelledBarberUnavailableEmailAsync(bookingId, refundIssued, null));
+            else if (dueToClosure)
                 BackgroundJob.Enqueue<IEmailService>(s => s.sendBookingCancelledDueToClosureEmailAsync(bookingId, null));
             else
                 BackgroundJob.Enqueue<IEmailService>(s => s.sendBookingCancellationEmailAsync(bookingId, refundIssued));

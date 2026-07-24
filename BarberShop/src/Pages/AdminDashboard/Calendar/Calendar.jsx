@@ -22,6 +22,13 @@ const AdminCalendar = () => {
         ? `/api/dates/barber/${user?.barberId}/closures`
         : '/api/dates/admin/closures';
     const { data, loading, error, reFetch } = useFetch(closuresUrl, true);
+    /* Admins can scope a closure to one barber; barbers only ever close their own time, so they don't
+     * need (or get) this list. `/api/barbers/admin` includes deactivated barbers, so filter to active -
+     * a deactivated barber takes no bookings, so closing their time would be meaningless. */
+    const { data: barbersData } = useFetch(user?.role === "ADMIN" ? "/api/barbers/admin" : null, true);
+    const activeBarbers = (barbersData ?? []).filter(b => b.isActive);
+    // "" = whole shop (BarberId null); otherwise the selected barber's id.
+    const [selectedBarberId, setSelectedBarberId] = useState("");
     const [deleteSelectedEvent, setDeleteSelectedEvent] = useState(null);
     const [events, setEvents] = useState([]);
     const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -151,12 +158,14 @@ const AdminCalendar = () => {
     if (loading || loadFailed) return;
     setPendingSelection(selected);
     setClosureReason("");
+    setSelectedBarberId(""); // default every new closure to shop-wide
   };
 
   // Closes the create-closure modal and clears the leftover drag highlight on the grid.
   const closeClosureModal = () => {
     setPendingSelection(null);
     setClosureReason("");
+    setSelectedBarberId("");
     calendarRef.current?.getApi().unselect();
   };
 
@@ -164,16 +173,18 @@ const AdminCalendar = () => {
     if (!pendingSelection) return;
     // Reason is optional: fall back to "Closed" so an unlabeled closure is still identifiable in the list.
     const reason = closureReason.trim() || "Closed";
-    createDateClosure(pendingSelection, reason);
+    createDateClosure(pendingSelection, reason, selectedBarberId);
     // Fire-and-close: submitClosure owns the outcome (success toast, 409 conflict modal, or error toast).
     closeClosureModal();
   };
 
-    const buildClosurePayload = (selected, reason) => {
+    const buildClosurePayload = (selected, reason, barberId) => {
         const shopClosureData = {
             startDate: selected.allDay ? selected.startStr : selected.startStr.split('T')[0],
             isFullDay: selected.allDay,
             reason: reason,
+            // "" (whole shop) → null so the backend treats it as shop-wide; otherwise the chosen barber.
+            barberId: barberId ? Number(barberId) : null,
         }
         if (!selected.allDay) {
             shopClosureData.startTime = selected.startStr.split("T")[1].substring(0, 8);
@@ -247,7 +258,7 @@ const AdminCalendar = () => {
         }
     }
 
-    const createDateClosure = (selected, reason) => submitClosure(buildClosurePayload(selected, reason));
+    const createDateClosure = (selected, reason, barberId) => submitClosure(buildClosurePayload(selected, reason, barberId));
 
     const confirmClosureWithCancellations = () => {
         if (!conflictData) return;
@@ -573,10 +584,39 @@ const AdminCalendar = () => {
                                 </span>
                             </div>
 
+                            {/* Admins choose whether this closure hits the whole shop or just one barber.
+                                Barbers don't see this — their closures are always scoped to themselves. */}
+                            {user?.role === "ADMIN" && (
+                                <>
+                                    <label className="closure-create-label" htmlFor="closure-barber">
+                                        Applies to
+                                    </label>
+                                    <select
+                                        id="closure-barber"
+                                        className="closure-create-input"
+                                        value={selectedBarberId}
+                                        onChange={(e) => setSelectedBarberId(e.target.value)}
+                                    >
+                                        <option value="">Whole shop</option>
+                                        {activeBarbers.map((b) => (
+                                            <option key={b.id} value={b.id}>
+                                                {b.firstName} {b.lastName}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </>
+                            )}
+
                             <p className="closure-create-note">
                                 {user?.role === "BARBER"
                                     ? "This blocks your availability for the selected time — customers won't be able to book you."
-                                    : "This closes the whole shop for the selected time — no barber can be booked."}
+                                    : selectedBarberId
+                                        ? (() => {
+                                            const b = activeBarbers.find((x) => String(x.id) === String(selectedBarberId));
+                                            const name = b ? `${b.firstName} ${b.lastName}` : "this barber";
+                                            return `This blocks ${name}'s availability for the selected time — the rest of the shop can still be booked.`;
+                                        })()
+                                        : "This closes the whole shop for the selected time — no barber can be booked."}
                             </p>
 
                             <label className="closure-create-label" htmlFor="closure-reason">

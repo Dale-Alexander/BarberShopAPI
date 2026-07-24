@@ -325,10 +325,17 @@ namespace BarberShopAPI.Controllers
                         CustomerName = b.User != null ? b.User.Name + " " + b.User.Surname : null,
                         BarberName = b.Barber.User.Name + " " + b.Barber.User.Surname,
                         ServiceNames = b.Services.Select(bs => bs.Service.Name).ToList(),
+                        // Returned so the cancelled screen's "book again" can carry the same services into a
+                        // fresh booking (the customer flow POSTs these to create-pending). Duration comes along
+                        // so the date/time picker greys slots by the real appointment length.
+                        ServiceIds = b.Services.Select(bs => bs.Service.Id).ToList(),
+                        b.DurationMin,
                         AmountPaid = b.Services.Sum(bs => bs.Service.Price),
                         Date = b.StartDateTime.ToString("dddd, MMMM d, yyyy"),
                         Time = b.StartDateTime.ToString("h:mm tt"),
                         PaymentMethod = b.Payment != null ? b.Payment.Method.ToString() : null,
+                        // Drives the reason-specific cancelled-screen copy (barber unavailable vs closure vs generic).
+                        b.CancellationReason,
                         BookingId = b.Id
                     })
                     .FirstOrDefaultAsync();
@@ -1109,7 +1116,7 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 /* The refund + reminder-job-delete + cancel + email logic lives in BookingCanceller so
                  * the shop-closure flow (which cancels the same way) shares one code path. We just map
                  * its Outcome to the right HTTP response here.*/
-                var outcome = await BookingCanceller.CancelAsync(_context, bookingId, dueToClosure: false, forceRefund: refundAnyway);
+                var outcome = await BookingCanceller.CancelAsync(_context, bookingId, dueToClosure: false, forceRefund: refundAnyway, reason: CancellationReason.AdminCancelled);
                 return outcome switch
                 {
                     BookingCanceller.Outcome.NotFound => NotFound(new { message = "This booking was not found" }),

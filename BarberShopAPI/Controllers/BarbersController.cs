@@ -444,18 +444,58 @@ namespace BarberShopAPI.Controllers
 
         [Authorize(Roles = "ADMIN")]
         [HttpDelete("delete/{id}")]
-        public async Task<IActionResult> DeleteBarber(int id)
+        public async Task<IActionResult> DeleteBarber(int id, [FromQuery] bool confirmCancelBookings = false)
         {
             try
             {
                 var barber = await _context.Barbers.FirstOrDefaultAsync(b => b.Id == id);
                 if (barber == null) return NotFound(new { message = "Barber not found" });
                 if (!barber.isActive) return BadRequest(new { message = "This barber is already inactive" });
+
+                // Deactivating orphans the barber's upcoming appointments - the customer would show up to a
+                // barber who's gone. Surface them and make the admin confirm before we cancel & refund them,
+                // the same two-step the closure flow uses. Past bookings are left alone (they're history).
+                var futureBookings = await _context.Bookings
+                    .Include(b => b.User)
+                    .Where(b => b.BarberId == id && b.Status != BookingStatus.CANCELLED && b.StartDateTime > ShopClock.Now)
+                    .ToListAsync();
+
+                if (futureBookings.Count > 0 && !confirmCancelBookings)
+                {
+                    // Mirror the closure conflict payload so the frontend can reuse the same modal: who the
+                    // automatic cancellation email can reach (COMPLETED + ContactEmail) and who needs a call.
+                    var conflictDetails = futureBookings.Select(b => new
+                    {
+                        b.Id,
+                        Date = b.StartDateTime.ToString("dddd, MMMM d, yyyy"),
+                        Time = b.StartDateTime.ToString("h:mm tt"),
+                        Customer = b.User != null ? $"{b.User.Name} {b.User.Surname}".Trim() : null,
+                        Status = b.Status.ToString(),
+                        Email = b.ContactEmail,
+                        Phone = b.User != null ? b.User.Phone : null,
+                        WillBeEmailed = b.Status == BookingStatus.COMPLETED && !string.IsNullOrWhiteSpace(b.ContactEmail)
+                    }).ToList();
+
+                    var emailedCount = conflictDetails.Count(c => c.WillBeEmailed);
+                    var phoneOnlyCount = conflictDetails.Count - emailedCount;
+                    var message = $"This barber has {conflictDetails.Count} upcoming booking(s). "
+                        + "Deactivating will cancel and refund them. "
+                        + (emailedCount > 0 ? $"{emailedCount} customer(s) with an email on file will be notified automatically. " : "")
+                        + (phoneOnlyCount > 0 ? $"{phoneOnlyCount} have no email and must be contacted by phone." : "");
+
+                    return Conflict(new
+                    {
+                        requiresConfirmation = true,
+                        message,
+                        conflicts = conflictDetails
+                    });
+                }
+
                 if (!string.IsNullOrWhiteSpace(barber.ImageUrl) && !barber.ImageUrl.StartsWith("http"))
                 {
                     var filePath = Path.Combine("wwwroot", barber.ImageUrl.TrimStart('/'));
                     /* the stored imageUrl looks like /uploads/abc.jpg. If you do
-                     * Path.Combine("wwwroot", "/uploads/abc.jpg"), the leading slash makes it 
+                     * Path.Combine("wwwroot", "/uploads/abc.jpg"), the leading slash makes it
                      treat the second part as an absolute path and ignore wwwroot entirely. Trimming
                     it gives uploads/abc.jpg so the combine correctly produces wwwroot/uploads/abc.jpg*/
                     if (System.IO.File.Exists(filePath)) System.IO.File.Delete(filePath);
@@ -464,11 +504,18 @@ namespace BarberShopAPI.Controllers
 
                 var user = await _context.Users.FindAsync(barber.UserId);
                 if (user != null) user.TokenVersion++;
-                /* That's it. When the deactivated barber makes their next request, the middleware will see the token version mismatch and return a 401 — 
+                /* That's it. When the deactivated barber makes their next request, the middleware will see the token version mismatch and return a 401 —
                  * locking them out instantly without needing any extra middleware logic.
-                 * Otherwise, If a barber gets deactivated, their JWT is still valid and they can 
+                 * Otherwise, If a barber gets deactivated, their JWT is still valid and they can
                  * still access the dashboard until it expires — which is a real security hole.*/
                 await _context.SaveChangesAsync();
+
+                // Deactivate first (blocks NEW bookings via the isActive availability filter), then clear the
+                // existing future ones so no one can book this barber mid-cancellation. Same reason/refund
+                // handling as a closure, via the shared helper - PENDING voided, COMPLETED refunded + emailed.
+                if (futureBookings.Count > 0)
+                    await BookingConflictCanceller.CancelConflictingBookingsAsync(_context, futureBookings, CancellationReason.BarberUnavailable);
+
                 return Ok(new { message = "Barber deleted successfully" });
             }
             catch (Exception ex)

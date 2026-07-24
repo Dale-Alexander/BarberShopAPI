@@ -297,6 +297,7 @@ namespace BarberShopAPI.Controllers
                                     }
                                     booking.ContactEmail = email;
                                     booking.Status = BookingStatus.CANCELLED;
+                                    booking.CancellationReason = CancellationReason.ShopClosure;
                                     // Refund succeeded and we're committing the cancellation - clear any review flag a
                                     // previous failed attempt set, atomically with the state change.
                                     booking.NeedsReview = false;

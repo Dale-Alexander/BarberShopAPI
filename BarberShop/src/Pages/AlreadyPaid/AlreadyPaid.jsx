@@ -8,13 +8,31 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useState, useEffect, useContext } from "react";
 import LoadingSpinner from "../../Components/LoadingSpinner/LoadingSpinner";
 import { ToastContext } from "../../Context/ToastContext";
+import { BookingDetailsContext } from "../../Context/BookingDetailsContext";
 import { getErrorMessage } from "../../utils/errorMessage.js";
 const AlreadyPaid = () => {
     const { bookingId } = useParams();
     const [bookingDetails, setBookingDetails] = useState(null);
     const { data, loading, error } = useFetch(`/api/bookings/alreadypaid/${bookingId}`, false);
     const { showToast } = useContext(ToastContext);
+    const { setChosenServiceIds, setChosenServicesDurationMin, setSelectedBarberId, setSelectedDate, setSelectedTime } = useContext(BookingDetailsContext);
     const navigate = useNavigate();
+
+    /* "Book again" carries the same services into a fresh booking. The services page that would let the
+       customer re-pick them isn't built yet, and the pending path already wiped sessionStorage via
+       clearBooking - so we seed the chosen services straight from this booking (the endpoint returns its
+       serviceIds/duration) and clear barber/date/time so they land on the picker to choose a new barber and
+       slot. Without this they'd hit /datetime with no services and create-pending would reject the rebook. */
+    const rebook = () => {
+        if (bookingDetails?.serviceIds?.length) {
+            setChosenServiceIds(bookingDetails.serviceIds);
+            setChosenServicesDurationMin(bookingDetails.durationMin || 0);
+        }
+        setSelectedBarberId(null);
+        setSelectedDate(null);
+        setSelectedTime(null);
+        navigate("/datetime");
+    };
 
 
     useEffect(() => {
@@ -38,6 +56,25 @@ const AlreadyPaid = () => {
         setBookingDetails(data);
     }, [bookingId, data, error])
     const isCancelled = bookingDetails?.status === "CANCELLED";
+
+    /* Reason-specific cancelled copy: a barber leaving vs a shop closure vs a plain cancellation each read
+       differently to the customer. Falls back to the generic wording for any other/unknown reason. */
+    const reason = bookingDetails?.cancellationReason;
+    const barberName = bookingDetails?.barberName;
+    const cancelledTitle =
+        reason === "BarberUnavailable" ? "Your Barber Is No Longer Available"
+        : reason === "ShopClosure" ? "This Time Slot Is No Longer Available"
+        : "This Booking Has Been Cancelled";
+    const cancelledSubtitle =
+        reason === "BarberUnavailable"
+            ? `${barberName || "Your barber"} is no longer available, so this appointment has been cancelled. Please book again with another barber.`
+        : reason === "ShopClosure"
+            ? "The shop is closed for this time, so this appointment has been cancelled. Please book again at a different time."
+            : "This appointment was cancelled. If you'd like to make a new booking, please use the button below.";
+    const rebookLabel =
+        reason === "BarberUnavailable" ? "Choose Another Barber"
+        : reason === "ShopClosure" ? "Book Another Time"
+        : "Book Another Appointment";
 
 //early returns after all hooks. Loading after useEffect
     // Match the page's background (.ap-page) so the loading state doesn't flash white first.
@@ -73,9 +110,9 @@ const AlreadyPaid = () => {
                     </div>
 
                     <div className="ap-heading">
-                        <h2 className="ap-heading__title">{isCancelled ? "This Booking Has Been Cancelled" : "This Booking Is Already Paid"}</h2>
+                        <h2 className="ap-heading__title">{isCancelled ? cancelledTitle : "This Booking Is Already Paid"}</h2>
                         <p className="ap-heading__subtitle">{isCancelled
-                            ? "This appointment was cancelled. If you'd like to make a new booking, please use the button below."
+                            ? cancelledSubtitle
                             : "Payment was completed online for this appointment. No further action is needed."}</p>
                     </div>
 
@@ -141,8 +178,8 @@ const AlreadyPaid = () => {
                     </div>
 
                     <div className="ap-actions">
-                        <button className="ap-btn ap-btn--dark" onClick={() => navigate("/datetime") }>
-                            <CalendarCheck size={16} /> Book Another Appointment
+                        <button className="ap-btn ap-btn--dark" onClick={rebook}>
+                            <CalendarCheck size={16} /> {isCancelled ? rebookLabel : "Book Another Appointment"}
                         </button>
                         <button className="ap-btn ap-btn--outline" onClick={() => navigate("/") }>
                             <House size={16} /> Back to Home

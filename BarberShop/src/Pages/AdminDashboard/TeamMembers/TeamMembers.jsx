@@ -1,4 +1,4 @@
-import { Plus, Trash2, X, Users, Check, RotateCcw, UserX } from "lucide-react";
+import { Plus, Trash2, X, Users, Check, RotateCcw, UserX, Mail, Phone } from "lucide-react";
 import { useState , useEffect, useContext, useRef} from "react";
 import MemberCard from "./MemberCard/MemberCard";
 import "./TeamMembers.css";
@@ -18,6 +18,10 @@ const TeamMembers = () => {
     const [newName, setNewName] = useState("");
     const [password, setPassword] = useState("");
     const [deleteBarberId, setDeleteBarberId] = useState(null);
+    /* Set when a deactivate is refused with 409 because the barber has upcoming bookings: holds the
+     * backend's { message, conflicts } plus the barberId so the admin can review who'd be cancelled and
+     * re-submit with confirmCancelBookings. Null = no conflict pending. */
+    const [deactivateConflict, setDeactivateConflict] = useState(null);
     const [email, setEmail] = useState("");
     // Server-side "email already in use" (409). Shown inline under the Email field rather than as a
     // toast, since it's a fix-this-field problem and the admin should keep what they typed.
@@ -72,9 +76,44 @@ stored i the browser's memory which the backend cant access*/
             setDeleteBarberId(null);
         }
         catch(err){
-            showToast("Couldn't delete barber", getErrorMessage(err));
+            // Barber has upcoming bookings: the backend refuses to silently orphan them and hands back the
+            // affected list. Swap the are-you-sure modal for the conflict modal so the admin can review who'd
+            // be cancelled/refunded and confirm.
+            if (err.response?.status === 409 && err.response.data?.requiresConfirmation) {
+                setDeleteBarberId(null);
+                setDeactivateConflict({ barberId: id, ...err.response.data });
+            } else {
+                showToast("Couldn't delete barber", getErrorMessage(err));
+            }
         }
         finally{
+            setSubmitting(false);
+        }
+    }
+
+    // Second step of the conflict flow: re-run the deactivate with confirmCancelBookings=true, which cancels
+    // & refunds the upcoming bookings and notifies those customers.
+    const confirmDeactivateWithCancellations = async () => {
+        if (!deactivateConflict || submitting) return;
+        const id = deactivateConflict.barberId;
+        setSubmitting(true);
+        try {
+            await adminAxios.delete(`/api/barbers/delete/${id}?confirmCancelBookings=true`);
+            setBarbers(barbers.map(b => b.id === id ? { ...b, isActive: false } : b));
+            const callList = deactivateConflict.conflicts.filter(c => !c.willBeEmailed);
+            showToast(
+                "Barber deactivated",
+                callList.length > 0
+                    ? `${deactivateConflict.conflicts.length} booking(s) cancelled. Please phone the ${callList.length} customer(s) with no email on file.`
+                    : `${deactivateConflict.conflicts.length} booking(s) cancelled and those customers emailed.`,
+                "info"
+            );
+            setDeactivateConflict(null);
+        }
+        catch (err) {
+            showToast("Couldn't deactivate barber", getErrorMessage(err));
+        }
+        finally {
             setSubmitting(false);
         }
     }
@@ -577,6 +616,55 @@ stored i the browser's memory which the backend cant access*/
                           </div>
                         </div>
                       </div>
+            )}
+
+            {/* Deactivate blocked by upcoming bookings: review who'd be cancelled/refunded, then confirm. */}
+            {deactivateConflict && (
+                <div className="modal-overlay" onClick={() => !submitting && setDeactivateConflict(null)}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
+                        <div className="modal-header">
+                            <h2>Upcoming bookings for this barber</h2>
+                            <button className="modal-close" onClick={() => !submitting && setDeactivateConflict(null)}>
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="modal-body">
+                            <p style={{ color: "var(--muted-fg)", lineHeight: 1.6, marginBottom: 16 }}>{deactivateConflict.message}</p>
+
+                            <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8, maxHeight: 260, overflowY: "auto" }}>
+                                {deactivateConflict.conflicts.map((c) => (
+                                    <li key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "8px 12px", border: "1px solid var(--border, #e5e5e5)", borderRadius: 6 }}>
+                                        <div style={{ display: "flex", flexDirection: "column" }}>
+                                            <span style={{ fontWeight: 600 }}>{c.date} · {c.time}</span>
+                                            {c.customer && <span style={{ color: "var(--muted-fg)", fontSize: 13 }}>{c.customer}</span>}
+                                        </div>
+                                        {c.willBeEmailed ? (
+                                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "#2e7d32", fontSize: 13, whiteSpace: "nowrap" }}>
+                                                <Mail size={14} /> Will be emailed
+                                            </span>
+                                        ) : (
+                                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "#c9770a", fontSize: 13, whiteSpace: "nowrap" }}>
+                                                <Phone size={14} /> {c.phone ? `Call: ${c.phone}` : c.email ? `Email ${c.email}` : "No contact on file"}
+                                            </span>
+                                        )}
+                                    </li>
+                                ))}
+                            </ul>
+
+                            <p style={{ color: "var(--muted-fg)", fontSize: 13, lineHeight: 1.6, marginTop: 16 }}>
+                                Confirming cancels and refunds these bookings and deactivates the barber. Customers with an
+                                email are notified automatically; if an email fails to send, that booking appears in your
+                                Needs Review list so you can phone them by hand.
+                            </p>
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn-secondary" onClick={() => setDeactivateConflict(null)} disabled={submitting}>Keep barber</button>
+                            <button className="btn-primary" style={{ background: "#e74c3c" }} onClick={confirmDeactivateWithCancellations} disabled={submitting}>
+                                {submitting ? <PulseLoader size={8} color="#fff" /> : `Cancel ${deactivateConflict.conflicts.length} booking(s) & deactivate`}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </>
     )

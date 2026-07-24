@@ -52,6 +52,17 @@ namespace BarberShopAPI.Controllers
                     if (barber == null) return NotFound(new { message = "Barber profile not found" });
                     newClosure.BarberId = barber.Id;
                 }
+                // An admin may scope a closure to a specific barber (BarberId set) or leave it shop-wide
+                // (null). The barber path above force-sets its own id, so this only guards the admin case:
+                // an unvalidated id would otherwise create an orphan closure pointing at no real barber.
+                // Active-only, matching the customer-facing roster - a deactivated barber takes no bookings.
+                else if (newClosure.BarberId != null)
+                {
+                    var barberExists = await _context.Barbers
+                        .AnyAsync(b => b.Id == newClosure.BarberId && b.isActive);
+                    if (!barberExists)
+                        return BadRequest(new { message = "Selected barber not found or is inactive" });
+                }
                 await ValidateClosureAsync(newClosure);
 
                 // Find bookings this closure would land on. A shop-wide closure (BarberId == null) hits
@@ -131,7 +142,17 @@ namespace BarberShopAPI.Controllers
                 // Closure now exists, so the slot is blocked against NEW bookings. Clear out the ones that
                 // were already on it. We create the closure first so that even if a cancellation below fails,
                 // the slot stays closed and the failure is isolated to that one booking (logged for follow-up).
-                await CancelConflictingBookingsAsync(conflicts);
+                await BookingConflictCanceller.CancelConflictingBookingsAsync(_context, conflicts, CancellationReason.ShopClosure);
+
+                // Only barber-scoped closures carry a name; shop-wide (BarberId == null) stays null so the
+                // admin calendar renders just the reason. Lets the client show "Name - reason" immediately
+                // instead of falling back to the reason until the next reload.
+                var barberName = closure.BarberId == null
+                    ? null
+                    : await _context.Barbers
+                        .Where(b => b.Id == closure.BarberId)
+                        .Select(b => b.User.Name)
+                        .FirstOrDefaultAsync();
 
                 return Ok(new GetBarberShopClosuresViewModel
                 {
@@ -142,6 +163,7 @@ namespace BarberShopAPI.Controllers
                     EndTime = closure.EndTime,
                     Reason = closure.Reason,
                     IsFullDay = closure.IsFullDay,
+                    BarberName = barberName,
                 });
             }
             catch(ValidationException ex)
@@ -152,55 +174,6 @@ namespace BarberShopAPI.Controllers
             {
                 Console.WriteLine(ex.Message);
                 return StatusCode(500, new { message = "Unexpected server error occurred" });
-            }
-        }
-
-        /* Cancels the bookings a just-created closure landed on. COMPLETED (paid) bookings go through the
-         * shared BookingCanceller (refund + closure email). PENDING bookings are different: their payment
-         * is still in flight, so instead of refunding we try to void the in-flight PaymentIntent. If Stripe
-         * won't let us (the payment is already succeeding), we leave the booking PENDING and rely on the
-         * webhook's closure guard to refund + cancel it when the payment lands - it can never be confirmed
-         * onto the now-closed slot either way. Failures are logged, not thrown, so one bad booking doesn't
-         * undo the closure or block the others.*/
-        private async Task CancelConflictingBookingsAsync(List<Booking> conflicts)
-        {
-            foreach (var booking in conflicts)
-            {
-                if (booking.Status == BookingStatus.PENDING)
-                {
-                    if (!string.IsNullOrWhiteSpace(booking.StripePaymentIntentId))
-                    {
-                        try
-                        {
-                            await new PaymentIntentService().CancelAsync(booking.StripePaymentIntentId);
-                        }
-                        catch (StripeException ex)
-                        {
-                            Console.WriteLine($"Booking {booking.Id}: couldn't cancel PaymentIntent for a pending closure-conflict, leaving it for the webhook guard: {ex.Message}");
-                            continue;
-                        }
-                    }
-                    // No reminder job to delete: those are only scheduled at confirmation (COMPLETED),
-                    // so a PENDING booking never has one.
-                    booking.Status = BookingStatus.CANCELLED;
-                    await _context.SaveChangesAsync();
-                    // No email: a pending booking never got a confirmation, so there's nothing to walk back.
-                }
-                else
-                {
-                    var outcome = await BookingCanceller.CancelAsync(_context, booking.Id, dueToClosure: true);
-                    if (outcome != BookingCanceller.Outcome.Cancelled)
-                    {
-                        // Nothing here will retry (unlike the webhook's Stripe-retry paths) and there's no
-                        // interactive admin to re-click, so this booking would otherwise be silently stuck:
-                        // the slot is closed but the customer wasn't refunded/cancelled. Flag it so it shows
-                        // up in the admin's review worklist instead of only in the logs.
-                        Console.WriteLine($"Booking {booking.Id}: closure cancellation returned {outcome}, needs manual follow-up.");
-                        booking.NeedsReview = true;
-                        booking.ReviewReason = $"Closure cancellation returned {outcome} - check Stripe for a charge on this booking and refund/reconcile by hand.";
-                        await _context.SaveChangesAsync();
-                    }
-                }
             }
         }
 

@@ -20,6 +20,11 @@ namespace BarberShopAPI.Services
         /* Same idea as ClosureCancelRetries, for the "we couldn't confirm your booking, here's your refund"
          * email: once exhausted we flag the booking so staff phone the customer instead. */
         public const int RefundNoticeRetries = 5;
+
+        /* Same idea again, for the "your barber is no longer available" email. Like the closure email this
+         * is the customer's ONLY notice their confirmed appointment is gone, so once retries are spent we
+         * flag the booking for a manual phone call rather than let it vanish into the failed-jobs list. */
+        public const int BarberUnavailableRetries = 5;
     }
 
     public interface IEmailService
@@ -27,6 +32,13 @@ namespace BarberShopAPI.Services
         Task sendBookingReminderEmailAsync(int bookingId);
         Task sendBookingConfirmationEmailAsync(int bookingId);
         Task sendBookingCancellationEmailAsync(int bookingId, bool refundIssued);
+
+        /* [AutomaticRetry] + NeedsReview-on-exhaustion for the same reason as the closure email below: a
+         * barber-deactivation cancellation is the customer's only notice their appointment is gone, so a
+         * permanently-failed email must surface for a manual call, not disappear. context is filled by
+         * Hangfire at run time (callers pass null). */
+        [AutomaticRetry(Attempts = EmailJobPolicy.BarberUnavailableRetries)]
+        Task sendBookingCancelledBarberUnavailableEmailAsync(int bookingId, bool refundIssued, PerformContext? context);
 
         /* The [AutomaticRetry] lives on the interface method because that's the MethodInfo Hangfire records
          * when the job is enqueued via BackgroundJob.Enqueue<IEmailService>(...), so this is where it reads
@@ -161,6 +173,73 @@ namespace BarberShopAPI.Services
                        $"If you'd like to book again, feel free to visit our website.";
             await _resend.EmailSendAsync(emailMessage);
 
+        }
+
+        /* Sent when we cancel a customer's confirmed booking because the barber they booked was
+         * deactivated (left the shop). Like the closure cancellation, this is an unprompted shop-side
+         * cancellation, so the customer gets no warning unless we tell them - and the generic "your
+         * appointment has been cancelled" email doesn't say why, which reads as us dropping their
+         * appointment for no reason. We name the barber and point them back to rebook with someone else.
+         * refundIssued is passed by BookingCanceller (true only when a card payment was actually
+         * refunded), so we only promise a refund when one really happened. */
+        public async Task sendBookingCancelledBarberUnavailableEmailAsync(int bookingId, bool refundIssued, PerformContext? context)
+        {
+            var booking = await _context.Bookings
+                .Include(b => b.User)
+                .Include(b => b.Barber).ThenInclude(b => b.User)
+                .FirstOrDefaultAsync(b => b.Id == bookingId);
+            if (booking == null) return;
+            if (string.IsNullOrWhiteSpace(booking.ContactEmail)) return;
+
+            var safeName = WebUtility.HtmlEncode(booking.User?.Name);
+            var barberName = WebUtility.HtmlEncode(booking.Barber?.User?.Name ?? "Your barber");
+
+            var refundHtml = refundIssued
+                ? "<p>A full refund has been issued to your original payment method and should appear within a few business days.</p>"
+                : "";
+            var refundText = refundIssued
+                ? "A full refund has been issued to your original payment method and should appear within a few business days.\n\n"
+                : "";
+
+            var message = new EmailMessage
+            {
+                From = "Dale's Barbershop <onboarding@resend.dev>",
+                Subject = "Your appointment has been cancelled"
+            };
+            message.To.Add(booking.ContactEmail);
+            message.HtmlBody = $@"
+            <h2>Hi {safeName},</h2>
+            <p>{barberName} is no longer available, so your appointment scheduled for
+            <strong>{booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}</strong> has been cancelled.</p>
+            {refundHtml}
+            <p>We're sorry for the inconvenience. Please visit our website to book again with another barber.</p>";
+
+            message.TextBody = $"Hi {booking.User?.Name},\n\n" +
+                       $"{(booking.Barber?.User?.Name ?? "Your barber")} is no longer available, so your appointment scheduled for " +
+                       $"{booking.StartDateTime:dddd, MMMM d 'at' h:mm tt} has been cancelled.\n\n" +
+                       refundText +
+                       $"We're sorry for the inconvenience. Please visit our website to book again with another barber.";
+
+            try
+            {
+                await _resend.EmailSendAsync(message);
+            }
+            catch (Exception ex)
+            {
+                /* Same policy as the closure email: this is the customer's only notice their confirmed
+                 * appointment is gone, so on a transient failure let Hangfire keep retrying; only once the
+                 * retries are exhausted do we give up and flag the booking for a manual call, so it surfaces
+                 * in the admin's Needs-Review worklist instead of vanishing into the failed-jobs list. */
+                var retryCount = context?.GetJobParameter<int>("RetryCount") ?? 0;
+                if (retryCount < EmailJobPolicy.BarberUnavailableRetries) throw;
+
+                var refundNote = refundIssued ? " Their payment has been refunded in full." : "";
+                booking.NeedsReview = true;
+                booking.ReviewReason =
+                    $"Barber-unavailable email to {booking.ContactEmail} failed after {EmailJobPolicy.BarberUnavailableRetries + 1} attempts ({ex.Message}). "
+                    + $"Call the customer to tell them {(booking.Barber?.User?.Name ?? "their barber")} is no longer available and their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled.{refundNote}";
+                await _context.SaveChangesAsync();
+            }
         }
 
         /* Like sendBookingCancellationEmailAsync, but for the case where WE cancelled the customer's

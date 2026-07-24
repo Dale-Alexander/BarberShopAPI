@@ -83,6 +83,11 @@ namespace BarberShopAPI.Models
         public bool NeedsReview { get; set; } = false;
         public string? ReviewReason { get; set; }
 
+        /* Why this booking was cancelled (None until it is). Drives the customer-facing cancelled screen
+         * and the cancellation email wording - e.g. BarberUnavailable when the assigned barber is
+         * deactivated, ShopClosure when a closure lands on the slot. See CancellationReason. */
+        public CancellationReason CancellationReason { get; set; } = CancellationReason.None;
+
         /* How to know its a navigation property: 
          *DataType is another model class. For example: Payment, Barber etc
          *Please note that navigation properties are not stored as real

@@ -10,5 +10,8 @@ namespace BarberShopAPI.ViewModels
         public TimeOnly? EndTime { get; set; }
         public string Reason { get; set; }
         public bool IsFullDay { get; set; }
+        // Null for shop-wide closures; the barber's name for barber-scoped ones. Lets the admin
+        // calendar render "Name - reason" for a just-created closure without waiting for a reload.
+        public string? BarberName { get; set; }
     }
 }
