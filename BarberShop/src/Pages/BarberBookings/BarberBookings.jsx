@@ -338,6 +338,7 @@ const BarberBookings = () => {
                                         <th className="barber-bookings-table-header">Phone</th>
                                     <th className="barber-bookings-table-header">Date&Time</th>
                                     <th className="barber-bookings-table-header">Service</th>
+                                    <th className="barber-bookings-table-header">Amount</th>
                                     <th className="barber-bookings-table-header">Payment</th>
                                     <th className="barber-bookings-table-header">Actions</th>
                                 </tr>
@@ -366,10 +367,15 @@ const BarberBookings = () => {
                                                 {b.services.map((s, index) => (
                                                     <div className="service-row" key={index}>
                                                         <span className="booking-service-badge">{s.serviceName}</span>
-                                                        <span className="service-price">€{s.price}</span>
                                                     </div>
                                                 ))}
                                             </div>
+                                        </td>
+                                        {/* The collected/owed amount (Payment.Amount). Reflects whatever mark-paid
+                                            recorded - or an admin's later edit. A dash when none is on file yet
+                                            (an admin phone booking not marked paid, or paid without an amount). */}
+                                        <td className="barber-bookings-table-data" data-label="Amount">
+                                            {b.amount != null ? `€${b.amount}` : <span className="no-actions">&mdash;</span>}
                                         </td>
                                         {/* Labels match the filter's Paid/Unpaid pills - the raw enum used to
                                             read "COMPLETED" for a row the Paid filter had just returned. */}

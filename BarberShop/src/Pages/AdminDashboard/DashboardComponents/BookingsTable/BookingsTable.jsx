@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useContext } from "react";
 import { useNavigate } from "react-router-dom";
-import { SquarePen, Trash2, Plus, Filter, Search, AlertTriangle, CheckCircle2, Banknote } from "lucide-react";
+import { SquarePen, Trash2, Plus, Filter, Search, AlertTriangle, CheckCircle2, Banknote, Coins } from "lucide-react";
 import { format } from "date-fns";
 import FilterModal from "../Filter/Filter.jsx";
 import "./BookingsTable.css";
@@ -30,6 +30,10 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
     const [reviewTarget, setReviewTarget] = useState(null);
     const [markPaidTarget, setMarkPaidTarget] = useState(null);
     const [markPaidAmount, setMarkPaidAmount] = useState("");
+    // Correcting the collected amount on an already-paid cash booking (discount / different services on
+    // the day) so the revenue chart reflects reality. Prefilled with the current amount.
+    const [editAmountTarget, setEditAmountTarget] = useState(null);
+    const [editAmountValue, setEditAmountValue] = useState("");
     const { showToast } = useContext(ToastContext);
     const navigate = useNavigate();
 
@@ -207,6 +211,37 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
         setMarkPaidTarget(null);
     }
 
+    /* Corrects the collected amount on an already-paid cash booking. Reflects in the row and, via
+     * refreshSummary, the chart/stat cards (which sum COMPLETED payments). */
+    const onEditAmount = async (bookingId, amount) => {
+        try {
+            const res = await adminAxios.patch(`/api/bookings/edit-amount/${bookingId}`, { amount });
+            setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, amount: res.data?.amount ?? amount } : b));
+            refreshSummary?.();
+            showToast("Amount updated", res.data?.message || `Booking #${bookingId} amount updated.`, "success");
+        }
+        catch (err) {
+            showToast("Couldn't update amount", getErrorMessage(err));
+        }
+    }
+
+    // Unlike mark-paid, the amount is required here - the admin is deliberately setting a value. Mirrors the
+    // backend bounds; the error disables the button so a bad value never reaches confirmEditAmount.
+    const editAmountError = (() => {
+        const trimmed = editAmountValue.trim();
+        if (trimmed === "") return "Enter an amount greater than 0 and at most 400.";
+        const parsed = Number(trimmed);
+        if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 400)
+            return "Enter an amount greater than 0 and at most 400.";
+        return null;
+    })();
+
+    const confirmEditAmount = () => {
+        if (!editAmountTarget || editAmountError) return;
+        onEditAmount(editAmountTarget.id, Number(editAmountValue.trim()));
+        setEditAmountTarget(null);
+    }
+
     return (
         <div className="bookings-admin-table-container">
             <div className="bookings-admin-table-header">
@@ -357,6 +392,13 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                                                         }
                                                     }}><Banknote size={14} /> Mark as paid</button>
                                                 )}
+                                                {!isCancelled(b) && b.paymentMethod === "CASH" && b.paymentStatus === "COMPLETED" && (
+                                                    <button className="action-dropdown-item mark-paid-item" onClick={() => {
+                                                        setOpenMenuId(null);
+                                                        setEditAmountTarget(b);
+                                                        setEditAmountValue(b.amount != null ? String(b.amount) : "");
+                                                    }}><Coins size={14} /> Edit amount</button>
+                                                )}
                                                 </div>
                                             )}
                                         </>
@@ -459,6 +501,35 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                         <div className="cancel-confirm-actions">
                             <button className="cancel-confirm-keep" onClick={() => setMarkPaidTarget(null)}>Cancel</button>
                             <button className="review-confirm-go" onClick={confirmMarkPaid} disabled={!!markPaidAmountError}>Mark as paid</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {editAmountTarget && (
+                <div className="cancel-confirm-overlay" onClick={() => setEditAmountTarget(null)}>
+                    <div className="cancel-confirm-modal" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="cancel-confirm-title">Edit amount for booking #{editAmountTarget.id}</h3>
+                        <p className="cancel-confirm-text">
+                            Set the amount actually collected for this booking &mdash; e.g. a discount given on
+                            the day. This updates the revenue chart and stat cards.
+                        </p>
+                        <label className="mark-paid-amount-label">
+                            Amount collected (&euro;)
+                            <input
+                                type="number"
+                                min="0"
+                                max="400"
+                                step="0.01"
+                                inputMode="decimal"
+                                className={`mark-paid-amount-input${editAmountError ? " form-input--invalid" : ""}`}
+                                value={editAmountValue}
+                                onChange={(e) => setEditAmountValue(e.target.value)}
+                            />
+                            {editAmountError && <span className="form-error">{editAmountError}</span>}
+                        </label>
+                        <div className="cancel-confirm-actions">
+                            <button className="cancel-confirm-keep" onClick={() => setEditAmountTarget(null)}>Cancel</button>
+                            <button className="review-confirm-go" onClick={confirmEditAmount} disabled={!!editAmountError}>Save amount</button>
                         </div>
                     </div>
                 </div>

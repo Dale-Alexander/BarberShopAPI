@@ -531,6 +531,51 @@ namespace BarberShopAPI.Controllers
                 return StatusCode(500, new { message = "Unexpected server error occurred" });
             }
         }
+        /* Corrects the collected amount on an already-paid CASH booking so the revenue chart / stat cards
+         * (which sum Payment.Amount over COMPLETED payments) reflect what was actually taken - e.g. a
+         * discount on the day, or services that differed from what was booked. Deliberately has no past
+         * restriction: this is a bookkeeping correction on a completed booking. */
+        // Admin-only: correcting the collected amount is a revenue/bookkeeping action the owner owns. A
+        // barber's page shows service names and the collected amount but doesn't expose this edit, and the
+        // endpoint enforces the same so the restriction isn't merely cosmetic.
+        [Authorize(Roles = "ADMIN")]
+        [HttpPatch("edit-amount/{bookingId}")]
+        public async Task<IActionResult> EditCollectedAmount(int bookingId, [FromBody] EditPaymentAmountViewModel model)
+        {
+            try
+            {
+                // Bounds mirror ConfirmCashBooking / mark-cash-paid / the CK_Payments_Amount_Max400 constraint.
+                if (model.Amount <= 0 || model.Amount > 400)
+                    return BadRequest(new { message = "Amount must be greater than zero and at most 400" });
+
+                var booking = await _context.Bookings.Include(b => b.Payment).FirstOrDefaultAsync(b => b.Id == bookingId);
+                if (booking == null) return NotFound(new { message = "Booking not found" });
+                var payment = booking.Payment;
+                if (payment == null) return NotFound(new { message = "Payment not found for this booking" });
+
+                // Cash only. A card payment's amount is whatever Stripe actually captured; hand-editing it
+                // would desync the books from Stripe with no refund to back it, so card adjustments must go
+                // through an actual Stripe refund instead of this endpoint.
+                if (payment.Method != Models.Enums.PaymentMethod.CASH)
+                    return BadRequest(new { message = "Only cash payment amounts can be edited" });
+
+                // Only a collected payment on a confirmed booking is in the revenue figures at all. An
+                // uncollected cash booking captures its amount through mark-as-paid instead, so send them there.
+                if (booking.Status != BookingStatus.COMPLETED || payment.Status != PaymentStatus.COMPLETED)
+                    return BadRequest(new { message = "Only collected bookings can have their amount edited. Mark it as paid first." });
+
+                payment.Amount = model.Amount;
+                await _context.SaveChangesAsync();
+
+                return Ok(new { message = "Amount updated", paymentId = payment.Id, amount = payment.Amount });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return StatusCode(500, new { message = "Unexpected server error occurred" });
+            }
+        }
+
         [HttpPost("payment-intent")]
         public async Task<IActionResult> StartBookingCardFlow([FromBody] PaymentIntentViewModel request)
         {
@@ -763,8 +808,7 @@ namespace BarberShopAPI.Controllers
                     PaymentStatus = b.Payment.Status.ToString(),
                     Services = b.Services.Select(bs => new
                     {
-                        ServiceName = bs.Service.Name,
-                        bs.Service.Price
+                        ServiceName = bs.Service.Name
                     })
                 }).ToListAsync();
             return Ok(new
