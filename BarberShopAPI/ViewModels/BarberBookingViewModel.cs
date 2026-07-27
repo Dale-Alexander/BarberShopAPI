@@ -9,5 +9,7 @@ namespace BarberShopAPI.ViewModels
         public string ImageUrl { get; set; }
         public ICollection<BookingsDateAndTimeViewModel> Bookings { get; set; }
         public ICollection<BarberShopClosureViewModel> DateClosures { get; set; }
+        // Effective-dated weekly schedule versions (current + future) the picker generates slots from.
+        public ICollection<BarberScheduleViewModel> Schedule { get; set; } = new List<BarberScheduleViewModel>();
     }
 }

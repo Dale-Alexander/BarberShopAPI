@@ -10,11 +10,8 @@ import Pagination from "../../../../Components/Pagination/Pagination.jsx";
 import LoadingSpinner from "../../../../Components/LoadingSpinner/LoadingSpinner.jsx";
 import ErrorState from "../../../../Components/ErrorState/ErrorState.jsx";
 import { getErrorMessage } from "../../../../utils/errorMessage.js";
+import useFetch from "../../../../Hooks/useFetch.js";
 
-/* Cancelling within this many hours of the appointment forfeits the customer's refund (mirrors the
- * backend RefundCutoff in BookingCanceller). Compared against Malta wall-clock, since startDateTime is
- * stored in Malta time - see getMaltaNow. */
-const REFUND_CUTOFF_HOURS = 24;
 const getMaltaNow = () =>
     new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Malta" }));
 
@@ -37,11 +34,17 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
     const { showToast } = useContext(ToastContext);
     const navigate = useNavigate();
 
+    /* Cancelling within this many hours of the appointment forfeits the customer's refund - the shop's
+     * configured cutoff (ShopSettings), mirrors the backend RefundCutoffHours in BookingCanceller. Falls
+     * back to 24 until loaded / on failure, matching the prior hard-coded default. */
+    const { data: shopSettings } = useFetch("/api/Settings", true);
+    const refundCutoffHours = shopSettings?.refundCutoffHours ?? 24;
+
     /* startDateTime is Malta wall-clock (parsed as local) and getMaltaNow() is Malta's clock as local, so
      * this difference is a true Malta-vs-Malta comparison regardless of the admin's own timezone. */
     const isWithinRefundCutoff = (booking) => {
         const diffHours = (new Date(booking.startDateTime) - getMaltaNow()) / (1000 * 60 * 60);
-        return diffHours < REFUND_CUTOFF_HOURS;
+        return diffHours < refundCutoffHours;
     };
 
     /* A booking that has already passed can't be rescheduled or cancelled - the backend rejects both

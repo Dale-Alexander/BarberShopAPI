@@ -2,31 +2,17 @@ In BookingsDateAndTable, dont forget to change the serviceIds when creating a pe
 
 Format form inputs on the frontend like transform an all capitalised input to proper casing
 
-For the bookings table you should probably add another button for cancelled since it doesnt make sense to add cancelled as an option in the filter since the bookings table
-only displays completed bookings and therefore selecting cancelled in the display doesnt make sense  because you are displaying cancelled in a table full of completed bookings
-only so it is better to add a cancelled button next to create booking or something
-
 Change the links from NotFound to /services and not to /datetime
 
-See if you are going to leave payment-intent endpoint like that specifically, the part about idempotencyKey because what if the user clicks the card payment and then refreshes
-then when he wants to pay again and he clicks card payment method, it will show a toast saying error because that idempotencyKey with that bookingId was already generated
-and you cant have duplicate idempote
+Sometimes I need to visit All Mail to see the reset password link and not to inbox. This is because you dont own a domain yet. Once you own a domain, go to
+Resend and add & verify your own domain. Add the DNS rescords Resend gives you, SPF, DKIM and a MCARD record. These are what let Gmail cryptographically
+verify the mail is really from you. Change the From address in IEmailService.cs to your domain. Double check with claude first to see if is necessary to configure your
+email in Resend
 
-If you forget the stripe terminal to run and confirm a payment using the card, it will redirect you to the bookin success page and it will have empty details. It will also
-display an error saying this booking is still pending. You can navigate back
+Just a heads up that editing an amount is only available to the admin and not the barber. I think it is probably better like this rather than letting barber touch revenue.
 
-When paying with card and filling all your details, make sure the optional stuff doesnt get rendered like the fullname.
-Claude says it doesnt show the name but double check. Apparently the Postcode is shown, should you remove this.If you do Stripe's validation for payments from correct address wont work anymore.
+When going into live mode in Stripe, disable Link. You will also have to enable the google pay and applepay on in Live Mode and register your live domain for Apple pay in Live mode.
+Google Pay needs no domain step. Alsoallow Revolut pay in live mode and disable all the other enabled ones. You have to complete your account first
+This is what claude told me btw. 
 
-A stripe refund or a closure job auto-cancelling doesnt automatically update the chart but i think its better because you would have to poll constantly.
-Not worth the result for the performance
-
-For Services creation or update, inform the user to click on the box to visit his files on his pc or he can drag and drop to replace the image/create the image for the first time
-
-I think when creating a closure the admin cant close slots for other barbers, he can only do shop-wide closures. I think though im not sure. Either way should it be like this?
-
-Change the resend 2 minute timer
-
-As an action, should I make a refund option?
-
-Sometimes I need to visit All Mail to see the reset password link and not to inbox. 
+Google Pay isnt appearing. Figure out why.

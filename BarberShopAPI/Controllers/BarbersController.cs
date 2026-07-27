@@ -83,10 +83,42 @@ namespace BarberShopAPI.Controllers
                         IsFullDay = c.IsFullDay
                     }).ToListAsync();
                 
-                // Expose the between-booking buffer and grace-after-close so the customer slot picker
-                // greys out the same slots the backend will reject (see ShopSettings).
+                // Each active barber's weekly schedule versions. Only current/future versions matter
+                // for bookable dates (a version wholly in the past can't govern today..horizon), so
+                // filter to EffectiveTo == null OR EffectiveTo >= today. Sent as a template the picker
+                // resolves per chosen date - far smaller than resolving every day in the horizon.
+                var barberIds = barbers.Select(b => b.BarberId).ToList();
+                var schedules = await _context.BarberSchedules
+                    .Where(s => barberIds.Contains(s.BarberId)
+                                && (s.EffectiveTo == null || s.EffectiveTo >= todayDate))
+                    .Select(s => new
+                    {
+                        s.BarberId,
+                        Vm = new BarberScheduleViewModel
+                        {
+                            EffectiveFrom = s.EffectiveFrom,
+                            EffectiveTo = s.EffectiveTo,
+                            Shifts = s.Shifts
+                                .OrderBy(sh => sh.DayOfWeek).ThenBy(sh => sh.StartTime)
+                                .Select(sh => new BarberScheduleShiftViewModel
+                                {
+                                    DayOfWeek = (int)sh.DayOfWeek,
+                                    StartTime = sh.StartTime,
+                                    EndTime = sh.EndTime
+                                }).ToList()
+                        }
+                    }).ToListAsync();
+
+                var schedulesByBarber = schedules.GroupBy(x => x.BarberId)
+                    .ToDictionary(g => g.Key, g => g.Select(x => x.Vm).ToList());
+                foreach (var b in barbers)
+                    b.Schedule = schedulesByBarber.TryGetValue(b.BarberId, out var list)
+                        ? list : new List<BarberScheduleViewModel>();
+
+                // Expose the buffer, grace-after-close and lead-time/horizon so the customer slot picker
+                // greys out / disables the same slots the backend will reject (see ShopSettings).
                 var settings = await _context.ShopSettings
-                    .Select(s => new { s.BufferMin, s.GraceMinutesAfterClose })
+                    .Select(s => new { s.BufferMin, s.GraceMinutesAfterClose, s.MinAdvanceBookingMinutes, s.MaxAdvanceBookingDays })
                     .FirstAsync();
 
                 return Ok(new
@@ -94,7 +126,9 @@ namespace BarberShopAPI.Controllers
                     barbers,
                     shopClosures,
                     bufferMin = settings.BufferMin,
-                    graceMinutesAfterClose = settings.GraceMinutesAfterClose
+                    graceMinutesAfterClose = settings.GraceMinutesAfterClose,
+                    minAdvanceBookingMinutes = settings.MinAdvanceBookingMinutes,
+                    maxAdvanceBookingDays = settings.MaxAdvanceBookingDays
                 });
             }
             catch(Exception ex)
@@ -142,6 +176,30 @@ namespace BarberShopAPI.Controllers
             var lastName = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
             if (firstName.Length > 50 || lastName.Length > 50) return false;
             return true;
+        }
+
+        // The default schedule handed to a brand-new barber (and to a revived one with no schedule
+        // to reuse): one open-ended current version, every weekday 09:00-17:30 - the shop's historic
+        // hardcoded hours, kept in step with the day-one seed migration. Guarantees no barber ever
+        // exists in an unbookable "no schedule" state. The admin refines it in the schedule editor.
+        private static BarberSchedule BuildDefaultSchedule()
+        {
+            var schedule = new BarberSchedule
+            {
+                EffectiveFrom = ShopClock.Today,
+                EffectiveTo = null,
+                Shifts = new List<BarberScheduleShift>()
+            };
+            for (int d = 0; d < 7; d++)
+            {
+                schedule.Shifts.Add(new BarberScheduleShift
+                {
+                    DayOfWeek = (DayOfWeek)d,
+                    StartTime = new TimeOnly(9, 0),
+                    EndTime = new TimeOnly(17, 30)
+                });
+            }
+            return schedule;
         }
 
         private bool IsUniqueConstraintViolation(DbUpdateException ex)
@@ -229,6 +287,20 @@ namespace BarberShopAPI.Controllers
                         existingUser.Role = Role.BARBER;
                         existingUser.Barber.isActive = true;
 
+                        // Reuse the barber's own schedule if it survived deactivation (soft-delete keeps
+                        // the rows), so a revived barber comes back with their real hours rather than a
+                        // generic default. Only seed a default when there's no current version to reuse -
+                        // e.g. barbers deactivated before scheduling existed have none. Keeps the
+                        // "no barber is ever unbookable" guarantee without overwriting real hours.
+                        var hasCurrentSchedule = await _context.BarberSchedules
+                            .AnyAsync(s => s.BarberId == existingUser.Barber.Id && s.EffectiveTo == null);
+                        if (!hasCurrentSchedule)
+                        {
+                            var seed = BuildDefaultSchedule();
+                            seed.BarberId = existingUser.Barber.Id;
+                            _context.BarberSchedules.Add(seed);
+                        }
+
                         // A new photo replaces the old one; supplying none KEEPS what's already there.
                         // The admin team screen's Reactivate flow shows the barber's existing photo in the
                         // modal, so nulling the column when no file is picked would silently wipe a photo
@@ -315,6 +387,14 @@ namespace BarberShopAPI.Controllers
 
                     _context.Users.Add(user);
                     _context.Barbers.Add(barber);
+
+                    // Seed the default schedule via the schedule's own Barber nav (Barber has no inverse
+                    // collection). EF resolves BarberId from the same SaveChanges, so the barber is
+                    // bookable immediately - the admin is routed to the schedule editor to refine it.
+                    var schedule = BuildDefaultSchedule();
+                    schedule.Barber = barber;
+                    _context.BarberSchedules.Add(schedule);
+
                     await _context.SaveChangesAsync();
                     await transaction.CommitAsync();
                     Console.WriteLine("User.barber:", user.Barber);
@@ -491,15 +571,11 @@ namespace BarberShopAPI.Controllers
                     });
                 }
 
-                if (!string.IsNullOrWhiteSpace(barber.ImageUrl) && !barber.ImageUrl.StartsWith("http"))
-                {
-                    var filePath = Path.Combine("wwwroot", barber.ImageUrl.TrimStart('/'));
-                    /* the stored imageUrl looks like /uploads/abc.jpg. If you do
-                     * Path.Combine("wwwroot", "/uploads/abc.jpg"), the leading slash makes it
-                     treat the second part as an absolute path and ignore wwwroot entirely. Trimming
-                    it gives uploads/abc.jpg so the combine correctly produces wwwroot/uploads/abc.jpg*/
-                    if (System.IO.File.Exists(filePath)) System.IO.File.Delete(filePath);
-                }
+                // Keep the image file and ImageUrl on deactivation so a reactivated barber gets their
+                // photo back. Deleting the file here left the row pointing at a missing file, so the
+                // Inactive card and the Reactivate modal fell back to the placeholder. Superseded files
+                // are cleaned up when a photo is replaced/removed (UpdateBarber and the revive branch),
+                // not here.
                 barber.isActive = false;
 
                 var user = await _context.Users.FindAsync(barber.UserId);

@@ -13,6 +13,9 @@ const Settings = () => {
     const [bufferMin, setBufferMin] = useState(0);
     const [defaultAdminDuration, setDefaultAdminDuration] = useState(30);
     const [graceAfterClose, setGraceAfterClose] = useState(0);
+    const [minAdvance, setMinAdvance] = useState(90);
+    const [maxAdvance, setMaxAdvance] = useState(60);
+    const [refundCutoff, setRefundCutoff] = useState(24);
     const [saving, setSaving] = useState(false);
     const { showToast } = useContext(ToastContext);
 
@@ -21,6 +24,9 @@ const Settings = () => {
             setBufferMin(data.bufferMin ?? 0);
             setDefaultAdminDuration(data.defaultAdminBookingDurationMin ?? 30);
             setGraceAfterClose(data.graceMinutesAfterClose ?? 0);
+            setMinAdvance(data.minAdvanceBookingMinutes ?? 90);
+            setMaxAdvance(data.maxAdvanceBookingDays ?? 60);
+            setRefundCutoff(data.refundCutoffHours ?? 24);
         }
     }, [data]);
 
@@ -31,16 +37,25 @@ const Settings = () => {
         const value = Number(bufferMin);
         const durationValue = Number(defaultAdminDuration);
         const graceValue = Number(graceAfterClose);
+        const minAdvanceValue = Number(minAdvance);
+        const maxAdvanceValue = Number(maxAdvance);
+        const refundCutoffValue = Number(refundCutoff);
         try {
             setSaving(true);
             const res = await adminAxios.put("/api/Settings", {
                 bufferMin: value,
                 defaultAdminBookingDurationMin: durationValue,
                 graceMinutesAfterClose: graceValue,
+                minAdvanceBookingMinutes: minAdvanceValue,
+                maxAdvanceBookingDays: maxAdvanceValue,
+                refundCutoffHours: refundCutoffValue,
             });
             setBufferMin(res.data.bufferMin);
             setDefaultAdminDuration(res.data.defaultAdminBookingDurationMin);
             setGraceAfterClose(res.data.graceMinutesAfterClose);
+            setMinAdvance(res.data.minAdvanceBookingMinutes);
+            setMaxAdvance(res.data.maxAdvanceBookingDays);
+            setRefundCutoff(res.data.refundCutoffHours);
             showToast("Settings saved", "Your booking rules have been updated.", "success");
         }
         catch (err) {
@@ -63,7 +78,11 @@ const Settings = () => {
     const bufferError = rangeErr(bufferMin, 0, 120, "Minutes between bookings");
     const durationError = rangeErr(defaultAdminDuration, 5, 240, "Default admin booking duration");
     const graceError = rangeErr(graceAfterClose, 0, 120, "Grace after close");
-    const canSave = !bufferError && !durationError && !graceError;
+    const minAdvanceError = rangeErr(minAdvance, 0, 1440, "Minimum advance booking");
+    const maxAdvanceError = rangeErr(maxAdvance, 1, 365, "Maximum advance booking");
+    const refundCutoffError = rangeErr(refundCutoff, 0, 168, "Refund cutoff");
+    const canSave = !bufferError && !durationError && !graceError
+        && !minAdvanceError && !maxAdvanceError && !refundCutoffError;
 
     if (loading) {
         return <LoadingSpinner message="Loading Settings" color="#e0e0e0" />;
@@ -142,6 +161,59 @@ const Settings = () => {
                             onChange={(e) => setGraceAfterClose(e.target.value)}
                         />
                         {graceError && <span className="form-error">{graceError}</span>}
+                    </div>
+                    <div className="form-group">
+                        <label className="form-label">Minimum advance booking (minutes)</label>
+                        <p className="settings-hint">
+                            How far ahead a customer must book. 0 lets them book right up to the slot time;
+                            e.g. 90 means the next 90 minutes are closed to new bookings. Between 0 and 1440
+                            (24 hours). Staff bookings aren't affected.
+                        </p>
+                        <input
+                            className={`form-input${minAdvanceError ? " form-input--invalid" : ""}`}
+                            type="number"
+                            min={0}
+                            max={1440}
+                            step={15}
+                            value={minAdvance}
+                            onChange={(e) => setMinAdvance(e.target.value)}
+                        />
+                        {minAdvanceError && <span className="form-error">{minAdvanceError}</span>}
+                    </div>
+                    <div className="form-group">
+                        <label className="form-label">Maximum advance booking (days)</label>
+                        <p className="settings-hint">
+                            How far into the future a customer can book. Between 1 and 365 days. Staff
+                            bookings aren't affected.
+                        </p>
+                        <input
+                            className={`form-input${maxAdvanceError ? " form-input--invalid" : ""}`}
+                            type="number"
+                            min={1}
+                            max={365}
+                            step={1}
+                            value={maxAdvance}
+                            onChange={(e) => setMaxAdvance(e.target.value)}
+                        />
+                        {maxAdvanceError && <span className="form-error">{maxAdvanceError}</span>}
+                    </div>
+                    <div className="form-group">
+                        <label className="form-label">Refund cutoff (hours)</label>
+                        <p className="settings-hint">
+                            Cancelling within this many hours of the appointment forfeits the customer's
+                            refund (too little time to rebook). 0 always refunds. Between 0 and 168 (one
+                            week). Shop-side and staff-forced cancellations always refund regardless.
+                        </p>
+                        <input
+                            className={`form-input${refundCutoffError ? " form-input--invalid" : ""}`}
+                            type="number"
+                            min={0}
+                            max={168}
+                            step={1}
+                            value={refundCutoff}
+                            onChange={(e) => setRefundCutoff(e.target.value)}
+                        />
+                        {refundCutoffError && <span className="form-error">{refundCutoffError}</span>}
                     </div>
                     <div className="settings-actions">
                         <button className="btn-primary" onClick={handleSave} disabled={saving || !canSave}>

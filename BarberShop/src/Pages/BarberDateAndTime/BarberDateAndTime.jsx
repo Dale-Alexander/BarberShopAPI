@@ -33,22 +33,49 @@ import Navlinks from "../../Components/NavLinks/Navlinks";
 import { BookingDetailsContext } from "../../Context/BookingDetailsContext.jsx";
 import { getErrorMessage } from "../../utils/errorMessage.js";
 
-const TIME_SLOTS = [
-    "09:00", "09:30", "10:00", "10:30",
-    "11:00", "11:30", "12:00", "12:30",
-    "13:00", "13:30", "14:00", "14:30",
-    "15:00", "15:30", "16:00", "16:30",
-    "17:00", "17:30",
-];
+/* Slot generation granularity, mirroring the backend's 30-minute slotify step. There is no fixed slot
+ * list anymore: slots are generated per (barber, date) from each barber's effective-dated schedule,
+ * delivered as a template on barbers-with-bookings (see ScheduleResolver on the backend). */
+const SLOT_STEP_MIN = 30;
 
-/* Customer-only booking window, mirroring the backend's ValidateBookingTime (BookingsController.cs):
- * customers must book at least 90 min ahead and at most 60 days out. Staff (admin/reschedule) are exempt. */
-const MIN_ADVANCE_MINUTES = 90;
-const MAX_ADVANCE_DAYS = 60;
-/* Shop closing time as minutes-from-midnight, mirroring the backend ShopClose (17:30) in
- * BookingsController.cs. A customer booking must end by close + grace, so late start slots that
- * wouldn't fit are hidden (staff are exempt). */
-const SHOP_CLOSE_MINUTES = 17 * 60 + 30;
+const toMin = (hhmm) => {
+    const [h, m] = hhmm.split(":").map(Number);
+    return h * 60 + m;
+};
+const toHHMM = (min) =>
+    `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+
+/* Mirrors the backend ScheduleResolver (VersionForDate + ShiftsForDate): pick the effective-dated
+ * schedule version governing `date` (effectiveTo null = current/open-ended, latest effectiveFrom
+ * wins), then return that version's shifts for the date's weekday as {startMin,endMin}, sorted.
+ * Empty = the barber isn't scheduled that day (closed). Dates compare as ISO "yyyy-MM-dd" strings. */
+const shiftsForDate = (schedule, date) => {
+    if (!schedule || !date) return [];
+    const d = format(date, "yyyy-MM-dd");
+    let version = null;
+    for (const v of schedule) {
+        if (v.effectiveFrom <= d && (v.effectiveTo == null || v.effectiveTo >= d)) {
+            if (!version || v.effectiveFrom > version.effectiveFrom) version = v;
+        }
+    }
+    if (!version) return [];
+    const dow = date.getDay(); // 0=Sun..6=Sat, matches backend System.DayOfWeek
+    return (version.shifts ?? [])
+        .filter((s) => s.dayOfWeek === dow)
+        .map((s) => ({ startMin: toMin(s.startTime.slice(0, 5)), endMin: toMin(s.endTime.slice(0, 5)) }))
+        .sort((a, b) => a.startMin - b.startMin);
+};
+
+/* The barber's candidate slot START times (HH:mm) for a date: 30-min steps from each shift's start,
+ * excluding the shift end (a start at the shift end can never fit a positive-length booking). Whether
+ * a start ACTUALLY fits (duration, grace, split-shift gaps) is slotFitsBarberSchedule below. */
+const scheduleSlots = (schedule, date) => {
+    const out = [];
+    for (const sh of shiftsForDate(schedule, date)) {
+        for (let m = sh.startMin; m < sh.endMin; m += SLOT_STEP_MIN) out.push(toHHMM(m));
+    }
+    return out;
+};
 
 /* Current time as Malta wall-clock. The slot strings ("09:00") are Malta wall-clock times and the backend
  * validates them against Malta time (ShopClock), so "now" must be Malta's clock too - otherwise a non-Malta
@@ -65,6 +92,11 @@ const BarberDateAndTime = () => {
     /* Minutes a booking may run past closing, from the backend. Late start slots that wouldn't
      * finish by close + this are hidden from customers. 0 = must finish by closing. */
     const [graceMinutesAfterClose, setGraceMinutesAfterClose] = useState(0);
+    /* Customer-only lead-time / horizon, from the backend (ShopSettings, delivered via
+     * barbers-with-bookings), mirroring ValidateBookingTime: a customer must book at least
+     * minAdvanceMinutes ahead and at most maxAdvanceDays out. Defaults match the seed until loaded. */
+    const [minAdvanceMinutes, setMinAdvanceMinutes] = useState(90);
+    const [maxAdvanceDays, setMaxAdvanceDays] = useState(60);
     const [calendarMonth, setCalendarMonth] = useState(new Date());
     const { bookingId } = useParams();
     const isEditMode = !!bookingId;
@@ -83,6 +115,9 @@ const BarberDateAndTime = () => {
     // backend re-validates the overlap/closure against the new barber.
     const lockBarberToSelf = user?.role === "BARBER" && isStaffMode;
     const [showModal, setShowModal] = useState(false);
+    // Staff-only warn-and-confirm shown when a staff member picks a slot outside the target barber's
+    // schedule (they can still book it - see the Next handler). Customers are hard-limited, never warned.
+    const [showScheduleWarn, setShowScheduleWarn] = useState(false);
     const { showToast } = useContext(ToastContext);
     const [bookingLoading, setBookingLoading] = useState(false);
     const {
@@ -114,8 +149,9 @@ const BarberDateAndTime = () => {
     //admin/{bookingId} is [Authorize(ADMIN,BARBER)], so it always needs credentials (isProtected = true)
     /* Admin-only: pull the default booking duration so the on-page duration control starts at the
      * shop's configured default (admin auth is required, so this uses adminAxios via isProtected). */
-    // /api/Settings is admin-only, so only an admin seeds the duration from it; barbers use the default.
-    const { data: shopSettings } = useFetch(isAdmin && isAdminBooking ? `/api/Settings` : null, true);
+    // GET /api/Settings is readable by staff (ADMIN or BARBER), so any staff booking seeds the duration
+    // control from the shop default - not just admins. Customers never fetch it (they use service durations).
+    const { data: shopSettings } = useFetch(isStaffMode ? `/api/Settings` : null, true);
 
 
 
@@ -130,6 +166,8 @@ const BarberDateAndTime = () => {
         setShopWideClosures(barberBookings?.shopClosures);
         setBufferMin(barberBookings?.bufferMin ?? 0);
         setGraceMinutesAfterClose(barberBookings?.graceMinutesAfterClose ?? 0);
+        setMinAdvanceMinutes(barberBookings?.minAdvanceBookingMinutes ?? 90);
+        setMaxAdvanceDays(barberBookings?.maxAdvanceBookingDays ?? 60);
         if (bookingId && editBooking) {
             const selectedBarber = barberBookings?.barbers.find(b => b?.barberId == editBooking?.barberId);
             setSelectedBarberId(selectedBarber?.barberId ?? null);
@@ -209,10 +247,10 @@ const BarberDateAndTime = () => {
 
     const today = startOfDay(getMaltaNow());
 
-    /* The 90-min buffer and 60-day horizon are a customer-only rule; staff booking (admin mode) and staff
+    /* The lead-time and booking horizon are a customer-only rule; staff booking (admin mode) and staff
      * rescheduling (edit mode) are only blocked from picking a past slot - matching the backend. */
     const isCustomer = !isStaffMode && !isEditMode;
-    const maxCustomerDate = isCustomer ? addDays(today, MAX_ADVANCE_DAYS) : null;
+    const maxCustomerDate = isCustomer ? addDays(today, maxAdvanceDays) : null;
     const isDateBeyondHorizon = (day) => !!maxCustomerDate && isAfter(startOfDay(day), maxCustomerDate);
 
     /*const isBarberAvailable = (barber, selectedDate, selectedTime) => {
@@ -276,23 +314,60 @@ const BarberDateAndTime = () => {
         if (!selectedBarberId) return false;
         return getAvailableSlots(day).length === 0;
     }
-    const getAvailableSlots = (date) => {
-        if (!date) return [];
-        if (!selectedBarberId) return TIME_SLOTS;
+    /* Broad staff time grid = the shop's operating envelope: earliest shift start .. latest shift end
+     * across all barbers' current/future schedules. Staff aren't limited to a barber's own hours (they
+     * can deliberately book outside them - Phase 5 warns), so their grid spans the whole envelope.
+     * Falls back to 09:00-17:30 when no schedules are loaded yet. */
+    const staffEnvelopeSlots = useMemo(() => {
+        let minStart = Infinity;
+        let maxEnd = -Infinity;
+        for (const b of barbers) {
+            for (const v of b.schedule ?? []) {
+                for (const s of v.shifts ?? []) {
+                    minStart = Math.min(minStart, toMin(s.startTime.slice(0, 5)));
+                    maxEnd = Math.max(maxEnd, toMin(s.endTime.slice(0, 5)));
+                }
+            }
+        }
+        if (!isFinite(minStart)) { minStart = 9 * 60; maxEnd = 17 * 60 + 30; }
+        const out = [];
+        for (let m = minStart; m < maxEnd; m += SLOT_STEP_MIN) out.push(toHHMM(m));
+        return out;
+    }, [barbers]);
+
+    /* The candidate slot START times shown for a date, BEFORE removing booked/closed/past ones:
+     * customers get the selected barber's schedule slots (hard-limited to their real hours); staff get
+     * the broad envelope (so they can book outside a barber's hours). */
+    const slotUniverse = (date) => {
+        if (!date || !selectedBarberId) return [];
+        if (!isCustomer) return staffEnvelopeSlots;
         if (selectedBarberId === "All") {
-            return TIME_SLOTS.filter(slot => {
+            const set = new Set();
+            barbers.forEach((b) => scheduleSlots(b.schedule, date).forEach((s) => set.add(s)));
+            return [...set].sort();
+        }
+        const barber = barbers.find((b) => b.barberId === selectedBarberId);
+        return scheduleSlots(barber?.schedule, date);
+    };
+
+    const getAvailableSlots = (date) => {
+        /* Removes slots that overlap an existing booking (buffer-expanded on both sides to mirror the
+           backend's between-booking gap). The slot universe it filters is schedule-driven for customers /
+           the envelope for staff (see slotUniverse). */
+        if (!date) return [];
+        if (!selectedBarberId) return [];
+        const universe = slotUniverse(date);
+        if (selectedBarberId === "All") {
+            return universe.filter(slot => {//FOR EVERY SLOT
                 const slotStart = parse(slot, "HH:mm", date);
                 const slotEnd = addMinutes(slotStart, slotDurationMin);
 
-                return barbers.some(b => {
+                return barbers.some(b => {//IS THERE ANY BARBER
                     // ?? [] guards the brief window where a barber is selected but `barbers` hasn't
                     // loaded yet (or a booking has no bookings array) - otherwise .some throws on undefined.
                     const bookingsOnDay = b?.bookings?.filter(bk => isSameDay(new Date(bk.startDateTime), date)) ?? [];
-                    return !bookingsOnDay.some(bk => {
+                    return !bookingsOnDay.some(bk => {//WHOSE BOOKINGS DO NOT OVERLAP THIS SLOT
                         const bkStart = new Date(bk.startDateTime);
-                        /* Expand each booking's blocked window by the buffer on both sides so a slot
-                         * within `bufferMin` of a booking's start or end is greyed out, mirroring the
-                         * backend overlap check. */
                         const bkBlockStart = addMinutes(bkStart, -bufferMin);
                         const bkEnd = addMinutes(bkStart, bk.durationMin + bufferMin);
                         return slotStart < bkEnd && slotEnd > bkBlockStart;
@@ -304,36 +379,19 @@ const BarberDateAndTime = () => {
         // ?? [] guards the window where selectedBarberId is set (e.g. a barber auto-selected onto their
         // own chair) but `barbers` hasn't loaded yet, so `barber` is momentarily undefined.
         const barberBookingsOnDay = barber?.bookings?.filter(bk => isSameDay(new Date(bk.startDateTime), date)) ?? [];
-        return TIME_SLOTS.filter(slot => {
-            /* this returns the filtered array of available slots back to whoever 
-            called getAvailableSlots*/
+        return universe.filter(slot => {
             const slotStart = parse(slot, "HH:mm", date);
-            /* parse returns a date object. It returns something like this:
-            2026-08-11T09:00:00.000
-            The format part tells parse how to read the string. Without it,
-            parse wouldnt know what each part of the string means.
-            For example: "9:00 AM" -> h = hour(9), mm = minutes(00), aa = AM*/
             const slotEnd = addMinutes(slotStart, slotDurationMin);
 
             return !barberBookingsOnDay.some(bk => {
-                /* This is the filter's return. It returns true or false accordingly
-                */
                 const bkStart = new Date(bk.startDateTime);
-                /* Blocked window expanded by the buffer on both sides (see the "All" branch above)
-                 * so the picker matches the backend's between-booking gap. */
+                /* Blocked window expanded by the buffer on both sides so the picker matches the
+                 * backend's between-booking gap. */
                 const bkBlockStart = addMinutes(bkStart, -bufferMin);
                 const bkEnd = addMinutes(bkStart, bk.durationMin + bufferMin);
-                return slotStart < bkEnd && slotEnd > bkBlockStart
-                /* This is the some's return. For each booking, it returns true or false.
-                If any booking returns true this means there is an overlap*/
-
-                /* for each slot:
-                     for each booking on that day:
-                        does this booking overlap the slot? -> third return
-                     does ANY booking overlap? -> second return ("!" flips it: "is slot free?"
-                     return only the slots that are free*/
-            })
-        })
+                return slotStart < bkEnd && slotEnd > bkBlockStart;
+            });
+        });
     }
 
     /* Both the slot time and getMaltaNow() are built as browser-local Dates holding Malta wall-clock values,
@@ -350,20 +408,62 @@ const BarberDateAndTime = () => {
         return slotDateTimeOf(time, date) < getMaltaNow();
     };
 
-    /* Customer-only: within the 90-min lead time. This also covers "in the past" (past is < now < now+90),
-     * so for customers it fully subsumes isTimeSlotInPast. */
+    /* Customer-only: within the configured lead time. This also covers "in the past" (past is
+     * < now < now + lead time), so for customers it fully subsumes isTimeSlotInPast. */
     const isTimeSlotTooSoon = (time, date = selectedDate) => {
         if (!date) return false;
-        return slotDateTimeOf(time, date) < addMinutes(getMaltaNow(), MIN_ADVANCE_MINUTES);
+        return slotDateTimeOf(time, date) < addMinutes(getMaltaNow(), minAdvanceMinutes);
     };
 
-    /* Customer-only: the booking must finish by close + grace (mirrors the backend WithinWorkingHours).
-     * Staff (admin/edit) can book past close, so they're exempt. Uses slotDurationMin (duration-aware). */
-    const isTimeSlotAfterClose = (time) => {
-        if (!isCustomer) return false;
-        const [hours, minutes] = time.split(":").map(Number);
-        return hours * 60 + minutes + slotDurationMin > SHOP_CLOSE_MINUTES + graceMinutesAfterClose;
+    /* Mirrors backend ScheduleResolver.FitsWithinAShift: does [time, time+duration] fit ENTIRELY within
+     * one of the barber's shifts for `date`? Grace (minutes past close) applies only to the day's last
+     * shift, never a split-shift lunch gap. No shifts that day => false (fail closed). */
+    const slotFitsBarberSchedule = (time, date, barber) => {
+        const shifts = shiftsForDate(barber?.schedule, date);
+        if (shifts.length === 0) return false;
+        const startMin = toMin(time);
+        const endMin = startMin + slotDurationMin;
+        for (let i = 0; i < shifts.length; i++) {
+            const isLast = i === shifts.length - 1;
+            const allowedEnd = shifts[i].endMin + (isLast ? graceMinutesAfterClose : 0);
+            if (startMin >= shifts[i].startMin && endMin <= allowedEnd) return true;
+        }
+        return false;
     };
+
+    /* Customer-only hard limit: the appointment must fall within the barber's scheduled hours for the
+     * date (mirrors the backend create-pending check). Staff are exempt - Phase 5 turns an out-of-schedule
+     * staff pick into a warn-and-confirm rather than a hard block. */
+    const isTimeSlotOutsideSchedule = (time, date = selectedDate) => {
+        if (!isCustomer) return false;
+        const barber = barbers.find((b) => b.barberId === selectedBarberId);
+        return !slotFitsBarberSchedule(time, date, barber);
+    };
+
+    /* Staff-only (admin/edit): is the currently SELECTED slot outside the target barber's scheduled
+     * hours for the selected date? Drives the warn-and-confirm on the Next button. Customers can't reach
+     * an out-of-schedule slot at all (the grid hard-limits them), so this is always false for them. */
+    const selectedSlotOutsideSchedule = () => {
+        if (isCustomer) return false;
+        if (!selectedTime || !selectedDate || !selectedBarberId || selectedBarberId === "All") return false;
+        const barber = barbers.find((b) => b.barberId === selectedBarberId);
+        return !slotFitsBarberSchedule(selectedTime, selectedDate, barber);
+    };
+
+    /* Whether an edit actually changes the slot or barber - so the warn (and handleEdit's own no-op
+     * guard) don't fire on an unchanged "Confirm Edit". */
+    const editHasChanges = () => {
+        if (!isEditMode || !editBooking || !selectedDate || !selectedTime) return false;
+        const orig = new Date(editBooking.startDateTime);
+        const dtChanged = format(selectedDate, "yyyy-MM-dd") !== format(orig, "yyyy-MM-dd")
+            || format(orig, "HH:mm") !== selectedTime;
+        return dtChanged || editBooking.barberId !== selectedBarberId;
+    };
+
+    /* A barber booking onto their OWN chair gets the soft copy ("do you want to work this slot?"); an
+     * admin, or a barber assigning to someone else, gets the stronger "make sure they've agreed" copy. */
+    const isBookingSelf = user?.role === "BARBER" && selectedBarberId === user?.barberId;
+    const selectedBarberName = barbers.find((b) => b.barberId === selectedBarberId)?.barberName ?? "this barber";
 
     const isTimeSlotClosed = (time, date = selectedDate) => {
         /* partial closures can never be multi-day so just keep checking startDate and ignore endDate because it is irrelevant here */
@@ -488,6 +588,30 @@ const BarberDateAndTime = () => {
             setBookingLoading(false);
         }
     };
+
+    // The actual "Next" action once any schedule warning is cleared: edit patches, staff create opens the
+    // customer-details modal, customer creates the pending booking.
+    const proceedFromDateTime = () => {
+        if (isEditMode) return handleEdit();
+        if (isStaffMode) return setShowModal(true);
+        return handleUserCreate();
+    };
+
+    // Staff may book outside a barber's schedule, but confirm it first - they're committing another barber
+    // to work off-hours (or choosing to themselves). Skip the warn on an unchanged edit (it would no-op).
+    const handleNextClick = () => {
+        if (selectedSlotOutsideSchedule() && (!isEditMode || editHasChanges())) {
+            setShowScheduleWarn(true);
+            return;
+        }
+        proceedFromDateTime();
+    };
+
+    const confirmScheduleWarn = () => {
+        setShowScheduleWarn(false);
+        proceedFromDateTime();
+    };
+
     const containerVariants = {
         hidden: {},
         visible: {
@@ -719,16 +843,16 @@ const BarberDateAndTime = () => {
                                                 <h3 className="bp-time-heading">{format(selectedDate, "EEEE, MMMM d")}</h3>
                                                 <p className="bp-time-sub">Available slots</p>
                                                 <div className="bp-time-grid">
-                                                    {TIME_SLOTS.map((time) => {
+                                                    {slotUniverse(selectedDate).map((time) => {
                                                         const isFree = getAvailableSlots(selectedDate).includes(time);
                                                         const isClosed = isTimeSlotClosed(time);
                                                         const isPast = isTimeSlotInPast(time);
-                                                        /* Customers also can't pick a slot inside the 90-min lead time; staff (admin/edit) only past. */
+                                                        /* Customers also can't pick a slot inside the lead time; staff (admin/edit) only past. */
                                                         const isTooSoon = isCustomer && isTimeSlotTooSoon(time);
-                                                        /* Customers can't pick a slot that would run past close + grace (staff exempt). */
-                                                        const isAfterClose = isTimeSlotAfterClose(time);
+                                                        /* Customers can't pick a slot that falls outside the barber's scheduled hours (staff exempt). */
+                                                        const isOutsideSchedule = isTimeSlotOutsideSchedule(time);
                                                         const isOnOriginalDate = selectedDate && originalDate && isSameDay(selectedDate, originalDate);
-                                                        const blocked = !isFree || isClosed || isPast || isTooSoon || isAfterClose;
+                                                        const blocked = !isFree || isClosed || isPast || isTooSoon || isOutsideSchedule;
                                                         const isDisabled = isEditMode
                                                             ? (!(isOnOriginalDate && time === originalTime) && blocked)
                                                             : blocked;
@@ -756,7 +880,7 @@ const BarberDateAndTime = () => {
                             </motion.section>                     
                     </motion.div>
                     <div className="barber-datetime-proceed">
-                        <button onClick={isEditMode ? handleEdit : isStaffMode ? () => setShowModal(true) : handleUserCreate} disabled={loading || bookingLoading || !(selectedBarberId && selectedDate && selectedTime) || (isStaffMode && !!adminDurationError)} className={`next-details-btn ${!(selectedBarberId && selectedDate && selectedTime) || (isStaffMode && !!adminDurationError) ? "disabled" : ""}`}>
+                        <button onClick={handleNextClick} disabled={loading || bookingLoading || !(selectedBarberId && selectedDate && selectedTime) || (isStaffMode && !!adminDurationError)} className={`next-details-btn ${!(selectedBarberId && selectedDate && selectedTime) || (isStaffMode && !!adminDurationError) ? "disabled" : ""}`}>
                             {isEditMode ? (
                                 <>
                                     Confirm Edit <SquarePen size={18} />
@@ -774,6 +898,24 @@ const BarberDateAndTime = () => {
                 <UserFormModal
                     onConfirm={handleAdminCreate}
                     onCancel={handleCancel}/>
+            )}
+            {showScheduleWarn && (
+                <div className="modal-overlay" onClick={() => setShowScheduleWarn(false)}>
+                    <div className="user-form-modal" onClick={(e) => e.stopPropagation()}>
+                        <h2>Outside working hours</h2>
+                        <p>
+                            {isBookingSelf
+                                ? `${selectedTime} on ${selectedDate ? format(selectedDate, "EEEE, MMMM d") : ""} is outside your scheduled hours. You can still book it — do you want to work this slot?`
+                                : `${selectedTime} on ${selectedDate ? format(selectedDate, "EEEE, MMMM d") : ""} is outside ${selectedBarberName}'s scheduled hours. You can still book it, but make sure they've agreed to work this slot.`}
+                        </p>
+                        <div className="user-form-modal-actions">
+                            <button className="user-form-btn-cancel" onClick={() => setShowScheduleWarn(false)}>Go back</button>
+                            <button className="user-form-btn-confirm" onClick={confirmScheduleWarn}>
+                                {isBookingSelf ? "Book anyway" : "Book outside hours"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

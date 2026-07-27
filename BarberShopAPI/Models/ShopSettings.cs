@@ -21,9 +21,24 @@ namespace BarberShopAPI.Models
          * (the admin can still override it per booking). Only a default - not enforced anywhere. */
         public int DefaultAdminBookingDurationMin { get; set; }
 
-        /* Minutes a booking may run PAST closing time. The customer working-hours rule becomes
-         * end <= ShopClose + this. 0 keeps the strict "must finish by closing" behaviour; a larger
-         * value lets the last client run over. Customer-only, like the rest of the working-hours rule. */
+        /* Minutes a booking may run PAST the day's last shift end. The customer working-hours rule
+         * becomes end <= (last shift end) + this. 0 keeps the strict "must finish by closing" behaviour;
+         * a larger value lets the last client run over. Grace applies only to the final shift of the day,
+         * never a mid-day split-shift gap. Customer-only, like the rest of the working-hours rule. */
         public int GraceMinutesAfterClose { get; set; }
+
+        /* Minimum lead time (minutes) a customer must leave before the slot start - the booking must be
+         * at least this far in the future. Customer-only: enforced in BookingsController.ValidateBookingTime
+         * and mirrored by the customer slot picker (BarberDateAndTime.jsx). Staff bookings are exempt. */
+        public int MinAdvanceBookingMinutes { get; set; }
+
+        /* How far ahead (days) a customer may book - the booking start must be within this horizon.
+         * Customer-only, same enforcement/mirroring as MinAdvanceBookingMinutes. */
+        public int MaxAdvanceBookingDays { get; set; }
+
+        /* Cancelling within this many hours of the appointment forfeits the customer's refund (the barber
+         * has too little time to rebook). Enforced in BookingCanceller and mirrored by the staff booking
+         * tables (BookingsTable.jsx / BarberBookings.jsx). Never applies to shop-side or forced refunds. */
+        public int RefundCutoffHours { get; set; }
     }
 }

@@ -29,6 +29,8 @@ namespace BarberShopAPI.Data
         public DbSet<Payment> Payments { get; set; }
         public DbSet<ShopClosure> ShopClosures { get; set; }
         public DbSet<ShopSettings> ShopSettings { get; set; }
+        public DbSet<BarberSchedule> BarberSchedules { get; set; }
+        public DbSet<BarberScheduleShift> BarberScheduleShifts { get; set; }
 
         /* 
          *Each DbSet corresponds to a table in the database. EF Core will
@@ -178,11 +180,37 @@ namespace BarberShopAPI.Data
             barber.Property(b => b.UpdatedAt)
                    .HasDefaultValueSql("GETUTCDATE()");
 
+            var barberSchedule = modelBuilder.Entity<BarberSchedule>();
+
+            barberSchedule.HasOne(s => s.Barber)
+                          .WithMany()
+                          .HasForeignKey(s => s.BarberId)
+                          .OnDelete(DeleteBehavior.Cascade);
+
+            // Fast lookup of the version effective on a given date.
+            barberSchedule.HasIndex(s => new { s.BarberId, s.EffectiveFrom });
+
+            // At most one open-ended (current) version per barber - same filtered-index
+            // technique as the closure uniqueness guards above.
+            barberSchedule.HasIndex(s => s.BarberId)
+                          .IsUnique()
+                          .HasFilter("[EffectiveTo] IS NULL")
+                          .HasDatabaseName("UX_BarberSchedule_CurrentVersion");
+
+            var barberScheduleShift = modelBuilder.Entity<BarberScheduleShift>();
+
+            barberScheduleShift.HasOne(sh => sh.Schedule)
+                               .WithMany(s => s.Shifts)
+                               .HasForeignKey(sh => sh.BarberScheduleId)
+                               .OnDelete(DeleteBehavior.Cascade);
+
+            barberScheduleShift.HasIndex(sh => sh.BarberScheduleId);
+
             // Seed the single shop-settings row. Buffer defaults to 0 so behaviour is unchanged
             // until an admin sets it from the dashboard; admin bookings default to 30 min; grace of
             // 0 keeps the strict "must finish by closing" rule.
             modelBuilder.Entity<ShopSettings>().HasData(
-                new ShopSettings { Id = 1, BufferMin = 0, DefaultAdminBookingDurationMin = 30, GraceMinutesAfterClose = 0 });
+                new ShopSettings { Id = 1, BufferMin = 0, DefaultAdminBookingDurationMin = 30, GraceMinutesAfterClose = 0, MinAdvanceBookingMinutes = 90, MaxAdvanceBookingDays = 60, RefundCutoffHours = 24 });
 
             base.OnModelCreating(modelBuilder);
         }

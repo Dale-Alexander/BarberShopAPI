@@ -30,8 +30,6 @@ Maybe a post-visit follow-up email ("thanks for visiting, leave a review")
 
 Maybe loyalty tracking(10th cut free)
 
-Decide whether bookings created by the admin can be marked as paid since their amount is set to null
-
 Dpnt forget that the githib repo is private and not public
 
 When you have the admin's email and password, re run dotnet run -- --seed-admin in the terminal with the new values in the .env file
@@ -48,10 +46,4 @@ Different shop schedules per day as a setting and each barber can implement thei
 
 Is description in Services required/should you remove it/or nullable? 
 
-Make confirmed bookings' amount editable in case for example the customer decided to change services at the shop?
-
 Check the "if you had to start over what would you do" list in the A5 booklet in the very last page and see if you can implement some of them.
-
-When checking for conflicts with closures, should you inform the user/admin to pick another barber in case the closure happened due to a barber only?
-
-Should MaxAdvanceBooking and MinAdvanceBooking be made into Settings? 

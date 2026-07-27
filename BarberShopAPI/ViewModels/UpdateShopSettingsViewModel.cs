@@ -16,5 +16,17 @@ namespace BarberShopAPI.ViewModels
         // Minutes a booking may run past closing time. 0 = must finish by closing.
         [Range(0, 120, ErrorMessage = "Grace after close must be between 0 and 120 minutes")]
         public int GraceMinutesAfterClose { get; set; }
+
+        // Minimum lead time (minutes) before a customer's slot. 0 = no lead time; capped at 24h.
+        [Range(0, 1440, ErrorMessage = "Minimum advance booking must be between 0 and 1440 minutes")]
+        public int MinAdvanceBookingMinutes { get; set; }
+
+        // How far ahead (days) a customer may book. At least 1 day; capped at a year.
+        [Range(1, 365, ErrorMessage = "Maximum advance booking must be between 1 and 365 days")]
+        public int MaxAdvanceBookingDays { get; set; }
+
+        // Hours before the appointment within which a cancellation forfeits the refund. 0 = always refund; capped at a week.
+        [Range(0, 168, ErrorMessage = "Refund cutoff must be between 0 and 168 hours")]
+        public int RefundCutoffHours { get; set; }
     }
 }

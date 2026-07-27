@@ -23,26 +23,14 @@ namespace BarberShopAPI.Controllers
     [ApiController]
     public class BookingsController : ControllerBase
     {
-        private static readonly TimeSpan MinAdvanceBooking = TimeSpan.FromMinutes(90);
-        private static readonly TimeSpan MaxAdvanceBooking = TimeSpan.FromDays(60);
-
-        /* Shop working-hours window, kept in sync with the frontend TIME_SLOTS array in
-         * BarberDateAndTime.jsx (09:00 first slot .. 17:30 last slot start). A booking is valid only
-         * if it starts at/after open and ends at/before close + grace - checked against the REAL end
-         * (start + duration), never the buffered end. graceMin lets the last client run past close
-         * (0 = must finish by closing; from ShopSettings.GraceMinutesAfterClose). */
-        private static readonly TimeOnly ShopOpen = new(9, 0);
-        private static readonly TimeOnly ShopClose = new(17, 30);
-
-        private static bool WithinWorkingHours(DateTime start, DateTime end, int graceMin) =>
-            TimeOnly.FromDateTime(start) >= ShopOpen && TimeOnly.FromDateTime(end) <= ShopClose.AddMinutes(graceMin);
-
-        private static (bool IsValid, string? Error) ValidateBookingTime(DateTime startDateTime)
+        /* Customer-only lead-time / horizon rule. The bounds come from ShopSettings (minAdvanceMinutes,
+         * maxAdvanceDays) so the shop can tune them; the customer slot picker mirrors the same values. */
+        private static (bool IsValid, string? Error) ValidateBookingTime(DateTime startDateTime, int minAdvanceMinutes, int maxAdvanceDays)
         {
             DateTime now = ShopClock.Now;
             if (startDateTime < now) return (false, "Cannot book slots in the past");
-            if (startDateTime < now.Add(MinAdvanceBooking)) return (false, $"Bookings must be made at least {MinAdvanceBooking.TotalMinutes} minutes in advance");
-            if (startDateTime > now.Add(MaxAdvanceBooking)) return (false, $"Bookings cannot be made more than {MaxAdvanceBooking.TotalDays} days in advance");
+            if (startDateTime < now.AddMinutes(minAdvanceMinutes)) return (false, $"Bookings must be made at least {minAdvanceMinutes} minutes in advance");
+            if (startDateTime > now.AddDays(maxAdvanceDays)) return (false, $"Bookings cannot be made more than {maxAdvanceDays} days in advance");
             return (true, null);
         }
 
@@ -229,7 +217,10 @@ namespace BarberShopAPI.Controllers
                 b.Id, FullName = b.User.Name + " " + b.User.Surname
             }).FirstOrDefaultAsync();
             if (barber == null) return BadRequest(new { message = "Barber was not found" });
-            var (isValid, error) = ValidateBookingTime(model.StartDateTime);
+            // Load the shop settings once - used for the lead-time/horizon rule, the working-hours grace
+            // and the between-booking buffer.
+            var settings = await _context.ShopSettings.FirstAsync();
+            var (isValid, error) = ValidateBookingTime(model.StartDateTime, settings.MinAdvanceBookingMinutes, settings.MaxAdvanceBookingDays);
             if (!isValid) return BadRequest(new { message = error });
             var services = await _context.Services.Where(s => s.IsActive == true && model.ServicesIds.Contains(s.Id)).ToListAsync();
             if (services.Count == 0) return BadRequest(new { message = "The chosen services do not exist" });
@@ -241,15 +232,21 @@ namespace BarberShopAPI.Controllers
             }*/
 
             var endDateTime = model.StartDateTime.AddMinutes(durationMinutes);
-            // Load the shop settings once - used for the working-hours grace and the between-booking buffer.
-            var settings = await _context.ShopSettings.FirstAsync();
-            // Customer-facing path: the whole appointment must fall inside shop working hours
-            // (allowing up to GraceMinutesAfterClose past closing).
-            if (!WithinWorkingHours(model.StartDateTime, endDateTime, settings.GraceMinutesAfterClose))
-                return BadRequest(new { message = "Outside shop working hours" });
             var appointmentDate = DateOnly.FromDateTime(model.StartDateTime);
             var appointmentTime = TimeOnly.FromDateTime(model.StartDateTime);
             var endTime = TimeOnly.FromDateTime(endDateTime);
+
+            // Customer-facing path: the whole appointment must fall within the barber's scheduled
+            // working hours for that date (up to GraceMinutesAfterClose past the day's last shift).
+            // Load only the version(s) that could govern this date; fails closed if none exists.
+            var scheduleVersions = await _context.BarberSchedules
+                .Include(s => s.Shifts)
+                .Where(s => s.BarberId == model.BarberId
+                            && s.EffectiveFrom <= appointmentDate
+                            && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
+                .ToListAsync();
+            if (!ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, settings.GraceMinutesAfterClose))
+                return BadRequest(new { message = "Outside the barber's working hours" });
             var closureDate = await _context.ShopClosures.FirstOrDefaultAsync(s =>
             s.IsActive == true && (s.BarberId == null || s.BarberId == model.BarberId) && ((s.EndDate == null && s.StartDate == appointmentDate)||
             (s.EndDate != null && s.StartDate <= appointmentDate && s.EndDate >= appointmentDate)) && (s.IsFullDay || (s.StartTime <
@@ -379,6 +376,20 @@ namespace BarberShopAPI.Controllers
 
                 if (closure != null) return BadRequest(new { message = "This slot now falls on a shop closure and can no longer be confirmed" });
                 //The closure checks is for when the admin created a closure between PENDING and COMPLETED stage
+
+                // Same re-check for the barber's working-hours schedule: an admin could have changed the
+                // schedule between PENDING and confirmation, leaving this slot outside the barber's hours.
+                // Closures and schedule answer the same "is this slot still open?" question, so we re-check
+                // both here. No money has moved on the cash path, so we just refuse and let the admin handle it.
+                var graceMin = await _context.ShopSettings.Select(s => s.GraceMinutesAfterClose).FirstAsync();
+                var scheduleVersions = await _context.BarberSchedules
+                    .Include(s => s.Shifts)
+                    .Where(s => s.BarberId == booking.BarberId
+                                && s.EffectiveFrom <= appointmentDate
+                                && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
+                    .ToListAsync();
+                if (!ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, graceMin))
+                    return BadRequest(new { message = "This slot now falls outside the barber's working hours and can no longer be confirmed" });
                 var existingPayment = await _context.Payments.FirstOrDefaultAsync(p => p.BookingId == booking.Id);
                 if (existingPayment != null) return BadRequest(new { message = "A payment already exists for this booking" });
 
@@ -608,7 +619,20 @@ namespace BarberShopAPI.Controllers
                 {
                     Amount = (long)(realTotal * 100m),
                     Currency = "eur",
-                    PaymentMethodTypes = new List<string> { "card" },
+                    // Let the Payment Element surface card + wallets (Apple Pay / Google Pay) + Revolut Pay.
+                    // Wallets ride the card rail and only appear via automatic payment methods, not an
+                    // explicit ["card"] list. AllowRedirects = "always" is required for Revolut Pay, which is
+                    // redirect-based (the customer leaves to Revolut and returns to return_url). The webhook
+                    // (WebHookController) and the return page (Summary.jsx) already handle the round-trip:
+                    // slot-expired/closed during payment is auto-refunded, and the success page polls for the
+                    // webhook before confirming. IMPORTANT: which methods actually show is governed by the
+                    // Stripe Dashboard (per-mode) - keep it to Card/Apple Pay/Google Pay/Revolut Pay, or a
+                    // redirect method like Klarna could surface now that redirects are allowed.
+                    AutomaticPaymentMethods = new PaymentIntentAutomaticPaymentMethodsOptions
+                    {
+                        Enabled = true,
+                        AllowRedirects = "always"
+                    },
                     Metadata = new Dictionary<string, string> {
                             // The INTERNAL int id goes in the metadata (the webhook parses it as an int),
                             // not the public slug - keeps the webhook path unchanged.

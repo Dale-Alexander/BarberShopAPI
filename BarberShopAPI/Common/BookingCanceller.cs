@@ -18,12 +18,6 @@ namespace BarberShopAPI.Common
     {
         public enum Outcome { Cancelled, CancelledNoRefund, NotFound, AlreadyCancelled, Pending, RefundFailed }
 
-        /* Cancel within this window of the appointment and the customer forfeits their refund (the barber
-         * has too little time to rebook the slot). Cancelling earlier gets a full refund. This is a customer
-         * penalty only: it never applies when the shop cancels (dueToClosure) or when staff choose to refund
-         * anyway (forceRefund) - e.g. goodwill, or an ad-hoc shop-side cancel like a barber calling in sick. */
-        private static readonly TimeSpan RefundCutoff = TimeSpan.FromHours(24);
-
         public static async Task<Outcome> CancelAsync(BarberShopContext context, int bookingId, bool dueToClosure, bool forceRefund = false, CancellationReason reason = CancellationReason.None)
         {
             var booking = await context.Bookings
@@ -34,8 +28,15 @@ namespace BarberShopAPI.Common
             if (booking.Status == BookingStatus.CANCELLED) return Outcome.AlreadyCancelled;
             if (booking.Status == BookingStatus.PENDING) return Outcome.Pending;
 
+            /* Cancel within this window of the appointment and the customer forfeits their refund (the barber
+             * has too little time to rebook the slot). Cancelling earlier gets a full refund. This is a customer
+             * penalty only: it never applies when the shop cancels (dueToClosure) or when staff choose to refund
+             * anyway (forceRefund) - e.g. goodwill, or an ad-hoc shop-side cancel like a barber calling in sick.
+             * The cutoff comes from ShopSettings so the shop can tune it (mirrored by the staff booking tables). */
+            var refundCutoff = TimeSpan.FromHours(await context.ShopSettings.Select(s => s.RefundCutoffHours).FirstAsync());
+
             /* StartDateTime is Malta wall-clock and so is ShopClock.Now, so this compares like with like. */
-            bool refundAllowed = dueToClosure || forceRefund || (booking.StartDateTime - ShopClock.Now) >= RefundCutoff;
+            bool refundAllowed = dueToClosure || forceRefund || (booking.StartDateTime - ShopClock.Now) >= refundCutoff;
             bool refundIssued = false;
 
             var payment = booking.Payment;
@@ -65,6 +66,7 @@ namespace BarberShopAPI.Common
             {
                 BackgroundJob.Delete(booking.ReminderJobId);
                 booking.ReminderJobId = null;
+                booking.ReminderSentAt = null;
             }
             booking.Status = BookingStatus.CANCELLED;
             booking.CancellationReason = reason;

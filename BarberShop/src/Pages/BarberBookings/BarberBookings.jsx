@@ -16,13 +16,11 @@ import Pagination from "../../Components/Pagination/Pagination.jsx";
 import { resolveBarberImage, handleBarberImageError } from "../../utils/barberImage.js";
 import FilterModal from "../AdminDashboard/DashboardComponents/Filter/Filter.jsx";
 import { adminAxios } from "../../Hooks/AxiosInterceptor";
+import useFetch from "../../Hooks/useFetch.js";
 import { ToastContext } from "../../Context/ToastContext.jsx";
 import { AuthContext } from "../../Context/AuthContext.jsx";
 import { getErrorMessage } from "../../utils/errorMessage.js";
 
-/* Within this many hours of the appointment a cancellation forfeits the customer's refund (mirrors the
- * backend RefundCutoff in BookingCanceller). Compared against Malta wall-clock - same as the admin table. */
-const REFUND_CUTOFF_HOURS = 24;
 const getMaltaNow = () =>
     new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Malta" }));
 
@@ -123,9 +121,14 @@ const BarberBookings = () => {
      * booking-status filters. Mirrors the admin BookingsTable. */
     const isCancelled = (booking) => booking.status === "CANCELLED";
 
+    /* Refund cutoff from the shop's settings (ShopSettings), mirrors the backend RefundCutoffHours. GET
+     * /api/Settings is staff-readable, so a barber can load it here. Falls back to 24 until loaded. */
+    const { data: shopSettings } = useFetch("/api/Settings", true);
+    const refundCutoffHours = shopSettings?.refundCutoffHours ?? 24;
+
     const isWithinRefundCutoff = (booking) => {
         const diffHours = (new Date(booking.startDateTime) - getMaltaNow()) / (1000 * 60 * 60);
-        return diffHours < REFUND_CUTOFF_HOURS;
+        return diffHours < refundCutoffHours;
     };
 
     const MENU_WIDTH = 150;

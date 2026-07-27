@@ -230,7 +230,21 @@ namespace BarberShopAPI.Controllers
                                 ((s.EndDate == null && s.StartDate == appointmentDate) ||
                                  (s.EndDate != null && s.StartDate <= appointmentDate && s.EndDate >= appointmentDate)) &&
                                 (s.IsFullDay || (s.StartTime < endTime && s.EndTime > appointmentTime)));
-                            if (closure != null)
+
+                            // The barber's working-hours schedule can also change between PENDING and this
+                            // confirmation (admin edits their hours after the customer started paying). It's the
+                            // same "is this slot still open?" question as the closure check, so we fold it into
+                            // the same refund-and-cancel gate: a slot that no longer fits the barber's schedule
+                            // is treated exactly like one that fell on a closure.
+                            var graceMin = await _context.ShopSettings.Select(s => s.GraceMinutesAfterClose).FirstAsync();
+                            var scheduleVersions = await _context.BarberSchedules
+                                .Include(s => s.Shifts)
+                                .Where(s => s.BarberId == booking.BarberId
+                                            && s.EffectiveFrom <= appointmentDate
+                                            && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
+                                .ToListAsync();
+                            var outsideSchedule = !ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, graceMin);
+                            if (closure != null || outsideSchedule)
                             {
                                 // Refund first, outside the DB transaction: cancelling before the money is
                                 // confirmed back would risk the "booking dead but money kept" state. The

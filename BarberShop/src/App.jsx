@@ -14,6 +14,7 @@ import AdminLayout from "./Components/AdminLayout/AdminLayout.jsx";
 import TeamMembers from "./Pages/AdminDashboard/TeamMembers/TeamMembers.jsx";
 import Services from "./Pages/AdminDashboard/Services/Services.jsx";
 import Settings from "./Pages/AdminDashboard/Settings/Settings.jsx";
+import Schedules from "./Pages/AdminDashboard/Schedules/Schedules.jsx";
 import BarberBookings from "./Pages/BarberBookings/BarberBookings";
 import BarberDateAndTime from "./Pages/BarberDateAndTime/BarberDateAndTime.jsx";
 import UserLayout from "./Components/UserLayout/UserLayout.jsx";
@@ -53,6 +54,7 @@ function App() {
                         <Route path="/admin" element={<AdminDashboard />} />
                         <Route path="/admin/team" element={<TeamMembers />} />
                         <Route path="/admin/services" element={<Services />} />
+                        <Route path="/admin/schedules" element={<Schedules />} />
                         <Route path="/admin/settings" element={<Settings />} />
                     </Route>
                 </Route>

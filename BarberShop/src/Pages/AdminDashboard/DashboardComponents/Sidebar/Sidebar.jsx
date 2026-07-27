@@ -14,6 +14,7 @@ import ContactsOutlinedIcon from "@mui/icons-material/ContactsOutlined";
 import ReceiptOutlinedIcon from "@mui/icons-material/ReceiptOutlined";
 import PersonOutlinedIcon from "@mui/icons-material/PersonOutlined";
 import CalendarTodayOutlinedIcon from "@mui/icons-material/CalendarTodayOutlined";
+import ScheduleOutlinedIcon from "@mui/icons-material/ScheduleOutlined";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import HelpOutlineOutlinedIcon from "@mui/icons-material/HelpOutlineOutlined";
 import MenuOutlinedIcon from "@mui/icons-material/MenuOutlined";
@@ -169,6 +170,13 @@ const SidebarContent = ({ collapsed, showCollapseToggle = false, isCollapsed, se
                                     setSelected={setSelected}
                                 />
                                 <Item
+                                    title="Schedules"
+                                    to="/admin/schedules"
+                                    icon={<ScheduleOutlinedIcon />}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
+                                <Item
                                     title="Contacts Information"
                                     to="/contacts"
                                     icon={<ContactsOutlinedIcon />}
@@ -259,6 +267,7 @@ const Sidebar = () => {
         "/admin": "Dashboard",
         "/admin/team": "Manage Team",
         "/admin/services": "Manage Services",
+        "/admin/schedules": "Schedules",
         "/admin/calendar": "Calendar",
         "/admin/settings": "Settings"
     };

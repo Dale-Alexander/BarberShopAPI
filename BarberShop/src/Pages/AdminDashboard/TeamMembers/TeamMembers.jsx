@@ -1,5 +1,6 @@
 import { Plus, Trash2, X, Users, Check, RotateCcw, UserX, Mail, Phone } from "lucide-react";
 import { useState , useEffect, useContext, useRef} from "react";
+import { useNavigate } from "react-router-dom";
 import MemberCard from "./MemberCard/MemberCard";
 import "./TeamMembers.css";
 import useFetch from "../../../Hooks/useFetch";
@@ -12,6 +13,7 @@ import { resolveBarberImage } from "../../../utils/barberImage.js";
 import { validateName, validateNameInline, validateEmail, validatePassword } from "../../../utils/validation.js";
 import { getErrorMessage } from "../../../utils/errorMessage.js";
 const TeamMembers = () => {
+    const navigate = useNavigate();
     const {data, loading, error, reFetch} = useFetch("/api/barbers/admin", true);
     const [barbers, setBarbers] = useState([]);
     const [showCreate, setShowCreate] = useState(false);
@@ -156,6 +158,12 @@ stored i the browser's memory which the backend cant access*/
         }
         else {
             setBarbers([...(barbers ?? []), row]);
+            // A new barber is seeded with a default 09:00-17:30 schedule (see CreateBarber). Route the admin
+            // straight into the schedule editor to confirm/adjust it, so the default is never silently wrong.
+            closeCreate();
+            showToast("Barber added", "Set their working hours to finish setting them up.", "success");
+            navigate(`/admin/schedules?barberId=${row.id}`);
+            return;
         }
         closeCreate();
     }

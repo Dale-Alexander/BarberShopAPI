@@ -4,6 +4,7 @@ using BarberShopAPI.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace BarberShopAPI.Migrations
 {
     [DbContext(typeof(BarberShopContext))]
-    partial class BarberShopContextModelSnapshot : ModelSnapshot
+    [Migration("20260725153300_AddBookingPolicySettings")]
+    partial class AddBookingPolicySettings
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -61,62 +64,6 @@ namespace BarberShopAPI.Migrations
                         .HasDatabaseName("UX_Barber_UserId");
 
                     b.ToTable("Barbers");
-                });
-
-            modelBuilder.Entity("BarberShopAPI.Models.BarberSchedule", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("BarberId")
-                        .HasColumnType("int");
-
-                    b.Property<DateOnly>("EffectiveFrom")
-                        .HasColumnType("date");
-
-                    b.Property<DateOnly?>("EffectiveTo")
-                        .HasColumnType("date");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BarberId")
-                        .IsUnique()
-                        .HasDatabaseName("UX_BarberSchedule_CurrentVersion")
-                        .HasFilter("[EffectiveTo] IS NULL");
-
-                    b.HasIndex("BarberId", "EffectiveFrom");
-
-                    b.ToTable("BarberSchedules");
-                });
-
-            modelBuilder.Entity("BarberShopAPI.Models.BarberScheduleShift", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("BarberScheduleId")
-                        .HasColumnType("int");
-
-                    b.Property<int>("DayOfWeek")
-                        .HasColumnType("int");
-
-                    b.Property<TimeOnly>("EndTime")
-                        .HasColumnType("time");
-
-                    b.Property<TimeOnly>("StartTime")
-                        .HasColumnType("time");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BarberScheduleId");
-
-                    b.ToTable("BarberScheduleShifts");
                 });
 
             modelBuilder.Entity("BarberShopAPI.Models.Booking", b =>
@@ -497,28 +444,6 @@ namespace BarberShopAPI.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("BarberShopAPI.Models.BarberSchedule", b =>
-                {
-                    b.HasOne("BarberShopAPI.Models.Barber", "Barber")
-                        .WithMany()
-                        .HasForeignKey("BarberId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Barber");
-                });
-
-            modelBuilder.Entity("BarberShopAPI.Models.BarberScheduleShift", b =>
-                {
-                    b.HasOne("BarberShopAPI.Models.BarberSchedule", "Schedule")
-                        .WithMany("Shifts")
-                        .HasForeignKey("BarberScheduleId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Schedule");
-                });
-
             modelBuilder.Entity("BarberShopAPI.Models.Booking", b =>
                 {
                     b.HasOne("BarberShopAPI.Models.Barber", "Barber")
@@ -580,11 +505,6 @@ namespace BarberShopAPI.Migrations
                     b.Navigation("Bookings");
 
                     b.Navigation("Closures");
-                });
-
-            modelBuilder.Entity("BarberShopAPI.Models.BarberSchedule", b =>
-                {
-                    b.Navigation("Shifts");
                 });
 
             modelBuilder.Entity("BarberShopAPI.Models.Booking", b =>
