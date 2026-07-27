@@ -54,10 +54,11 @@ namespace BarberShopAPI.Controllers
             }).ToList();
 
         // Confirmed (COMPLETED) future bookings that would fall outside a proposed set of hours, within the
-        // date window the edited/created version governs. Grandfathered - never cancelled - so the admin is
-        // shown these to reschedule/refund/honour by hand. PENDING bookings are intentionally excluded: they
-        // self-resolve (Phase 3 re-checks the schedule at confirmation, and unconfirmed ones auto-expire).
-        private async Task<List<OrphanedBookingViewModel>> FindOrphanedBookingsAsync(
+        // date window the edited/created version governs. Returns the tracked Booking entities so callers can
+        // both surface them (409) and flag them for review. Grandfathered - never cancelled. PENDING bookings
+        // are intentionally excluded: they self-resolve (Phase 3 re-checks the schedule at confirmation, and
+        // unconfirmed ones auto-expire).
+        private async Task<List<Booking>> FindOrphanedBookingsAsync(
             int barberId, DateOnly windowFrom, DateOnly? windowTo, List<ScheduleShiftViewModel> proposedShifts)
         {
             var grace = await _context.ShopSettings.Select(s => s.GraceMinutesAfterClose).FirstAsync();
@@ -74,7 +75,7 @@ namespace BarberShopAPI.Controllers
                 new BarberSchedule { EffectiveFrom = windowFrom, EffectiveTo = windowTo, Shifts = ToShifts(proposedShifts) }
             };
 
-            var orphaned = new List<OrphanedBookingViewModel>();
+            var orphaned = new List<Booking>();
             foreach (var b in candidates)
             {
                 var date = DateOnly.FromDateTime(b.StartDateTime);
@@ -82,27 +83,41 @@ namespace BarberShopAPI.Controllers
                 var start = TimeOnly.FromDateTime(b.StartDateTime);
                 var end = TimeOnly.FromDateTime(b.StartDateTime.AddMinutes(b.DurationMin));
                 if (!ScheduleResolver.FitsWithinAShift(proposed, date, start, end, grace))
-                {
-                    orphaned.Add(new OrphanedBookingViewModel
-                    {
-                        Id = b.Id,
-                        Date = b.StartDateTime.ToString("dddd, MMMM d, yyyy"),
-                        Time = b.StartDateTime.ToString("h:mm tt"),
-                        Customer = b.User != null ? $"{b.User.Name} {b.User.Surname}".Trim() : null,
-                        Email = b.ContactEmail,
-                        Phone = b.User != null ? b.User.Phone : null
-                    });
-                }
+                    orphaned.Add(b);
             }
             return orphaned;
         }
 
-        private static object OrphanConflictPayload(List<OrphanedBookingViewModel> orphaned) => new
+        private static OrphanedBookingViewModel ToOrphanVm(Booking b) => new OrphanedBookingViewModel
+        {
+            Id = b.Id,
+            Date = b.StartDateTime.ToString("dddd, MMMM d, yyyy"),
+            Time = b.StartDateTime.ToString("h:mm tt"),
+            Customer = b.User != null ? $"{b.User.Name} {b.User.Surname}".Trim() : null,
+            Email = b.ContactEmail,
+            Phone = b.User != null ? b.User.Phone : null
+        };
+
+        // Flag stranded bookings for the admin's Needs Review worklist so they aren't forgotten once the
+        // confirmation modal closes. They stay COMPLETED (grandfathered) - this is a reminder to act, not a
+        // cancellation. Mutates the tracked entities; the caller persists them with the schedule change.
+        private static void FlagOrphanedForReview(IEnumerable<Booking> orphaned)
+        {
+            foreach (var b in orphaned)
+            {
+                b.NeedsReview = true;
+                b.ReviewReason = "The barber's working hours changed and this booking now falls outside their "
+                    + "schedule - reschedule, refund or honour it.";
+            }
+        }
+
+        private static object OrphanConflictPayload(List<Booking> orphaned) => new
         {
             requiresConfirmation = true,
             message = $"{orphaned.Count} confirmed booking(s) fall outside the new hours. They won't be "
-                + "cancelled - save to keep them, then reschedule, refund or honour each one by hand.",
-            affected = orphaned
+                + "cancelled - save to keep them (they'll appear in Needs Review), then reschedule, refund or "
+                + "honour each one by hand.",
+            affected = orphaned.Select(ToOrphanVm).ToList()
         };
 
         // All of a barber's versions (past, current, future), oldest first, so the editor can show
@@ -150,18 +165,18 @@ namespace BarberShopAPI.Controllers
                 if (version.EffectiveTo != null && version.EffectiveTo < ShopClock.Today)
                     return BadRequest(new { message = "Past schedules can't be edited" });
 
-                // Warn (once) about confirmed future bookings the new hours would strand, within this
-                // version's date window. Grandfathered - the admin confirms to proceed, nothing is cancelled.
-                if (!model.ConfirmOrphaned)
-                {
-                    var orphaned = await FindOrphanedBookingsAsync(
-                        version.BarberId, version.EffectiveFrom, version.EffectiveTo, model.Shifts);
-                    if (orphaned.Count > 0) return Conflict(OrphanConflictPayload(orphaned));
-                }
+                // Confirmed future bookings the new hours would strand, within this version's date window.
+                // Warn once; the admin confirms to proceed. Nothing is cancelled - they're grandfathered and
+                // flagged for Needs Review instead.
+                var orphaned = await FindOrphanedBookingsAsync(
+                    version.BarberId, version.EffectiveFrom, version.EffectiveTo, model.Shifts);
+                if (orphaned.Count > 0 && !model.ConfirmOrphaned)
+                    return Conflict(OrphanConflictPayload(orphaned));
 
                 // Clear + re-add rather than diffing; cascade delete removes the orphaned old shifts.
                 version.Shifts.Clear();
                 foreach (var sh in ToShifts(model.Shifts)) version.Shifts.Add(sh);
+                FlagOrphanedForReview(orphaned);
                 await _context.SaveChangesAsync();
 
                 return Ok(new { message = "Schedule updated" });
@@ -196,13 +211,14 @@ namespace BarberShopAPI.Controllers
                 if (model.EffectiveFrom <= current.EffectiveFrom)
                     return BadRequest(new { message = "The new schedule must start after the current one began" });
 
-                // The new version reigns from EffectiveFrom onward - warn about confirmed future bookings on
-                // or after that date the new hours would strand. Grandfathered; admin confirms to proceed.
-                if (!model.ConfirmOrphaned)
-                {
-                    var orphaned = await FindOrphanedBookingsAsync(barberId, model.EffectiveFrom, null, model.Shifts);
-                    if (orphaned.Count > 0) return Conflict(OrphanConflictPayload(orphaned));
-                }
+                // The new version reigns from EffectiveFrom onward - confirmed future bookings on or after that
+                // date the new hours would strand. Warn once; admin confirms to proceed. Grandfathered and
+                // flagged for Needs Review, never cancelled.
+                /* this is for when users made a booking for a particular schedule but the admin created a new schedule that now differs from the original
+                 * one. You have to ask if any bookings land within the new schedule and if those bookings actually fall within a shift. */
+                var orphaned = await FindOrphanedBookingsAsync(barberId, model.EffectiveFrom, null, model.Shifts);
+                if (orphaned.Count > 0 && !model.ConfirmOrphaned)
+                    return Conflict(OrphanConflictPayload(orphaned));
 
                 // Close the current version the day before the new one starts, THEN add the new open-ended
                 // version - two saves in a transaction so the filtered unique index (one EffectiveTo==null
@@ -219,6 +235,8 @@ namespace BarberShopAPI.Controllers
                     Shifts = ToShifts(model.Shifts)
                 };
                 _context.BarberSchedules.Add(version);
+                // Flag the stranded bookings for review in the same transaction as the schedule change.
+                FlagOrphanedForReview(orphaned);
                 await _context.SaveChangesAsync();
                 await tx.CommitAsync();
 

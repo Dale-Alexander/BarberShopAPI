@@ -362,9 +362,23 @@ namespace BarberShopAPI.Controllers
                 if (booking == null) return BadRequest(new { message = "Booking not found" });
                 if (booking.Status != BookingStatus.PENDING) return BadRequest(new { message = "Only Pending Bookings can be confirmed" });
 
+                // A closure or schedule change can strand this still-PENDING booking between creation and
+                // confirmation. Cancel it and reject: no money moved on the cash path, so there's no refund
+                // and no email (the customer is here and gets the cancelled screen synchronously). Cancelling
+                // - rather than just 400ing and leaving it PENDING - is what lets the frontend's "no longer
+                // pending" redirect land on a proper cancelled screen (the alreadypaid endpoint 400s while a
+                // booking is still PENDING). Mirrors how a closure pre-cancels conflicting bookings.
+                async Task<IActionResult> CancelAndReject(CancellationReason reason, string message)
+                {
+                    booking.Status = BookingStatus.CANCELLED;
+                    booking.CancellationReason = reason;
+                    await _context.SaveChangesAsync();
+                    await transaction.CommitAsync();
+                    return BadRequest(new { message });
+                }
+
                 // Same closure re-check as the webhook: a PENDING booking must never be confirmed to
-                // COMPLETED on a slot a closure now covers. Unlike the card path, no money has moved and
-                // the admin is here, so we just refuse and let them handle it - nothing to refund.
+                // COMPLETED on a slot a closure now covers.
                 var appointmentDate = DateOnly.FromDateTime(booking.StartDateTime);
                 var appointmentTime = TimeOnly.FromDateTime(booking.StartDateTime);
                 var endTime = TimeOnly.FromDateTime(booking.StartDateTime.AddMinutes(booking.DurationMin));
@@ -374,13 +388,14 @@ namespace BarberShopAPI.Controllers
                      (s.EndDate != null && s.StartDate <= appointmentDate && s.EndDate >= appointmentDate)) &&
                     (s.IsFullDay || (s.StartTime < endTime && s.EndTime > appointmentTime)));
 
-                if (closure != null) return BadRequest(new { message = "This slot now falls on a shop closure and can no longer be confirmed" });
+                if (closure != null)
+                    return await CancelAndReject(CancellationReason.ShopClosure, "This slot now falls on a shop closure and can no longer be confirmed");
                 //The closure checks is for when the admin created a closure between PENDING and COMPLETED stage
 
                 // Same re-check for the barber's working-hours schedule: an admin could have changed the
                 // schedule between PENDING and confirmation, leaving this slot outside the barber's hours.
                 // Closures and schedule answer the same "is this slot still open?" question, so we re-check
-                // both here. No money has moved on the cash path, so we just refuse and let the admin handle it.
+                // both here and cancel the booking the same way.
                 var graceMin = await _context.ShopSettings.Select(s => s.GraceMinutesAfterClose).FirstAsync();
                 var scheduleVersions = await _context.BarberSchedules
                     .Include(s => s.Shifts)
@@ -389,7 +404,7 @@ namespace BarberShopAPI.Controllers
                                 && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
                     .ToListAsync();
                 if (!ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, graceMin))
-                    return BadRequest(new { message = "This slot now falls outside the barber's working hours and can no longer be confirmed" });
+                    return await CancelAndReject(CancellationReason.ScheduleChange, "This slot now falls outside the barber's working hours and can no longer be confirmed");
                 var existingPayment = await _context.Payments.FirstOrDefaultAsync(p => p.BookingId == booking.Id);
                 if (existingPayment != null) return BadRequest(new { message = "A payment already exists for this booking" });
 

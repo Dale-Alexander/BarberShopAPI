@@ -63,17 +63,19 @@ const AlreadyPaid = () => {
     const barberName = bookingDetails?.barberName;
     const cancelledTitle =
         reason === "BarberUnavailable" ? "Your Barber Is No Longer Available"
-        : reason === "ShopClosure" ? "This Time Slot Is No Longer Available"
+        : (reason === "ShopClosure" || reason === "ScheduleChange") ? "This Time Slot Is No Longer Available"
         : "This Booking Has Been Cancelled";
     const cancelledSubtitle =
         reason === "BarberUnavailable"
             ? `${barberName || "Your barber"} is no longer available, so this appointment has been cancelled. Please book again with another barber.`
         : reason === "ShopClosure"
             ? "The shop is closed for this time, so this appointment has been cancelled. Please book again at a different time."
+        : reason === "ScheduleChange"
+            ? "Your barber's working hours have changed for this time, so this appointment has been cancelled. Please book again at a different time."
             : "This appointment was cancelled. If you'd like to make a new booking, please use the button below.";
     const rebookLabel =
         reason === "BarberUnavailable" ? "Choose Another Barber"
-        : reason === "ShopClosure" ? "Book Another Time"
+        : (reason === "ShopClosure" || reason === "ScheduleChange") ? "Book Another Time"
         : "Book Another Appointment";
 
 //early returns after all hooks. Loading after useEffect

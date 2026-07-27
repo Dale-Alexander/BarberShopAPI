@@ -311,7 +311,12 @@ namespace BarberShopAPI.Controllers
                                     }
                                     booking.ContactEmail = email;
                                     booking.Status = BookingStatus.CANCELLED;
-                                    booking.CancellationReason = CancellationReason.ShopClosure;
+                                    // A closure and a schedule change both land here; record which one so the
+                                    // customer gets the right cancellation copy (closure takes precedence when
+                                    // both apply).
+                                    booking.CancellationReason = closure != null
+                                        ? CancellationReason.ShopClosure
+                                        : CancellationReason.ScheduleChange;
                                     // Refund succeeded and we're committing the cancellation - clear any review flag a
                                     // previous failed attempt set, atomically with the state change.
                                     booking.NeedsReview = false;
@@ -326,12 +331,19 @@ namespace BarberShopAPI.Controllers
                                     return StatusCode(500, "Server error");
                                 }
 
-                                BackgroundJob.Enqueue<IEmailService>(service => service.sendBookingCancelledDueToClosureEmailAsync(bookingId, null));
-                                /* The reason we send an email is because Stripe is the caller of this endpoint not the customer, meaning that our 
+                                // Match the email to the actual reason so a schedule-driven cancellation doesn't
+                                // tell the customer the shop was closed.
+                                if (closure != null)
+                                    BackgroundJob.Enqueue<IEmailService>(service => service.sendBookingCancelledDueToClosureEmailAsync(bookingId, null));
+                                else
+                                    BackgroundJob.Enqueue<IEmailService>(service => service.sendBookingCancelledDueToScheduleChangeEmailAsync(bookingId, null));
+                                /* The reason we send an email is because Stripe is the caller of this endpoint not the customer, meaning that our
                                  * responses get seen by Stripe not the customer, therefore the only way we can notify the person is through email. 
                                  On the other hand in /confirm-cash, we just send a response because that is sufficient enough to inform the user what 
                                 happened.*/
-                                return Ok(new { message = "Slot was closed after payment - refunded and cancelled" });
+                                return Ok(new { message = closure != null
+                                    ? "Slot was closed after payment - refunded and cancelled"
+                                    : "Slot fell outside the barber's schedule after payment - refunded and cancelled" });
                             }
 
                             await using var transaction = await _context.Database.BeginTransactionAsync();

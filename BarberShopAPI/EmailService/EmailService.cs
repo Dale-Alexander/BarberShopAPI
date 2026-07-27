@@ -46,6 +46,12 @@ namespace BarberShopAPI.Services
          * tell a transient failure it should retry from the final attempt where it flags for a manual call. */
         [AutomaticRetry(Attempts = EmailJobPolicy.ClosureCancelRetries)]
         Task sendBookingCancelledDueToClosureEmailAsync(int bookingId, PerformContext? context);
+
+        /* Same shape and criticality as the closure email (the customer's only notice, so retry then flag on
+         * exhaustion) - reuses the closure retry policy. Sent when a schedule change, not a closure, left a
+         * paid card booking outside the barber's hours; distinct wording so we don't claim the shop closed. */
+        [AutomaticRetry(Attempts = EmailJobPolicy.ClosureCancelRetries)]
+        Task sendBookingCancelledDueToScheduleChangeEmailAsync(int bookingId, PerformContext? context);
         /* [AutomaticRetry] here for the same reason as the closure email above (Hangfire reads the filter off
          * the interface method). Only the "booking couldn't be confirmed" shape flags on final failure - the
          * duplicate-refund shape is a harmless courtesy, so it's left to fail quietly. */
@@ -307,6 +313,68 @@ namespace BarberShopAPI.Services
                 booking.ReviewReason =
                     $"Cancellation email to {booking.ContactEmail} failed after {EmailJobPolicy.ClosureCancelRetries + 1} attempts ({ex.Message}). "
                     + $"Call the customer to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled by the shop closure.";
+                await _context.SaveChangesAsync();
+            }
+        }
+
+        /* Like sendBookingCancelledDueToClosureEmailAsync, but for when a schedule change (not a closure)
+         * left the customer's paid card slot outside the barber's working hours. Same "only notice"
+         * criticality and refund-aware body; only the reason wording differs, so we don't claim the shop
+         * was closed when it wasn't. */
+        public async Task sendBookingCancelledDueToScheduleChangeEmailAsync(int bookingId, PerformContext? context)
+        {
+            var booking = await _context.Bookings
+                .Include(b => b.User)
+                .Include(b => b.Payment)
+                .FirstOrDefaultAsync(b => b.Id == bookingId);
+            if (booking == null) return;
+            if (string.IsNullOrWhiteSpace(booking.ContactEmail)) return;
+
+            var wasRefunded = booking.Payment?.Status == PaymentStatus.REFUNDED;
+            var safeName = WebUtility.HtmlEncode(booking.User.Name);
+
+            var refundHtml = wasRefunded
+                ? "<p>A full refund has been issued to your original payment method and should appear within a few business days.</p>"
+                : "";
+            var refundText = wasRefunded
+                ? "A full refund has been issued to your original payment method and should appear within a few business days.\n\n"
+                : "";
+
+            var message = new EmailMessage
+            {
+                From = "Dale's Barbershop <onboarding@resend.dev>",
+                Subject = "Your appointment has been cancelled"
+            };
+            message.To.Add(booking.ContactEmail);
+            message.HtmlBody = $@"
+            <h2>Hi {safeName},</h2>
+            <p>We're sorry, but your barber's working hours have changed for
+            <strong>{booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}</strong>,
+            so your appointment for that time has been cancelled.</p>
+            {refundHtml}
+            <p>We apologise for the inconvenience. Please visit our website to book another time.</p>";
+
+            message.TextBody = $"Hi {booking.User.Name},\n\n" +
+                       $"We're sorry, but your barber's working hours have changed for {booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}, " +
+                       $"so your appointment for that time has been cancelled.\n\n" +
+                       refundText +
+                       $"We apologise for the inconvenience. Please visit our website to book another time.";
+
+            try
+            {
+                await _resend.EmailSendAsync(message);
+            }
+            catch (Exception ex)
+            {
+                /* Same reasoning as the closure email: this is the customer's only notice, so retry on
+                 * transient failure and only flag for a manual call once the retries are exhausted. */
+                var retryCount = context?.GetJobParameter<int>("RetryCount") ?? 0;
+                if (retryCount < EmailJobPolicy.ClosureCancelRetries) throw;
+
+                booking.NeedsReview = true;
+                booking.ReviewReason =
+                    $"Cancellation email to {booking.ContactEmail} failed after {EmailJobPolicy.ClosureCancelRetries + 1} attempts ({ex.Message}). "
+                    + $"Call the customer to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled by a schedule change.";
                 await _context.SaveChangesAsync();
             }
         }
