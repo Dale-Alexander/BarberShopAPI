@@ -486,5 +486,5 @@ $RECYCLE.BIN/
 appsettings.Development.json
 
 # User uploads (will be stored externally in production)
-  BarberShopAPI/wwwroot/uploads/*
-  !BarberShopAPI/wwwroot/uploads/.gitkeep
+BarberShopAPI/wwwroot/uploads/*
+!BarberShopAPI/wwwroot/uploads/.gitkeep
