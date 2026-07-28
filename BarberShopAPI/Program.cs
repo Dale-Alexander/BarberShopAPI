@@ -289,3 +289,8 @@ app.UseRateLimiter();
 app.MapControllers();
 
 app.Run();
+
+// Top-level statements compile into an internal Program class, which WebApplicationFactory<Program>
+// can't reach. Declaring it public here is the standard way to make the real host (this exact
+// pipeline, middleware and DI) bootable from the integration tests - see BarberShopAPI.Tests/ApiFactory.
+public partial class Program { }
