@@ -21,6 +21,19 @@ const AlreadyPaid = () => {
     const { showToast } = useContext(ToastContext);
     const navigate = useNavigate();
 
+    /* Stripe appends redirect_status to the return_url after a redirect-based payment (e.g. Revolut).
+       "failed" means the customer didn't complete it (cancelled in the Revolut app, closed it, or was
+       declined) and the booking is still PENDING. Skip the "finalising" poll below (which would otherwise
+       spin for ~10s as if a confirmation were coming) and send them straight back to checkout to retry.
+       We act ONLY on "failed": a query param is client-controlled, so we never trust "succeeded" to show a
+       confirmation - the backend booking status (set by the webhook) stays the source of truth. Acting on
+       "failed" only navigates to checkout, which is harmless even if the value were spoofed. */
+    const paymentFailed = new URLSearchParams(window.location.search).get("redirect_status") === "failed";
+    useEffect(() => {
+        if (!paymentFailed) return;
+        showToast("Payment not completed", "Your payment wasn't completed. Please try again.", "info");
+        navigate(`/checkout/${bookingId}`, { replace: true });
+    }, [paymentFailed, bookingId, navigate, showToast]);
 
     useEffect(() => {
         if (!error) return;
@@ -119,6 +132,9 @@ const AlreadyPaid = () => {
     }, [bookingId, bookingDetails, navigate])
 
     //early returns after all hooks. Loading after useEffect
+    // Redirect payment came back failed - the effect above is navigating to checkout; render a neutral
+    // spinner (not the "Finalising"/"Confirmed" UI) so nothing misleading flashes during that beat.
+    if (paymentFailed) return <LoadingSpinner message="Redirecting..." color="#000000" fullscreen background="#f9f8f6" />
     // Match the page's background (.ap-page) so the loading state doesn't flash white first.
     if (loading) return <LoadingSpinner message="Loading Booking Details" color="#000000" fullscreen background="#f9f8f6" />
     // Still waiting for the webhook to flip the just-paid card booking to COMPLETED (the 400/pending case).
@@ -154,6 +170,7 @@ const AlreadyPaid = () => {
                     <div className="ap-heading">
                         <h2 className="ap-heading__title">Booking Confirmed</h2>
                         <p className="ap-heading__subtitle">{bookingDetails?.customerName}, your booking is all set and ready to go</p>
+                        <p className="ap-heading__subtitle">We've sent a confirmation to your email — check your inbox (and your spam folder if you don't see it).</p>
                     </div>
 
                     <div className="ap-receipt">

@@ -18,9 +18,12 @@ const Checkout = () => {
         () => sessionStorage.getItem(`clientSecret_${bookingId}`) || null
     );
     const navigate = useNavigate();
-    const [fullName, setFullName] = useState("");
-    const [phone, setPhone] = useState("");
-    const [email, setEmail] = useState("");
+    // Restored from sessionStorage (see the persist effect below) so a mid-payment refresh - or a bounce
+    // back here after a failed redirect payment like Revolut, which fully leaves the site and wipes React
+    // state - brings back what the customer already typed instead of resetting the fields to blank.
+    const [fullName, setFullName] = useState(() => sessionStorage.getItem(`checkout_name_${bookingId}`) || "");
+    const [phone, setPhone] = useState(() => sessionStorage.getItem(`checkout_phone_${bookingId}`) || "");
+    const [email, setEmail] = useState(() => sessionStorage.getItem(`checkout_email_${bookingId}`) || "");
     //fullName and phone are declared here because if they are declared in PaymentForm, then they will be reset when i click on the card paymentMethod(when clientSecret is generated)
 
     useEffect(() => {
@@ -30,6 +33,18 @@ const Checkout = () => {
         if (clientSecret) sessionStorage.setItem(`clientSecret_${bookingId}`, clientSecret);
         else sessionStorage.removeItem(`clientSecret_${bookingId}`);
     }, [clientSecret, bookingId]);
+
+    // Persist the contact fields alongside the clientSecret so they survive a refresh or a failed
+    // redirect-payment bounce back to checkout (see the restored useState initializers above). Keyed by
+    // bookingId so values never leak into another booking, and cleared on tab close (sessionStorage).
+    useEffect(() => {
+        const persist = (key, value) =>
+            value ? sessionStorage.setItem(`${key}_${bookingId}`, value)
+                  : sessionStorage.removeItem(`${key}_${bookingId}`);
+        persist("checkout_name", fullName);
+        persist("checkout_phone", phone);
+        persist("checkout_email", email);
+    }, [fullName, phone, email, bookingId]);
 
     useEffect(() => {
         if (error) {
