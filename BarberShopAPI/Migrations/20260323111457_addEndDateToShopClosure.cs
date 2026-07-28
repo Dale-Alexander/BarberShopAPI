@@ -11,13 +11,16 @@ namespace BarberShopAPI.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-           /* migrationBuilder.DropIndex(
+            /* Restored alongside the rename repair in 20260315151019: these two indexes are created there,
+             * so they must be dropped here before Date becomes StartDate and the composite replacements
+             * below are created. They were commented out while that migration was applied by hand. */
+            migrationBuilder.DropIndex(
                 name: "IX_ShopClosures_BarberId_Date",
                 table: "ShopClosures");
 
             migrationBuilder.DropIndex(
                 name: "IX_ShopClosures_Date",
-                table: "ShopClosures");*/
+                table: "ShopClosures");
 
             migrationBuilder.RenameColumn(
                 name: "Date",
