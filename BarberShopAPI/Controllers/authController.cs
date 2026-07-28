@@ -281,18 +281,22 @@ namespace BarberShopAPI.Controllers
             if (!ModelState.IsValid) return BadRequest(ModelState);
             try
             {
+                // Per-email send throttle: don't send another reset email to this address if one went
+                // out within the last ResetEmailThrottleSeconds. This blunts inbox-bombing a victim
+                // regardless of the caller's IP - unlike a per-IP limit, which an attacker sidesteps by
+                // rotating IPs and which can block legit users behind a shared IP. "Issued at" is derived
+                // from the 30-minute token expiry (expiry = issued + 30), so no extra column is needed.
+                // Declared out here (not inside the if) so it can be returned to the client as the source
+                // of truth for its resend cooldown. It's a fixed config value, identical for every caller,
+                // so returning it leaks nothing about whether the account exists.
+                const int TokenLifetimeMinutes = 30;
+                const int ResetEmailThrottleSeconds = 60;
+
                 var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == request.Email);
                 if (user != null && (user.Role.ToString() == "ADMIN" || user.Role.ToString() == "BARBER"))
                 {
-                    // Per-email send throttle: don't send another reset email to this address if one went
-                    // out within the last ResetEmailThrottleMinutes. This blunts inbox-bombing a victim
-                    // regardless of the caller's IP - unlike a per-IP limit, which an attacker sidesteps by
-                    // rotating IPs and which can block legit users behind a shared IP. "Issued at" is derived
-                    // from the 30-minute token expiry (expiry = issued + 30), so no extra column is needed.
-                    const int TokenLifetimeMinutes = 30;
-                    const int ResetEmailThrottleMinutes = 2;
                     var sentWithinThrottle = user.PasswordResetTokenExpiresAt != null
-                        && user.PasswordResetTokenExpiresAt > DateTime.UtcNow.AddMinutes(TokenLifetimeMinutes - ResetEmailThrottleMinutes);
+                        && user.PasswordResetTokenExpiresAt > DateTime.UtcNow.AddMinutes(TokenLifetimeMinutes).AddSeconds(-ResetEmailThrottleSeconds);
 
                     if (!sentWithinThrottle)
                     {
@@ -307,8 +311,14 @@ namespace BarberShopAPI.Controllers
 
                 // Always return the same generic message, whether or not the email
                 // exists or belongs to an admin/barber - avoids leaking which emails
-                // have accounts.
-                return Ok(new { message = "If an account with that email exists, a password reset link has been sent." });
+                // have accounts. resendAfterSeconds is the fixed throttle window (same
+                // for every caller), so the client can drive its resend cooldown off the
+                // backend rather than a duplicated constant.
+                return Ok(new
+                {
+                    message = "If an account with that email exists, a password reset link has been sent.",
+                    resendAfterSeconds = ResetEmailThrottleSeconds
+                });
             }
             catch (Exception ex)
             {

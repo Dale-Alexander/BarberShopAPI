@@ -5,9 +5,10 @@ import { PulseLoader } from "react-spinners";
 import { Mail } from "lucide-react";
 import { validateEmail } from "../../utils/validation";
 
-// Matches the backend's per-email send throttle (RequestPasswordReset), so "Resend" only re-enables
-// once a fresh email would actually be sent rather than being silently throttled.
-const RESEND_SECONDS = 120;
+// Fallback resend cooldown. The backend is the source of truth (RequestPasswordReset returns
+// resendAfterSeconds); this is only used if that field is missing or the request errors, so "Resend"
+// still re-enables at roughly the right time rather than immediately.
+const RESEND_SECONDS = 60;
 
 // Step 1 of the password reset flow: just collects an email and asks the backend to
 // send a reset link. This page never sees or sets a new password - that only happens
@@ -33,8 +34,12 @@ const ForgotPassword = () => {
     const sendResetLink = async () => {
         if (validateEmail(email) || submitting || secondsLeft > 0) return; // safety net; UI already gates these
         setSubmitting(true);
+        // Falls back to RESEND_SECONDS only if the request errors before a response (or the field is
+        // absent). The backend is the source of truth for the cooldown; this constant is just a safety net.
+        let resendAfter = RESEND_SECONDS;
         try {
-            await axios.post("/api/auth/forgot-password", { email });
+            const res = await axios.post("/api/auth/forgot-password", { email });
+            resendAfter = res.data?.resendAfterSeconds ?? RESEND_SECONDS;
         }
         finally {
             // Always show the same confirmation regardless of outcome - the backend intentionally never
@@ -42,7 +47,7 @@ const ForgotPassword = () => {
             // the "Resend" button lines up with the backend's per-email throttle.
             setSubmitting(false);
             setSubmitted(true);
-            setSecondsLeft(RESEND_SECONDS);
+            setSecondsLeft(resendAfter);
         }
     };
 
