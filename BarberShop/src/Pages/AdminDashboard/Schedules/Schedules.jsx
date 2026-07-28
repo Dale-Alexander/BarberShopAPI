@@ -269,7 +269,11 @@ const Schedules = () => {
 
                         {!isReadOnly && (
                             <div className="sched-actions">
-                                <button className="btn-primary" onClick={handleSave} disabled={saving || !!shiftError}>
+                                {/* Wrapped, not passed bare: handleSave's first parameter is confirmOrphaned,
+                                    so onClick={handleSave} handed it React's click event. That made the
+                                    request body circular, JSON.stringify threw inside axios, and the save
+                                    never reached the server - it just showed a generic error toast. */}
+                                <button className="btn-primary" onClick={() => handleSave()} disabled={saving || !!shiftError}>
                                     <Save size={16} /> {saving ? "Saving…" : "Save changes"}
                                 </button>
                                 {canDelete && (
@@ -288,7 +292,8 @@ const Schedules = () => {
                                     <span>Starts from</span>
                                     <input type="date" min={todayStr()} value={newFrom} onChange={(e) => setNewFrom(e.target.value)} />
                                 </label>
-                                <button className="btn-primary" onClick={handleCreateVersion} disabled={creating || !!shiftError || !newFrom}>
+                                {/* Same reason as the save button above - confirmOrphaned must not be the click event. */}
+                                <button className="btn-primary" onClick={() => handleCreateVersion()} disabled={creating || !!shiftError || !newFrom}>
                                     {creating ? "Creating…" : "Create change"}
                                 </button>
                             </div>
