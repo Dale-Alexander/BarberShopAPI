@@ -477,6 +477,52 @@
         text-decoration: line-through;
     }
 
+    /* Staff-only: a slot outside the selected barber's hours that the user is nonetheless allowed to
+       take (admin, or a barber on their own chair). It has to look different from both a normal slot and
+       an unavailable one - picking it is allowed but is a decision, and raises a confirmation. Dashed
+       amber rather than the greyed-out `booked` treatment, which reads as "you can't have this". */
+    .bp-time-chip.outside-hours {
+        border-style: dashed;
+        border-color: #c9770a;
+        color: #a45f08;
+        background: hsla(35, 90%, 50%, 0.06);
+    }
+
+        .bp-time-chip.outside-hours:hover:not(:disabled) {
+            border-color: #a45f08;
+            color: #a45f08;
+        }
+
+        /* Selected wins: the dark chip must still read as "this is the one you've picked". */
+        .bp-time-chip.outside-hours.selected {
+            background: hsl(220, 20%, 14%);
+            color: #fff;
+            border-color: #c9770a;
+        }
+
+/* Legend under the slot grid, same shape as the calendar's (.bp-cal-legend) so the two read as one
+   system. Staff-only, since the states it explains only ever appear for staff. */
+.bp-time-legend {
+    display: flex;
+    gap: 1.25rem;
+    margin-top: 1rem;
+    font-size: 0.75rem;
+    color: hsl(220, 10%, 50%);
+    flex-wrap: wrap;
+}
+
+    .bp-time-legend span {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+    }
+
+    /* Hollow with a dashed amber ring, echoing the chip it stands for rather than being a plain fill. */
+    .legend-dot.outside-hours {
+        background: hsla(35, 90%, 50%, 0.06);
+        border: 2px dashed #c9770a;
+    }
+
 .bp-time-placeholder {
     display: flex;
     flex-direction:column;

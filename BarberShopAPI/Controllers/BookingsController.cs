@@ -104,6 +104,29 @@ namespace BarberShopAPI.Controllers
             var appointmentDate = DateOnly.FromDateTime(model.StartDateTime);
             var appointmentTime = TimeOnly.FromDateTime(model.StartDateTime);
             var endTime = TimeOnly.FromDateTime(endDateTime);
+            var staffSettings = await _context.ShopSettings
+                .Select(s => new { s.BufferMin, s.GraceMinutesAfterClose }).FirstAsync();
+
+            /* Staff book inside the barber's working hours by default, same as customers and same as the
+             * reschedule path. What staff KEEP unconditionally is the lead-time and horizon exemption
+             * above: they can put someone in ten minutes from now or a year out.
+             *
+             * Outside those hours needs an explicit ConfirmOutsideHours - the shop staying open late for a
+             * regular is real, but it has to be a decision someone made rather than something a request
+             * drifted into. Having this apply on a reschedule but not on a create would have meant a slot
+             * you could book from scratch but couldn't move a booking into. */
+            var scheduleVersions = await _context.BarberSchedules
+                .Include(s => s.Shifts)
+                .Where(s => s.BarberId == model.BarberId
+                            && s.EffectiveFrom <= appointmentDate
+                            && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
+                .ToListAsync();
+            if (!ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, staffSettings.GraceMinutesAfterClose))
+            {
+                var refusal = OutsideHoursRefusal(model.ConfirmOutsideHours, barber.FullName);
+                if (refusal != null) return refusal;
+            }
+
             var closureDate = await _context.ShopClosures.FirstOrDefaultAsync(s =>
             s.IsActive == true && (s.BarberId == null || s.BarberId == model.BarberId) && ((s.EndDate == null && s.StartDate == appointmentDate) ||
             (s.EndDate != null && s.StartDate <= appointmentDate && s.EndDate >= appointmentDate)) && (s.IsFullDay || (s.StartTime <
@@ -111,9 +134,8 @@ namespace BarberShopAPI.Controllers
             );
             if (closureDate != null) return BadRequest(new { message = "The chosen slot falls on an unavailable slot" });
 
-            // Staff booking is exempt from working hours (like the lead-time/horizon rules), but the
-            // between-booking buffer still applies so staff can't wedge a client into another's gap.
-            var buffer = await _context.ShopSettings.Select(s => s.BufferMin).FirstAsync();
+            // The between-booking buffer still applies, so staff can't wedge a client into another's gap.
+            var buffer = staffSettings.BufferMin;
 
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
@@ -212,7 +234,11 @@ namespace BarberShopAPI.Controllers
         {
             if (model.ServicesIds.Count == 0)
                 return BadRequest(new { message = "Services are required for user bookings" });
-            var barber = await _context.Barbers.Where(b => b.isActive == true && b.Id == model.BarberId).Select(b => new
+            // The customer's own checkout path, so it honours AcceptsNewBookings as well - the roster above
+            // already hides a winding-down barber, this catches a stale page posting their id directly.
+            // The staff-side CreateBooking above deliberately does NOT: staff may still book someone who's
+            // working their notice.
+            var barber = await _context.Barbers.Where(b => b.isActive == true && b.AcceptsNewBookings && b.Id == model.BarberId).Select(b => new
             {
                 b.Id, FullName = b.User.Name + " " + b.User.Surname
             }).FirstOrDefaultAsync();
@@ -363,19 +389,49 @@ namespace BarberShopAPI.Controllers
                 if (booking.Status != BookingStatus.PENDING) return BadRequest(new { message = "Only Pending Bookings can be confirmed" });
 
                 // A closure or schedule change can strand this still-PENDING booking between creation and
-                // confirmation. Cancel it and reject: no money moved on the cash path, so there's no refund
-                // and no email (the customer is here and gets the cancelled screen synchronously). Cancelling
+                // confirmation. Cancel it and reject: nothing has been charged on the cash path, so there's
+                // no refund and no email (the customer is here and gets the cancelled screen synchronously) -
+                // any in-flight card attempt is voided below so it can't become one either. Cancelling
                 // - rather than just 400ing and leaving it PENDING - is what lets the frontend's "no longer
                 // pending" redirect land on a proper cancelled screen (the alreadypaid endpoint 400s while a
                 // booking is still PENDING). Mirrors how a closure pre-cancels conflicting bookings.
                 async Task<IActionResult> CancelAndReject(CancellationReason reason, string message)
                 {
+                    /* Void the in-flight card payment BEFORE killing the booking - the same order the closure
+                     * sweep (BookingConflictCanceller) and the expiry job use. The customer may have clicked
+                     * Pay Online earlier and abandoned it, leaving a live PaymentIntent on this booking;
+                     * cancelling the booking without voiding it lets that charge still land, and the customer
+                     * only gets their money back days later via the webhook's orphaned-charge refund. If
+                     * Stripe won't void it (it's already succeeding), that guard is exactly the fallback -
+                     * so we log and carry on rather than blocking the rejection the customer is waiting on. */
+                    if (!string.IsNullOrWhiteSpace(booking.StripePaymentIntentId))
+                    {
+                        try { await new PaymentIntentService().CancelAsync(booking.StripePaymentIntentId); }
+                        catch (StripeException ex)
+                        {
+                            Console.WriteLine($"Booking {booking.Id}: couldn't cancel PaymentIntent {booking.StripePaymentIntentId} on {reason} reject (likely already succeeding); webhook will refund if it lands: {ex.Message}");
+                        }
+                    }
+
                     booking.Status = BookingStatus.CANCELLED;
                     booking.CancellationReason = reason;
                     await _context.SaveChangesAsync();
                     await transaction.CommitAsync();
                     return BadRequest(new { message });
                 }
+
+                // The assigned barber can be deactivated between creation and confirmation. Deactivation does
+                // cancel the barber's future bookings, but BookingConflictCanceller deliberately LEAVES a
+                // pending one alone when its in-flight PaymentIntent can't be voided, and a booking created in
+                // the instant before isActive flipped is never in that sweep at all. Either way the customer
+                // would be confirmed onto a barber who no longer works here, so it belongs in the same
+                // "is this slot still real?" gate as the closure and schedule re-checks below.
+                // Checked FIRST, matching the webhook: a departed barber is the only reason whose recovery is
+                // "rebook with someone else" rather than "pick another time", so it must not be masked by a
+                // closure or a schedule change that happens to apply as well.
+                var barberIsActive = await _context.Barbers.AnyAsync(b => b.Id == booking.BarberId && b.isActive);
+                if (!barberIsActive)
+                    return await CancelAndReject(CancellationReason.BarberUnavailable, "The barber for this booking is no longer available, so it can no longer be confirmed");
 
                 // Same closure re-check as the webhook: a PENDING booking must never be confirmed to
                 // COMPLETED on a slot a closure now covers.
@@ -403,6 +459,8 @@ namespace BarberShopAPI.Controllers
                                 && s.EffectiveFrom <= appointmentDate
                                 && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
                     .ToListAsync();
+                // Cancelling rather than grandfathering is the deliberate choice documented at the webhook's
+                // schedule-change guard - the two confirmation points must keep telling the same story.
                 if (!ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, graceMin))
                     return await CancelAndReject(CancellationReason.ScheduleChange, "This slot now falls outside the barber's working hours and can no longer be confirmed");
                 var existingPayment = await _context.Payments.FirstOrDefaultAsync(p => p.BookingId == booking.Id);
@@ -767,6 +825,37 @@ namespace BarberShopAPI.Controllers
             return (from, to);
         }
 
+        /* Shared by the two staff booking paths for a slot that falls outside the target barber's working
+         * hours. Returns the response to send back, or null when the caller may proceed.
+         *
+         * The only question left is whether someone actually chose this. Without `confirmed` it's a 409
+         * naming the barber, so the UI can ask "outside their hours - are you sure?" and resend. 409 rather
+         * than 400 to match the closure and barber-deactivation flows, which use the same shape for "this
+         * needs a human to agree first". A caller that never asks simply never gets through.
+         *
+         * There used to be a second check here - that a BARBER may only agree to this for their own chair,
+         * not a colleague's. It's gone because it can no longer be reached: a barber creating a booking has
+         * model.BarberId pinned to themselves, and a barber updating one is refused outright if they name a
+         * different barber. Both guards run before this. Leaving a dead branch behind would have been worse
+         * than removing it, since its message ("only an admin can book another barber outside their hours")
+         * now understates the real rule - only an admin can put a booking on another barber at all.
+         *
+         * Deliberately does NOT flag the booking for review: it isn't a problem, it's a decision. If the
+         * barber's hours later change, SchedulesController's sweep will surface it again like any other
+         * booking left outside the new hours, which is the right moment to re-ask. */
+        private IActionResult? OutsideHoursRefusal(bool confirmed, string? barberName)
+        {
+            if (confirmed) return null;
+
+            var who = string.IsNullOrWhiteSpace(barberName) ? "this barber" : barberName;
+            return Conflict(new
+            {
+                requiresConfirmation = true,
+                outsideWorkingHours = true,
+                message = $"This slot is outside {who}'s working hours."
+            });
+        }
+
         /* Ownership guard for the barber-scoped endpoints below. Both are open to ADMIN and
          * BARBER, but the {barberId} comes straight from the URL - without this, any logged-in
          * barber could read another barber's clients/phone numbers just by editing the id (IDOR).
@@ -947,6 +1036,11 @@ namespace BarberShopAPI.Controllers
                         Amount = b.Payment.Amount,
                         PaymentMethod = b.Payment.Method.ToString(),//without .ToString the frontend would receive numbers like 0 or 1
                         PaymentStatus = b.Payment.Status.ToString(),
+                        // Barber is required on a booking so this join is safe; User is nullable (a PENDING
+                        // booking has no customer row yet), but this is a projection, so EF emits a LEFT
+                        // JOIN and yields null rather than throwing - same as FirstName/LastName above.
+                        BarberName = b.Barber.User.Name,
+                        Phone = b.User.Phone,
                         NeedsReview = b.NeedsReview,
                         ReviewReason = b.ReviewReason
                     }).ToListAsync();
@@ -1200,6 +1294,7 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                  * the shop-closure flow (which cancels the same way) shares one code path. We just map
                  * its Outcome to the right HTTP response here.*/
                 var outcome = await BookingCanceller.CancelAsync(_context, bookingId, dueToClosure: false, forceRefund: refundAnyway, reason: CancellationReason.AdminCancelled);
+                // A flagged booking stays flagged through a cancellation - see the note in UpdateBooking.
                 return outcome switch
                 {
                     BookingCanceller.Outcome.NotFound => NotFound(new { message = "This booking was not found" }),
@@ -1230,14 +1325,19 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
             {
                 var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.Id == bookingId);
                 if (booking == null) return NotFound(new {message = "Booking not found"});
-                // A barber may only edit a booking that is currently their own; from there they may
-                // reschedule it or reassign it to another barber (the overlap/closure checks below
-                // re-validate against whatever barber it ends up on). Admins are unrestricted.
+                /* A barber may only edit a booking that is currently their own, and may only move it around
+                 * their own day - never onto a colleague. Reassignment is an admin action because it puts
+                 * work on someone else's schedule, which is the owner's call, and because letting a barber
+                 * do it here would have contradicted CreatePendingBookings, where a barber creating a
+                 * booking is pinned to their own chair and can't give a colleague new work either.
+                 * Admins are unrestricted. */
                 if (!User.IsInRole("ADMIN"))
                 {
                     var callerBarberId = await CallerBarberId();
                     if (booking.BarberId != callerBarberId)
                         return StatusCode(403, new { message = "You can only edit your own bookings" });
+                    if (request.BarberId != null && request.BarberId != callerBarberId)
+                        return StatusCode(403, new { message = "Only an admin can move a booking to another barber" });
                 }
                 if (booking.Status != BookingStatus.COMPLETED) return BadRequest(new { message = "Only confirmed bookings can be updated" });
 
@@ -1261,6 +1361,32 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 var appointmentTime = TimeOnly.FromDateTime(startDateTime);
                 var endDateTime = startDateTime.AddMinutes(booking.DurationMin);
                 var endTime = TimeOnly.FromDateTime(endDateTime);
+                var settings = await _context.ShopSettings
+                    .Select(s => new { s.BufferMin, s.GraceMinutesAfterClose }).FirstAsync();
+
+                /* The whole appointment must land inside one of the target barber's shifts for that date
+                 * (grace minutes past the day's last shift allowed), same rule and same resolver the
+                 * customer create path, the cash confirmation and the webhook guard already use.
+                 *
+                 * Staff used to be exempt here. That exemption undermined the schedule worklist: a booking
+                 * flagged "the barber's hours changed and this now falls outside their schedule" could be
+                 * rescheduled into another out-of-hours slot and look dealt with while still being exactly
+                 * the problem it was flagged for. It matters twice over on a reassignment, where `barberId`
+                 * is the NEW barber - a 7pm booking must not survive being moved to someone who finishes
+                 * at 5. Fails closed: a barber with no schedule version covering the date is unbookable. */
+                var scheduleVersions = await _context.BarberSchedules
+                    .Include(s => s.Shifts)
+                    .Where(s => s.BarberId == barberId
+                                && s.EffectiveFrom <= appointmentDate
+                                && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
+                    .ToListAsync();
+                if (!ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, settings.GraceMinutesAfterClose))
+                {
+                    var barberName = await _context.Barbers.Where(b => b.Id == barberId)
+                        .Select(b => b.User.Name + " " + b.User.Surname).FirstOrDefaultAsync();
+                    var refusal = OutsideHoursRefusal(request.ConfirmOutsideHours, barberName);
+                    if (refusal != null) return refusal;
+                }
 
                 var closureDate = await _context.ShopClosures.FirstOrDefaultAsync(s =>
                 s.IsActive == true && (s.BarberId == null || s.BarberId == barberId) && ((
@@ -1270,9 +1396,8 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 );
                 if (closureDate != null) return BadRequest(new { message = "The chosen slot falls on an unavailable date" });
 
-                // Staff reschedule is exempt from working hours (as with the create paths) but must
-                // still honour the between-booking buffer (see ShopSettings.BufferMin).
-                var buffer = await _context.ShopSettings.Select(s => s.BufferMin).FirstAsync();
+                // Must also honour the between-booking gap (see ShopSettings.BufferMin).
+                var buffer = settings.BufferMin;
                 var overlap = await _context.Bookings.AnyAsync(b =>
                 b.Id != bookingId &&//exclude current booking
                 b.BarberId == barberId &&
@@ -1285,6 +1410,14 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
 
                 booking.StartDateTime = startDateTime;
                 booking.BarberId = barberId;
+
+                /* NeedsReview is deliberately NOT cleared here (nor in CancelBooking). The flag means "a
+                 * human still owes someone something", and only some of the nine things that raise it are
+                 * settled by editing the booking - a failed cancellation email or a refund Stripe refused
+                 * survives any amount of rescheduling. Rather than have the flag sometimes clear itself and
+                 * sometimes not, which leaves staff unable to tell which rows they still have to work,
+                 * mark-reviewed is the ONLY way out of the worklist. The frontend marks the row the admin
+                 * just touched so the one they need to clear is easy to spot. */
 
                 var timeChanged = request.StartDateTime.HasValue;
                 if (timeChanged)

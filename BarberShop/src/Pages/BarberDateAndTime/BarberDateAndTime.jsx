@@ -109,15 +109,22 @@ const BarberDateAndTime = () => {
     const isAdmin = user?.role === "ADMIN";
     // Staff (admin OR barber) create bookings from the dashboard; customers use the public flow.
     const isStaffMode = (isAdmin || user?.role === "BARBER") && isAdminBooking;
-    // When a barber CREATES a booking it goes on their own chair, so lock the picker to themselves
-    // (the backend pins it too). Editing is exempt: a barber may reassign their own booking to another
-    // barber - the target barber's booked slots and closures are greyed out in the picker, and the
-    // backend re-validates the overlap/closure against the new barber.
-    const lockBarberToSelf = user?.role === "BARBER" && isStaffMode;
+    /* A barber only ever works on their own chair, creating or editing, so the picker is locked to them
+       (the backend enforces it too). Editing used to be exempt - a barber could hand an existing booking
+       to a colleague - which contradicted the create rule, where they can't give a colleague new work.
+       Putting work on someone else's day is the owner's call, so it's an admin action either way. */
+    const lockBarberToSelf = user?.role === "BARBER" && (isStaffMode || isEditMode);
+    /* Everyone who isn't staff booking or staff rescheduling. Declared up here rather than beside the
+     * lead-time rules it also drives, because the availability fetch below picks its roster from it. */
+    const isCustomer = !isStaffMode && !isEditMode;
     const [showModal, setShowModal] = useState(false);
     // Staff-only warn-and-confirm shown when a staff member picks a slot outside the target barber's
     // schedule (they can still book it - see the Next handler). Customers are hard-limited, never warned.
     const [showScheduleWarn, setShowScheduleWarn] = useState(false);
+    /* Sticky version of that confirmation, for the staff CREATE path: the booking isn't sent until the
+       customer-details modal has been filled in, by which point the confirmation is several clicks back.
+       The edit path passes it straight through instead and never reads this. */
+    const [outsideHoursConfirmed, setOutsideHoursConfirmed] = useState(false);
     const { showToast } = useContext(ToastContext);
     const [bookingLoading, setBookingLoading] = useState(false);
     const {
@@ -142,9 +149,16 @@ const BarberDateAndTime = () => {
     /* what this does is it effectively converts
         bookingId to a boolean. If its not falsy("", false, 0, null, undefined), 
         isEditMode will be set to true*/
-    const { data: barberBookings, loading: barberBookingsloading, error: barberBookingsError, reFetch: reFetchBarbers } = useFetch(`/api/Barbers/barbers-with-bookings`, false);
-    //this will fetch dates where barbers are booked, when they are closed and when the whole shop is closed
-    //this endpoint is public, so no credentials are needed (isProtected = false)
+    /* Fetches when barbers are booked, when they're closed and when the whole shop is closed.
+     *
+     * Anonymous for customers (the endpoint is public), but staff send credentials and ask for the staff
+     * roster: `includeUnbookable` keeps barbers who are closed to NEW customer bookings in the list, since
+     * that flag is about customers only. Without it a barber winding down disappeared from their own edit
+     * page and couldn't touch the appointments they were still working through. The backend ignores the
+     * flag unless the caller really is staff. */
+    const { data: barberBookings, loading: barberBookingsloading, error: barberBookingsError, reFetch: reFetchBarbers } = useFetch(
+        isCustomer ? `/api/Barbers/barbers-with-bookings` : `/api/Barbers/barbers-with-bookings?includeUnbookable=true`,
+        !isCustomer);
     const { data: editBooking, error: editBookingError } = useFetch(bookingId ? `/api/Bookings/admin/${bookingId}` : null, true);
     //admin/{bookingId} is [Authorize(ADMIN,BARBER)], so it always needs credentials (isProtected = true)
     /* Admin-only: pull the default booking duration so the on-page duration control starts at the
@@ -202,6 +216,13 @@ const BarberDateAndTime = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    /* A confirmation is only good for the slot it was given for. Changing the barber, the day or the time
+       throws it away, so an "yes, book them late" agreed for Friday 19:00 can't ride along to a different
+       pick the admin never looked at a warning for. */
+    useEffect(() => {
+        setOutsideHoursConfirmed(false);
+    }, [selectedBarberId, selectedDate, selectedTime]);
+
     // Barber staff-create: pre-select their own chair (they can't pick anyone else). Edit mode already
     // seeds the barber from the booking being edited, so this only runs for the create flow.
     useEffect(() => {
@@ -247,9 +268,6 @@ const BarberDateAndTime = () => {
 
     const today = startOfDay(getMaltaNow());
 
-    /* The lead-time and booking horizon are a customer-only rule; staff booking (admin mode) and staff
-     * rescheduling (edit mode) are only blocked from picking a past slot - matching the backend. */
-    const isCustomer = !isStaffMode && !isEditMode;
     const maxCustomerDate = isCustomer ? addDays(today, maxAdvanceDays) : null;
     const isDateBeyondHorizon = (day) => !!maxCustomerDate && isAfter(startOfDay(day), maxCustomerDate);
 
@@ -315,9 +333,9 @@ const BarberDateAndTime = () => {
         return getAvailableSlots(day).length === 0;
     }
     /* Broad staff time grid = the shop's operating envelope: earliest shift start .. latest shift end
-     * across all barbers' current/future schedules. Staff aren't limited to a barber's own hours (they
-     * can deliberately book outside them - Phase 5 warns), so their grid spans the whole envelope.
-     * Falls back to 09:00-17:30 when no schedules are loaded yet. */
+     * across all barbers' current/future schedules. Staff can step outside the selected barber's own
+     * hours by confirming it, so their grid has to reach past those hours or there'd be nothing to
+     * confirm. Falls back to 09:00-17:30 when no schedules are loaded yet. */
     const staffEnvelopeSlots = useMemo(() => {
         let minStart = Infinity;
         let maxEnd = -Infinity;
@@ -337,7 +355,7 @@ const BarberDateAndTime = () => {
 
     /* The candidate slot START times shown for a date, BEFORE removing booked/closed/past ones:
      * customers get the selected barber's schedule slots (hard-limited to their real hours); staff get
-     * the broad envelope (so they can book outside a barber's hours). */
+     * the broad envelope, with out-of-hours ones marked rather than removed (see isOutsideSchedule). */
     const slotUniverse = (date) => {
         if (!date || !selectedBarberId) return [];
         if (!isCustomer) return staffEnvelopeSlots;
@@ -431,24 +449,37 @@ const BarberDateAndTime = () => {
         return false;
     };
 
-    /* Customer-only hard limit: the appointment must fall within the barber's scheduled hours for the
-     * date (mirrors the backend create-pending check). Staff are exempt - Phase 5 turns an out-of-schedule
-     * staff pick into a warn-and-confirm rather than a hard block. */
+    /* Does this slot fall outside the selected barber's scheduled hours for the date? Mirrors the
+     * backend's ScheduleResolver, including grace past the day's last shift and the duration being
+     * booked. Skipped for "All", where there is no one barber's schedule to measure against. */
     const isTimeSlotOutsideSchedule = (time, date = selectedDate) => {
-        if (!isCustomer) return false;
+        if (selectedBarberId === "All") return false;
         const barber = barbers.find((b) => b.barberId === selectedBarberId);
         return !slotFitsBarberSchedule(time, date, barber);
     };
 
-    /* Staff-only (admin/edit): is the currently SELECTED slot outside the target barber's scheduled
-     * hours for the selected date? Drives the warn-and-confirm on the Next button. Customers can't reach
-     * an out-of-schedule slot at all (the grid hard-limits them), so this is always false for them. */
+    /* Wording for the out-of-hours confirmation. A barber is locked to their own chair, so they are always
+     * agreeing to work the slot themselves and get the soft copy; an admin is always committing somebody
+     * else and gets the "make sure they've agreed" copy. */
+    const isBookingSelf = user?.role === "BARBER";
+    const selectedBarberName = barbers.find((b) => b.barberId === selectedBarberId)?.barberName ?? "this barber";
+
+    /* Staff-only: is the currently SELECTED slot outside the target barber's hours? Drives the
+     * warn-and-confirm on the Next button. */
     const selectedSlotOutsideSchedule = () => {
         if (isCustomer) return false;
         if (!selectedTime || !selectedDate || !selectedBarberId || selectedBarberId === "All") return false;
-        const barber = barbers.find((b) => b.barberId === selectedBarberId);
-        return !slotFitsBarberSchedule(selectedTime, selectedDate, barber);
+        return isTimeSlotOutsideSchedule(selectedTime, selectedDate);
     };
+
+    /* The booking being edited is still sitting on the barber it belongs to. This gates the exemption
+     * that keeps a booking's OWN slot selectable and selected: without that exemption, opening an edit to
+     * change something else would grey out and then clear the time the booking already has.
+     *
+     * Once it's been handed to a different barber, though, that time isn't "its own slot" any more - it's
+     * just a time on somebody else's day, and it has to pass the same checks as any other. Non-edit flows
+     * have no original slot to protect, so they're trivially true. */
+    const isOnOriginalBarber = !isEditMode || (editBooking != null && selectedBarberId === editBooking.barberId);
 
     /* Whether an edit actually changes the slot or barber - so the warn (and handleEdit's own no-op
      * guard) don't fire on an unchanged "Confirm Edit". */
@@ -459,11 +490,6 @@ const BarberDateAndTime = () => {
             || format(orig, "HH:mm") !== selectedTime;
         return dtChanged || editBooking.barberId !== selectedBarberId;
     };
-
-    /* A barber booking onto their OWN chair gets the soft copy ("do you want to work this slot?"); an
-     * admin, or a barber assigning to someone else, gets the stronger "make sure they've agreed" copy. */
-    const isBookingSelf = user?.role === "BARBER" && selectedBarberId === user?.barberId;
-    const selectedBarberName = barbers.find((b) => b.barberId === selectedBarberId)?.barberName ?? "this barber";
 
     const isTimeSlotClosed = (time, date = selectedDate) => {
         /* partial closures can never be multi-day so just keep checking startDate and ignore endDate because it is irrelevant here */
@@ -487,8 +513,12 @@ const BarberDateAndTime = () => {
             const isFree = getAvailableSlots(selectedDate).includes(selectedTime);
             const isClosed = isTimeSlotClosed(selectedTime);
             const isPast = isTimeSlotInPast(selectedTime);
-            if (!isFree || isClosed || isPast) {
-                if (selectedTime !== originalTime) setSelectedTime(null);
+            /* Switching barber can leave a customer holding a time the new barber doesn't work. Customers
+               only: staff may take an out-of-hours slot deliberately, so for them it stays selected and
+               simply becomes a pick they'll be asked to confirm - a choice, not a dead end. */
+            const outsideForCustomer = isCustomer && isTimeSlotOutsideSchedule(selectedTime);
+            if (!isFree || isClosed || isPast || outsideForCustomer) {
+                if (!(isOnOriginalBarber && selectedTime === originalTime)) setSelectedTime(null);
             }
         }
 
@@ -512,7 +542,7 @@ const BarberDateAndTime = () => {
             ).map((b) => format(new Date(b.startDateTime), "HH:mm")));
     }, [barbers, selectedBarberId, selectedDate, bookingId]);*/
 
-    const handleEdit = async () => {
+    const handleEdit = async (outsideHoursConfirmedNow = false) => {
         const newDateFormatted = format(selectedDate, "yyyy-MM-dd");
         try {
             const originalDateAndTime = new Date(editBooking.startDateTime);
@@ -527,12 +557,23 @@ const BarberDateAndTime = () => {
             //as long as the view model declares the type as DateTime
             await adminAxios.patch(`/api/bookings/update-booking/${bookingId}`, {
                 StartDateTime: `${newDateFormatted}T${selectedTime}:00`,
-                BarberId: selectedBarberId
+                BarberId: selectedBarberId,
+                // Only ever true when the admin has just clicked through the out-of-hours confirmation.
+                ConfirmOutsideHours: outsideHoursConfirmedNow
             })
-            navigate(isAdmin ? "/admin" : `/admin/team/${user?.barberId}`);
+            /* Editing takes the admin off the bookings table and back again, so the row they just changed
+               is indistinguishable from the rest by the time they land. Hand the id back in history state
+               and the table marks it - which matters most for a flagged booking, where they still have to
+               mark it reviewed and would otherwise have to remember which one it was. */
+            navigate(isAdmin ? "/admin" : `/admin/team/${user?.barberId}`,
+                { state: { recentlyEditedBookingId: Number(bookingId) } });
         }
         catch (err) {
-            console.error(err.response?.data?.message || "Something went wrong");
+            /* Was console-only, which meant a rejected save looked like nothing happened at all - the page
+               just sat there. Now that the backend also refuses slots outside the barber's working hours,
+               that silence would be the most likely outcome of a normal edit, so the reason has to reach
+               the person clicking Save. */
+            showToast("Couldn't save this booking", getErrorMessage(err));
         }
     }
     const handleAdminCreate = async ({ name, phone }) => {
@@ -555,6 +596,8 @@ const BarberDateAndTime = () => {
                 DefaultDurationMin: durationToSend,
                 FullName: name || null,
                 Phone: phone,
+                // Set by the out-of-hours confirmation on the previous screen (see outsideHoursConfirmed).
+                ConfirmOutsideHours: outsideHoursConfirmed,
             });
             setShowModal(false);
             navigate(isAdmin ? "/admin" : `/admin/team/${user?.barberId}`);
@@ -591,14 +634,15 @@ const BarberDateAndTime = () => {
 
     // The actual "Next" action once any schedule warning is cleared: edit patches, staff create opens the
     // customer-details modal, customer creates the pending booking.
-    const proceedFromDateTime = () => {
-        if (isEditMode) return handleEdit();
+    const proceedFromDateTime = (outsideHoursConfirmed = false) => {
+        if (isEditMode) return handleEdit(outsideHoursConfirmed);
         if (isStaffMode) return setShowModal(true);
         return handleUserCreate();
     };
 
-    // Staff may book outside a barber's schedule, but confirm it first - they're committing another barber
-    // to work off-hours (or choosing to themselves). Skip the warn on an unchanged edit (it would no-op).
+    /* Staff may book outside a barber's schedule, but they have to say so - the backend refuses the slot
+     * without it (409). They're committing another barber to work off-hours, or choosing to themselves.
+     * Skip the warn on an unchanged edit, which would no-op anyway. */
     const handleNextClick = () => {
         if (selectedSlotOutsideSchedule() && (!isEditMode || editHasChanges())) {
             setShowScheduleWarn(true);
@@ -609,8 +653,40 @@ const BarberDateAndTime = () => {
 
     const confirmScheduleWarn = () => {
         setShowScheduleWarn(false);
-        proceedFromDateTime();
+        /* Remembered for the staff-create path, where the booking isn't sent until the customer-details
+         * modal is filled in - by then this confirmation is several clicks in the past. */
+        setOutsideHoursConfirmed(true);
+        proceedFromDateTime(true);
     };
+
+    /* Every slot for the selected date with its display state worked out once: whether it's pickable, and
+     * whether it's outside the selected barber's hours. Computed here rather than inline in the grid so
+     * the legend underneath reads the SAME answers - it used to decide independently ("can this user
+     * override?") and so announced an amber state on days that had no amber chip in them. Also stops
+     * getAvailableSlots being recomputed once per chip. */
+    const daySlots = selectedDate ? (() => {
+        const free = getAvailableSlots(selectedDate);
+        const isOnOriginalDate = originalDate && isSameDay(selectedDate, originalDate);
+        return slotUniverse(selectedDate).map((time) => {
+            /* Outside the barber's hours is a hard block for customers only. For staff it stays pickable
+               and is styled as out-of-hours, so choosing it raises the confirmation rather than being
+               silently unavailable. */
+            const isOutsideSchedule = isTimeSlotOutsideSchedule(time, selectedDate);
+            const blocked = !free.includes(time)
+                || isTimeSlotClosed(time, selectedDate)
+                || isTimeSlotInPast(time, selectedDate)
+                // Customers also can't pick a slot inside the lead time; staff (admin/edit) only past.
+                || (isCustomer && isTimeSlotTooSoon(time, selectedDate))
+                || (isCustomer && isOutsideSchedule);
+            /* The booking's own slot stays pickable so an edit can leave the time alone - but only while
+               it's still on its own barber (see isOnOriginalBarber). Reassign it and it's judged like
+               any other slot. */
+            const isDisabled = isEditMode
+                ? (!(isOnOriginalBarber && isOnOriginalDate && time === originalTime) && blocked)
+                : blocked;
+            return { time, isDisabled, isOutsideSchedule };
+        });
+    })() : [];
 
     const containerVariants = {
         hidden: {},
@@ -843,31 +919,27 @@ const BarberDateAndTime = () => {
                                                 <h3 className="bp-time-heading">{format(selectedDate, "EEEE, MMMM d")}</h3>
                                                 <p className="bp-time-sub">Available slots</p>
                                                 <div className="bp-time-grid">
-                                                    {slotUniverse(selectedDate).map((time) => {
-                                                        const isFree = getAvailableSlots(selectedDate).includes(time);
-                                                        const isClosed = isTimeSlotClosed(time);
-                                                        const isPast = isTimeSlotInPast(time);
-                                                        /* Customers also can't pick a slot inside the lead time; staff (admin/edit) only past. */
-                                                        const isTooSoon = isCustomer && isTimeSlotTooSoon(time);
-                                                        /* Customers can't pick a slot that falls outside the barber's scheduled hours (staff exempt). */
-                                                        const isOutsideSchedule = isTimeSlotOutsideSchedule(time);
-                                                        const isOnOriginalDate = selectedDate && originalDate && isSameDay(selectedDate, originalDate);
-                                                        const blocked = !isFree || isClosed || isPast || isTooSoon || isOutsideSchedule;
-                                                        const isDisabled = isEditMode
-                                                            ? (!(isOnOriginalDate && time === originalTime) && blocked)
-                                                            : blocked;
-                                                        return (
-                                                            <button
-                                                                key={time}
-                                                                className={`bp-time-chip ${selectedTime === time ? "selected" : ""} ${isDisabled ? "booked" : ""}`}
-                                                                onClick={() => !isDisabled && setSelectedTime(time)}
-                                                                disabled={isDisabled}
-                                                            >
-                                                                {time}
-                                                            </button>
-                                                        );
-                                                    })}
+                                                    {daySlots.map(({ time, isDisabled, isOutsideSchedule }) => (
+                                                        <button
+                                                            key={time}
+                                                            className={`bp-time-chip ${selectedTime === time ? "selected" : ""} ${isDisabled ? "booked" : ""} ${!isDisabled && isOutsideSchedule ? "outside-hours" : ""}`}
+                                                            onClick={() => !isDisabled && setSelectedTime(time)}
+                                                            disabled={isDisabled}
+                                                            title={!isDisabled && isOutsideSchedule ? "Outside this barber's working hours" : undefined}
+                                                        >
+                                                            {time}
+                                                        </button>
+                                                    ))}
                                                 </div>
+                                                {/* Only shown when there is actually an amber chip on screen to explain. A
+                                                    barber on their own full-day schedule has none, and a legend for a state
+                                                    the grid isn't in just makes the reader hunt for something that isn't
+                                                    there. Same dot/label shape as the calendar legend above. */}
+                                                {daySlots.some(s => !s.isDisabled && s.isOutsideSchedule) && (
+                                                    <div className="bp-time-legend">
+                                                        <span><i className="legend-dot outside-hours" /> Outside working hours</span>
+                                                    </div>
+                                                )}
                                             </>
                                         ) : (
                                             <div className="bp-time-placeholder">
@@ -899,6 +971,8 @@ const BarberDateAndTime = () => {
                     onConfirm={handleAdminCreate}
                     onCancel={handleCancel}/>
             )}
+            {/* The one place an out-of-hours booking can be agreed to. The backend refuses the slot unless
+                this has been clicked, so it isn't advisory - it's the decision itself. */}
             {showScheduleWarn && (
                 <div className="modal-overlay" onClick={() => setShowScheduleWarn(false)}>
                     <div className="user-form-modal" onClick={(e) => e.stopPropagation()}>
