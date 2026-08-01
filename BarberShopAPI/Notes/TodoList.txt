@@ -47,3 +47,5 @@ Different shop schedules per day as a setting and each barber can implement thei
 Is description in Services required/should you remove it/or nullable? 
 
 Check the "if you had to start over what would you do" list in the A5 booklet in the very last page and see if you can implement some of them.
+
+Edit confirmation email so it displays the booking details aswell.
