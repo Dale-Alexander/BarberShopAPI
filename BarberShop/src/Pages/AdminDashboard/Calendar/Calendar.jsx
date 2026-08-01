@@ -14,6 +14,7 @@ import { AuthContext } from "../../../Context/AuthContext.jsx";
 import { ToastContext } from "../../../Context/ToastContext.jsx";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
 import { getErrorMessage } from "../../../utils/errorMessage.js";
+import { formatPhone } from "../../../utils/phone.js";
 
 const AdminCalendar = () => {
     const { user } = useContext(AuthContext);
@@ -240,7 +241,7 @@ const AdminCalendar = () => {
                 showToast(
                     "Closure created",
                     callList.length > 0
-                        ? `${conflictData.conflicts.length} booking(s) cancelled. Please phone the ${callList.length} customer(s) with no email on file.`
+                        ? `${conflictData.conflicts.length} booking(s) cancelled. ${callList.length} customer(s) with no email are in Needs Review for you to phone.`
                         : `${conflictData.conflicts.length} booking(s) cancelled and those customers emailed.`
                 );
             }
@@ -523,7 +524,7 @@ const AdminCalendar = () => {
                                             <span className="closure-conflict-badge call">
                                                 <Phone size={14} />
                                                 {c.phone
-                                                    ? `Call: ${c.phone}`
+                                                    ? `Flagged for review · call ${formatPhone(c.phone)}`
                                                     : c.email
                                                         ? `No phone on file — email ${c.email}`
                                                         : "No contact on file"}
@@ -535,8 +536,9 @@ const AdminCalendar = () => {
 
                             <p className="closure-conflict-note">
                                 Confirming cancels and refunds these bookings. Customers with an email are
-                                notified automatically; if an email fails to send, that booking appears in your{" "}
-                                <strong>Needs Review</strong> list so you can phone them by hand.
+                                notified automatically. Anyone with no email on file — and anyone whose email
+                                fails to send — appears in your <strong>Needs Review</strong> list with their
+                                phone number, so you can call them by hand.
                             </p>
                         </div>
                         <div className="modal-footer">

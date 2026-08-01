@@ -114,7 +114,7 @@ namespace BarberShopAPI.Controllers
                             ? $"{emailedCount} customer(s) with an email on file will be notified automatically. "
                             : "")
                         + (phoneOnlyCount > 0
-                            ? $"{phoneOnlyCount} have no email and must be contacted by phone."
+                            ? $"{phoneOnlyCount} have no email and will be flagged in Needs Review for you to phone."
                             : "");
 
                     return Conflict(new
