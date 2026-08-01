@@ -1,4 +1,4 @@
-import { useParams, useNavigate} from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { format } from "date-fns";
 import { useContext, useState, useEffect, useCallback } from "react";
 import { usePersistentFilters } from "../../Hooks/UsePersistentFilters.js";
@@ -20,6 +20,7 @@ import useFetch from "../../Hooks/useFetch.js";
 import { ToastContext } from "../../Context/ToastContext.jsx";
 import { AuthContext } from "../../Context/AuthContext.jsx";
 import { getErrorMessage } from "../../utils/errorMessage.js";
+import { formatPhone } from "../../utils/phone.js";
 
 const getMaltaNow = () =>
     new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Malta" }));
@@ -52,6 +53,22 @@ const BarberBookings = () => {
     const [refundAnyway, setRefundAnyway] = useState(false);
     const [markPaidTarget, setMarkPaidTarget] = useState(null);
     const [markPaidAmount, setMarkPaidAmount] = useState("");
+    /* Same "you just touched this row" marker as the admin BookingsTable - editing leaves this page for
+       /datetime/:id and comes back, so without it the row is impossible to pick out on return. This table
+       has no needs-review column, so here it's purely a "that one" confirmation with no follow-up prompt.
+
+       Not persisted across refreshes, unlike the admin table's. There, a mark survives only while its
+       booking still needs signing off in the worklist; with no worklist on this table there is never
+       anything outstanding, so a carried-over mark would be pure noise. */
+    const [recentlyTouched, setRecentlyTouched] = useState({});
+    const location = useLocation();
+
+    useEffect(() => {
+        const editedId = location.state?.recentlyEditedBookingId;
+        if (editedId == null) return;
+        setRecentlyTouched(prev => ({ ...prev, [editedId]: "edited" }));
+        navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+    }, [location.state, location.pathname, location.search, navigate]);
 
     // A filter or barber change restarts paging at page 1.
     useEffect(() => { setPage(1); }, [filters.fromDate, filters.toDate, filters.bookingStatus, filters.paymentStatus, id]);
@@ -168,6 +185,7 @@ const BarberBookings = () => {
             if (filters.bookingStatus === "ALL") updateRow(bookingId, b => ({ ...b, status: "CANCELLED" }));
             else removeRow(bookingId);
             loadSummary();
+            setRecentlyTouched(prev => ({ ...prev, [bookingId]: "cancelled" }));
             showToast("Booking cancelled", res.data?.message || "The booking was cancelled.", "success");
         }
         catch (err) {
@@ -348,9 +366,16 @@ const BarberBookings = () => {
                             </thead>
                             <tbody>
                                 {barberBookings?.bookings?.map((b) => (
-                                    <tr key={b.id} className= "barber-bookings-table-row">
-                                        <td className="barber-bookings-table-data" data-label="Client">{b.name} {b.surname}</td>
-                                        <td className="barber-bookings-table-data" data-label="Phone">{ b.phone}</td>
+                                    <tr key={b.id} className={`barber-bookings-table-row${recentlyTouched[b.id] ? " row-recently-touched" : ""}`}>
+                                        <td className="barber-bookings-table-data" data-label="Client">
+                                            {b.name} {b.surname}
+                                            {recentlyTouched[b.id] && (
+                                                <span className="recent-touch-pill">
+                                                    {recentlyTouched[b.id] === "cancelled" ? "Just cancelled" : "Just edited"}
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td className="barber-bookings-table-data" data-label="Phone">{formatPhone(b.phone)}</td>
                                         <td className="barber-bookings-table-data" data-label="Date & Time">
                                             <div className="datetime-cell">
                                                 {format(new Date(b.startDateTime), "dd-MM-yyyy HH:mm")}
@@ -454,7 +479,7 @@ const BarberBookings = () => {
                         {isWithinRefundCutoff(cancelTarget) ? (
                             <>
                                 <p className="cancel-confirm-text">
-                                    This appointment is within {REFUND_CUTOFF_HOURS} hours. Per the cancellation
+                                    This appointment is within {refundCutoffHours} hours. Per the cancellation
                                     policy, <strong>no refund</strong> will be issued.
                                 </p>
                                 <label className="cancel-refund-override">
@@ -468,7 +493,7 @@ const BarberBookings = () => {
                             </>
                         ) : (
                             <p className="cancel-confirm-text">
-                                This appointment is more than {REFUND_CUTOFF_HOURS} hours away. If the customer
+                                This appointment is more than {refundCutoffHours} hours away. If the customer
                                 paid by card, a <strong>full refund</strong> will be issued.
                             </p>
                         )}

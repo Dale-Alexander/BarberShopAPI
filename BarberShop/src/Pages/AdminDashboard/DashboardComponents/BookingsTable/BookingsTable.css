@@ -279,11 +279,110 @@
     gap: 0.4rem;
 }
 
+/* Name over phone in one cell. The phone is secondary weight - it's there to be dialled off a flagged
+   row, not to compete with the name when scanning. */
+.customer-cell {
+    display: inline-flex;
+    flex-direction: column;
+    line-height: 1.3;
+}
+
+.customer-cell-phone {
+    font-size: 0.78rem;
+    color: hsl(215, 15%, 60%);
+}
+
+/* Carries the tooltip (see BookingsTable.jsx) and so owns the hover affordance and the flex sizing;
+   the icon inside is just the glyph. inline-flex keeps it from adding baseline gaps inside
+   .booking-id-cell, which is itself a flex row. */
+.needs-review-flag-wrap {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
 .needs-review-flag {
     color: #fbbf24;
     flex-shrink: 0;
-    cursor: help;
 }
+
+/* Reason row under a flagged booking (needs-review filter only). Reads as a continuation of the row
+   above rather than a row in its own right: no top border, amber rule down the left to tie it to the
+   flag icon, and the text left-aligned at paragraph weight so long reasons stay readable. */
+.needs-review-reason-row td {
+    border-bottom: 1px solid hsl(228, 17%, 30%);
+}
+
+.needs-review-reason-cell {
+    padding: 0 0.75rem 0.75rem 0.75rem;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: hsl(210, 16%, 72%);
+    text-align: left;
+    border-left: 3px solid #fbbf24;
+    white-space: normal;
+}
+
+/* ── "You just did something to this row" marker ──
+   Deliberately teal, not amber: amber on this table always means "unfinished business" (the flag icon,
+   the reason row's left rule). This says the opposite - you've already handled it - so it must not read
+   as another warning. Both can appear on the same row, which is exactly the case the colours separate:
+   teal "you edited this", amber "and it's still on the list". */
+.recent-touch-pill {
+    background: hsla(174, 62%, 45%, 0.16);
+    color: hsl(174, 62%, 62%);
+    border: 1px solid hsla(174, 62%, 45%, 0.4);
+    border-radius: 999px;
+    padding: 0.05rem 0.45rem;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.row-recently-touched > td {
+    background: hsla(174, 62%, 45%, 0.07);
+}
+
+/* BarberBookings drops the pill straight into a text cell rather than the admin table's flex
+   .booking-id-cell, so it needs its own spacing instead of inheriting that row's gap. */
+.barber-bookings-table-data .recent-touch-pill {
+    margin-left: 0.4rem;
+}
+
+/* The nudge that pairs with the pill, sitting inside the amber reason row. Pushed to its own line so a
+   long review reason doesn't wrap around the button. */
+.review-resolve-prompt {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+    color: hsl(174, 40%, 68%);
+}
+
+.review-resolve-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    background: hsla(174, 62%, 45%, 0.18);
+    color: hsl(174, 62%, 68%);
+    border: 1px solid hsla(174, 62%, 45%, 0.45);
+    border-radius: 6px;
+    padding: 0.2rem 0.55rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+    .review-resolve-btn:hover {
+        background: hsla(174, 62%, 45%, 0.3);
+        border-color: hsl(174, 62%, 55%);
+    }
 
 /* ── Row status badges ──
    Booking lifecycle and payment are separate axes in the filter, so each gets its own badge rather than
@@ -330,8 +429,8 @@
     }
 
     /* hide Amount column on tablet */
-    .bookings-table th:nth-child(4),
-    .bookings-table td:nth-child(4) {
+    .bookings-table th.col-amount,
+    .bookings-table td.col-amount {
         display: none;
     }
 }
@@ -390,8 +489,26 @@
         }
 
         /* show Amount again in card view */
-        .bookings-table td:nth-child(4) {
+        .bookings-table td.col-amount {
             display: flex;
+        }
+
+    /* The card layout turns every td into a right-aligned label/value flex row, which mangles a
+       paragraph. The reason cell opts out: block, left-aligned, and no data-label pseudo-element
+       (it has no label attribute, so ::before would otherwise render an empty 1rem-wide gap). */
+    .bookings-table .needs-review-reason-row {
+        padding-top: 0;
+        border-bottom: none;
+    }
+
+    .bookings-table td.needs-review-reason-cell {
+        display: block;
+        text-align: left;
+        padding: 0 0 0.75rem 0.75rem;
+    }
+
+        .bookings-table td.needs-review-reason-cell::before {
+            content: none;
         }
 }
 

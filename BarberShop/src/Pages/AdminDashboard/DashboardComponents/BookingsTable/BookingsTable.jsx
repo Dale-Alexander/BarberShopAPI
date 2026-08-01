@@ -1,5 +1,5 @@
-﻿import { useState, useEffect, useContext } from "react";
-import { useNavigate } from "react-router-dom";
+﻿import { useState, useEffect, useContext, Fragment } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import { SquarePen, Trash2, Plus, Filter, Search, AlertTriangle, CheckCircle2, Banknote, Coins } from "lucide-react";
 import { format } from "date-fns";
 import FilterModal from "../Filter/Filter.jsx";
@@ -10,10 +10,36 @@ import Pagination from "../../../../Components/Pagination/Pagination.jsx";
 import LoadingSpinner from "../../../../Components/LoadingSpinner/LoadingSpinner.jsx";
 import ErrorState from "../../../../Components/ErrorState/ErrorState.jsx";
 import { getErrorMessage } from "../../../../utils/errorMessage.js";
+import { formatPhone } from "../../../../utils/phone.js";
 import useFetch from "../../../../Hooks/useFetch.js";
 
 const getMaltaNow = () =>
     new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Malta" }));
+
+/* Where the "you just dealt with this row" marks live between page loads. sessionStorage rather than
+   localStorage: these are meant to expire, just not as abruptly as a refresh. Both helpers swallow
+   failures because storage throws outright in some private-browsing modes, and a lost marker must never
+   take the bookings table down with it. */
+const TOUCHED_STORAGE_KEY = "bookingsTable.recentlyTouched";
+
+const readStoredTouched = () => {
+    try {
+        const raw = sessionStorage.getItem(TOUCHED_STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        // Guard the shape too - a hand-edited or half-written value would otherwise crash every render.
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+        return {};
+    }
+};
+
+const writeStoredTouched = (map) => {
+    try {
+        sessionStorage.setItem(TOUCHED_STORAGE_KEY, JSON.stringify(map));
+    } catch {
+        /* over quota or storage disabled - the marks just won't survive the next load */
+    }
+};
 
 const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filters, needsReviewCount = 0, refreshNeedsReviewCount, refreshSummary, page = 1, totalPages = 1, onPageChange, loading = false, error = false, onRetry }) => {
     const [openMenuId, setOpenMenuId] = useState(null);
@@ -31,8 +57,76 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
     // the day) so the revenue chart reflects reality. Prefilled with the current amount.
     const [editAmountTarget, setEditAmountTarget] = useState(null);
     const [editAmountValue, setEditAmountValue] = useState("");
+    /* Rows the admin has acted on, as { bookingId: "edited" | "cancelled" }. Nothing clears the
+       needs-review flag automatically (see UpdateBooking's note), so after dealing with a booking they
+       still have to mark it reviewed - this is what tells them WHICH row that is, instead of a second
+       pass over a list where every row looks identical to the one they just fixed.
+
+       Two buckets, because they expire differently:
+         recentlyTouched - made during this visit. Never pruned, so the booking you just cancelled stays
+                           marked for as long as you're on the page even though it has no flag to sign off.
+         restoredTouched - carried over from a previous visit (sessionStorage). Pruned down to the rows
+                           that are STILL flagged, so what survives a refresh is only what you still owe
+                           a sign-off on. A finished booking comes back clean rather than nagging forever.
+
+       Browser-local on purpose: "just edited" is a note to yourself about what you did, and would be a
+       lie sitting on the screen of another admin who didn't do it. Per browser session, so it also dies
+       when they close the tab. */
+    const [recentlyTouched, setRecentlyTouched] = useState({});
+    const [restoredTouched, setRestoredTouched] = useState(readStoredTouched);
     const { showToast } = useContext(ToastContext);
     const navigate = useNavigate();
+    const location = useLocation();
+
+    /* Editing happens on a different page (/datetime/:id), which navigates back here on save and hands
+       the id over in history state. Consume it once and strip it, so a refresh doesn't re-announce an
+       edit the admin has already dealt with. The filters live in the query string, so keep `search`. */
+    useEffect(() => {
+        const editedId = location.state?.recentlyEditedBookingId;
+        if (editedId == null) return;
+        setRecentlyTouched(prev => ({ ...prev, [editedId]: "edited" }));
+        navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+    }, [location.state, location.pathname, location.search, navigate]);
+
+    /* Drop a carried-over mark as soon as we can SEE that its booking no longer needs signing off. Only
+       ever against rows actually on screen - the list is filtered and paged, so a mark whose booking
+       isn't in view says nothing about whether it's still flagged and must be left alone. Deliberately
+       not applied to recentlyTouched, which would wipe this visit's marks the instant they're made. */
+    useEffect(() => {
+        if (!bookings?.length) return;
+        setRestoredTouched(prev => {
+            const settled = Object.keys(prev).filter(id =>
+                bookings.some(b => String(b.id) === id && !b.needsReview));
+            if (settled.length === 0) return prev;
+            const next = { ...prev };
+            settled.forEach(id => delete next[id]);
+            return next;
+        });
+    }, [bookings]);
+
+    // One merged map is what gets persisted, so a mark made this visit survives the trip out to the edit
+    // page (which unmounts this table) as well as an outright refresh.
+    useEffect(() => {
+        writeStoredTouched({ ...restoredTouched, ...recentlyTouched });
+    }, [restoredTouched, recentlyTouched]);
+
+    const touchedFor = (bookingId) => recentlyTouched[bookingId] ?? restoredTouched[bookingId];
+
+    const markTouched = (bookingId, how) =>
+        setRecentlyTouched(prev => ({ ...prev, [bookingId]: how }));
+
+    // Signing the booking off is what retires the marker - leaving it would keep drawing the eye to a row
+    // with nothing left to do on it. Both buckets, since the mark may have come from either.
+    const clearTouched = (bookingId) => {
+        const drop = (prev) => {
+            if (!(bookingId in prev)) return prev;
+            const next = { ...prev };
+            delete next[bookingId];
+            return next;
+        };
+        setRecentlyTouched(drop);
+        setRestoredTouched(drop);
+    };
 
     /* Cancelling within this many hours of the appointment forfeits the customer's refund - the shop's
      * configured cutoff (ShopSettings), mirrors the backend RefundCutoffHours in BookingCanceller. Falls
@@ -115,6 +209,7 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
             // Pull the chart/stat cards back down so the now-cancelled booking leaves the COMPLETED-only
             // series immediately, instead of lingering until the next page load.
             refreshSummary?.();
+            markTouched(bookingId, "cancelled");
             showToast("Booking cancelled", res.data?.message || "The booking was cancelled.", "success");
         }
         catch (err) {
@@ -156,6 +251,7 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                     : prev.map(b => b.id === bookingId ? { ...b, needsReview: false, reviewReason: null } : b)
             );
             refreshNeedsReviewCount?.();
+            clearTouched(bookingId);
             showToast("Marked as reviewed", `Booking #${bookingId} was cleared from the review list.`, "success");
         }
         catch (err) {
@@ -307,35 +403,67 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                     <thead>
                         <tr>
                             <th className="table-header">Booking ID</th>
-                            <th className="table-header">Name</th>
+                            <th className="table-header">Customer</th>
+                            <th className="table-header">Barber</th>
                             <th className="table-header">Date & Time</th>
-                            <th className="table-header">Amount</th>
+                            {/* Hidden on tablet by class rather than :nth-child - the position of this
+                                column has already shifted once and a positional selector silently starts
+                                hiding whatever moves into slot 4. */}
+                            <th className="table-header col-amount">Amount</th>
                             <th className="table-header">Status</th>
                             <th className="table-header">Payment</th>
                             <th className="table-header">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {bookings.map((b) => (
-                            <tr key={b.id} style={{ transition: "background 0.2s" }}>
+                        {bookings.map((b) => {
+                            const touched = touchedFor(b.id);
+                            return (
+                            <Fragment key={b.id}>
+                            <tr className={touched ? "row-recently-touched" : undefined} style={{ transition: "background 0.2s" }}>
                                 <td className="table-data" data-label="Booking ID">
                                     <span className="booking-id-cell">
                                         {b.id}
+                                        {/* Says what the admin did, not what the booking needs - the amber
+                                            flag/reason row below is what carries "something is still owed
+                                            here". Two different jobs, so two different colours. */}
+                                        {touched && (
+                                            <span className="recent-touch-pill">
+                                                {touched === "cancelled" ? "Just cancelled" : "Just edited"}
+                                            </span>
+                                        )}
+                                        {/* The tooltip has to hang off this span, not the icon. Lucide spreads
+                                            unknown props straight onto its <svg>, and an SVG element ignores a
+                                            `title` ATTRIBUTE - it only shows a tooltip for a <title> CHILD
+                                            element. Put it on the icon and the reason silently never appears. */}
                                         {b.needsReview && (
-                                            <AlertTriangle
-                                                size={14}
-                                                className="needs-review-flag"
-                                                aria-label="Needs review"
+                                            <span
+                                                className="needs-review-flag-wrap"
                                                 title={b.reviewReason || "Needs manual review"}
-                                            />
+                                            >
+                                                <AlertTriangle
+                                                    size={14}
+                                                    className="needs-review-flag"
+                                                    aria-label="Needs review"
+                                                />
+                                            </span>
                                         )}
                                     </span>
                                 </td>
-                                <td className="table-data" data-label="Name">{`${b.firstName}`}</td>
+                                {/* Phone sits under the name rather than in its own column: it's the same
+                                    person, and a flagged row whose instruction is "call them" is useless
+                                    without it. Walk-ins booked by staff may have no phone on file. */}
+                                <td className="table-data" data-label="Customer">
+                                    <span className="customer-cell">
+                                        <span>{b.firstName}</span>
+                                        {b.phone && <span className="customer-cell-phone">{formatPhone(b.phone)}</span>}
+                                    </span>
+                                </td>
+                                <td className="table-data" data-label="Barber">{b.barberName || <span className="no-actions">&mdash;</span>}</td>
                                 <td className="table-data" data-label="Date & Time">{format(new Date(b.startDateTime), "dd-MM-yyyy")} <br />
                                     {format(new Date(b.startDateTime), "HH:mm")}
                                 </td>
-                                <td className="table-data" data-label="Amount">{b.amount}</td>
+                                <td className="table-data col-amount" data-label="Amount">{b.amount}</td>
                                 <td className="table-data" data-label="Status">
                                     <span className={`booking-status-badge ${isCancelled(b) ? "status-cancelled" : "status-confirmed"}`}>
                                         {isCancelled(b) ? "Cancelled" : "Confirmed"}
@@ -411,7 +539,37 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                                     </div>
                                 </td>
                             </tr>
-                        ))}
+                            {/* The reason is read out in full rather than hidden behind a hover on a 14px
+                                icon - you can't scan or compare tooltips. Shown on every flagged booking,
+                                not just inside the needs-review filter: a flag the admin stumbles on while
+                                browsing is exactly when they least expect it and most need telling why.
+                                Its own full-width row keeps the columns above aligned. */}
+                            {b.needsReview && (
+                                <tr className="needs-review-reason-row">
+                                    <td className="needs-review-reason-cell" colSpan={8}>
+                                        {b.reviewReason || "Flagged for manual review - no reason was recorded."}
+                                        {/* Only once they've actually done something to this booking. The
+                                            prompt is the whole point of the marker: you dealt with it, so
+                                            here's the button to take it off the list, right where you're
+                                            already looking instead of back in the row menu. */}
+                                        {touched && (
+                                            <span className="review-resolve-prompt">
+                                                You just {touched === "cancelled" ? "cancelled" : "edited"} this &mdash; done with it?
+                                                <button
+                                                    type="button"
+                                                    className="review-resolve-btn"
+                                                    onClick={() => setReviewTarget(b)}
+                                                >
+                                                    <CheckCircle2 size={13} /> Mark resolved
+                                                </button>
+                                            </span>
+                                        )}
+                                    </td>
+                                </tr>
+                            )}
+                            </Fragment>
+                            );
+                        })}
                     </tbody>
                 </table>
                 {loading && bookings.length > 0 && (
@@ -434,7 +592,7 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                         {isWithinRefundCutoff(cancelTarget) ? (
                             <>
                                 <p className="cancel-confirm-text">
-                                    This appointment is within {REFUND_CUTOFF_HOURS} hours. Per the cancellation
+                                    This appointment is within {refundCutoffHours} hours. Per the cancellation
                                     policy, <strong>no refund</strong> will be issued.
                                 </p>
                                 <label className="cancel-refund-override">
@@ -448,7 +606,7 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                             </>
                         ) : (
                             <p className="cancel-confirm-text">
-                                This appointment is more than {REFUND_CUTOFF_HOURS} hours away. If the customer
+                                This appointment is more than {refundCutoffHours} hours away. If the customer
                                 paid by card, a <strong>full refund</strong> will be issued.
                             </p>
                         )}
