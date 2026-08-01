@@ -17,6 +17,11 @@ namespace BarberShopAPI.ViewModels
         public DateOnly EffectiveFrom { get; set; }
         public DateOnly? EffectiveTo { get; set; }
         public List<ScheduleShiftViewModel> Shifts { get; set; } = new();
+
+        /* Only set on the response to creating a version: the already-flagged bookings these hours bring
+         * back inside the schedule, so the editor can list them for the admin. Always empty when the list
+         * of versions is read (GetBarberSchedule), where it means nothing. */
+        public List<OrphanedBookingViewModel> BackInsideHours { get; set; } = new();
     }
 
     // Body for replacing a version's shifts (PUT). ConfirmOrphaned = the admin has seen the confirmed

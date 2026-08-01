@@ -78,6 +78,82 @@ namespace BarberShopAPI.Tests
             Assert.Equal(CancellationReason.None, booking.CancellationReason);
         }
 
+        /* Widening hours saves without asking anything, so the admin who just undid their own mistake gets
+         * no sign that the bookings it flagged now fit again. The response carries a count so the editor
+         * can point them at the list. A count only - the flags stay, because a flagged booking's note may
+         * carry other problems that widening the hours does nothing about. */
+        [Fact]
+        public async Task Widening_hours_again_reports_the_bookings_that_now_fit_without_unflagging_them()
+        {
+            var (_, scheduleId, bookingId) = await ArrangeBarberWithLateBooking();
+
+            // Narrow to 15:00, stranding the 16:00 booking, then put the hours back.
+            await Client.PutAsync($"/api/schedules/version/{scheduleId}",
+                Body(new { shifts = AllDays(9, 0, 15, 0), confirmOrphaned = true }));
+
+            var widened = await Client.PutAsync($"/api/schedules/version/{scheduleId}",
+                Body(new { shifts = AllDays(9, 0, 17, 30), confirmOrphaned = false }));
+
+            Assert.Equal(HttpStatusCode.OK, widened.StatusCode);
+            var listed = (await ReadJson(widened)).GetProperty("backInsideHours").EnumerateArray().ToList();
+            Assert.Single(listed);
+            // Enough detail to find the booking in the review list without hunting.
+            Assert.Equal(bookingId, listed[0].GetProperty("id").GetInt32());
+            Assert.False(string.IsNullOrWhiteSpace(listed[0].GetProperty("date").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(listed[0].GetProperty("time").GetString()));
+
+            using var db = NewDb();
+            // Still flagged: the admin reads the note and clears it, exactly as before.
+            Assert.True((await db.Bookings.SingleAsync(b => b.Id == bookingId)).NeedsReview);
+        }
+
+        /* Only bookings flagged BY THE SCHEDULE PATH are listed. One flagged over money that happens to sit
+         * inside the hours must not be announced as though widening them had resolved anything. */
+        [Fact]
+        public async Task A_booking_flagged_for_another_reason_is_not_listed()
+        {
+            var (_, scheduleId, bookingId) = await ArrangeBarberWithLateBooking();
+
+            await Client.PutAsync($"/api/schedules/version/{scheduleId}",
+                Body(new { shifts = AllDays(9, 0, 15, 0), confirmOrphaned = true }));
+
+            // Replace the schedule note with an unrelated one - same booking, different problem.
+            using (var db = NewDb())
+            {
+                var booking = db.Bookings.Single(b => b.Id == bookingId);
+                booking.ReviewReason = "Check Stripe for a charge on this booking.";
+                db.SaveChanges();
+            }
+
+            var widened = await Client.PutAsync($"/api/schedules/version/{scheduleId}",
+                Body(new { shifts = AllDays(9, 0, 17, 30), confirmOrphaned = false }));
+
+            Assert.Equal(HttpStatusCode.OK, widened.StatusCode);
+            Assert.Empty((await ReadJson(widened)).GetProperty("backInsideHours").EnumerateArray());
+        }
+
+        // A booking that always fitted must not be counted - the count means "these changed status", not
+        // "these are flagged", or every unrelated flag would look like the schedule change fixed it.
+        [Fact]
+        public async Task A_flagged_booking_that_already_fitted_is_not_counted()
+        {
+            var (_, scheduleId, bookingId) = await ArrangeBarberWithLateBooking();
+            using (var db = NewDb())
+            {
+                var booking = db.Bookings.Single(b => b.Id == bookingId);
+                booking.NeedsReview = true;   // flagged over money, nothing to do with hours
+                booking.ReviewReason = "Check Stripe for a charge on this booking.";
+                db.SaveChanges();
+            }
+
+            // Widen further; the 16:00 booking fitted 09:00-17:30 before and fits 09:00-20:00 now.
+            var widened = await Client.PutAsync($"/api/schedules/version/{scheduleId}",
+                Body(new { shifts = AllDays(9, 0, 20, 0), confirmOrphaned = false }));
+
+            Assert.Equal(HttpStatusCode.OK, widened.StatusCode);
+            Assert.Empty((await ReadJson(widened)).GetProperty("backInsideHours").EnumerateArray());
+        }
+
         [Fact]
         public async Task Confirming_the_edit_grandfathers_the_booking_and_flags_it_for_review()
         {
@@ -356,14 +432,12 @@ namespace BarberShopAPI.Tests
         // ---------------------------------------------------------------------------------------------
 
         [Fact]
-        public async Task Deleting_the_current_version_can_strand_a_booking_with_no_warning_and_no_flag()
+        public async Task Deleting_the_current_version_warns_before_stranding_a_booking()
         {
-            /* CHARACTERISATION TEST - documents a GAP, not desired behaviour.
-             *
-             * PUT and POST both run FindOrphanedBookingsAsync and make the admin confirm. DELETE does not:
-             * removing the current version reopens the prior one, whose narrower hours can strand exactly
-             * the same confirmed bookings - silently, with no 409 and no Needs Review flag. If that gap is
-             * ever closed, this test SHOULD fail; update it to expect the 409 rather than deleting it. */
+            /* Removing a version reopens the prior one, whose narrower hours strand exactly the bookings the
+             * deleted version made room for. This used to happen silently - no 409, no flag - which was the
+             * worst place for it: "undo" is when an admin is least likely to think about the bookings taken
+             * under the hours being removed. Now it matches PUT and POST: warn first, change nothing. */
             int adminId, currentScheduleId, bookingId;
             using (var db = NewDb())
             {
@@ -384,17 +458,128 @@ namespace BarberShopAPI.Tests
 
             var response = await Client.DeleteAsync($"/api/schedules/version/{currentScheduleId}");
 
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            var payload = await ReadJson(response);
+            Assert.True(payload.GetProperty("requiresConfirmation").GetBoolean());
+            var affected = payload.GetProperty("affected").EnumerateArray().ToList();
+            Assert.Single(affected);
+            Assert.Equal(bookingId, affected[0].GetProperty("id").GetInt32());
+            // Not "the new hours" - nothing new is being proposed, the old ones are coming back.
+            Assert.Contains("the hours this restores", payload.GetProperty("message").GetString());
+
+            using var assertDb = NewDb();
+            // A soft warning must be side-effect free: the version is still there, the prior one is still
+            // closed, and the booking is untouched - so the admin can still back out.
+            Assert.Equal(2, await assertDb.BarberSchedules.CountAsync());
+            Assert.Equal(currentScheduleId,
+                (await assertDb.BarberSchedules.SingleAsync(s => s.EffectiveTo == null)).Id);
+            var booking2 = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.Equal(BookingStatus.COMPLETED, booking2.Status);
+            Assert.False(booking2.NeedsReview);
+        }
+
+        [Fact]
+        public async Task Confirming_the_delete_reopens_the_prior_version_and_flags_the_stranded_booking()
+        {
+            int adminId, currentScheduleId, priorScheduleId, bookingId;
+            using (var db = NewDb())
+            {
+                var admin = db.AddUser(Role.ADMIN);
+                var barber = db.AddBarber();
+                // Prior version: mornings only. Current version: full days.
+                var prior = db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30), ShopClock.Today.AddDays(9),
+                    Enumerable.Range(0, 7).Select(d => ((DayOfWeek)d, new TimeOnly(9, 0), new TimeOnly(12, 0))).ToArray());
+                var current = db.AddSchedule(barber.Id, ShopClock.Today.AddDays(10), null);
+                // 16:00 fits the current version, but not the prior one that deletion reopens.
+                var booking = db.AddBooking(barber.Id, TestData.FutureAt(20, 16), BookingStatus.COMPLETED);
+
+                adminId = admin.Id;
+                priorScheduleId = prior.Id;
+                currentScheduleId = current.Id;
+                bookingId = booking.Id;
+            }
+            Client.Authenticate(adminId, Role.ADMIN, tokenVersion: 0);
+
+            var response = await Client.DeleteAsync(
+                $"/api/schedules/version/{currentScheduleId}?confirmOrphaned=true");
+
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
             using var assertDb = NewDb();
-            var booking2 = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
-            Assert.Equal(BookingStatus.COMPLETED, booking2.Status);
-            Assert.False(booking2.NeedsReview); // <- the gap: nobody was told
-
-            // The prior version really did reopen and really does strand it.
+            // The removal really happened: the current version is gone and the prior one is open-ended again.
+            Assert.Null(await assertDb.BarberSchedules.FirstOrDefaultAsync(s => s.Id == currentScheduleId));
             var reopened = await assertDb.BarberSchedules.Include(s => s.Shifts)
                 .SingleAsync(s => s.EffectiveTo == null);
+            Assert.Equal(priorScheduleId, reopened.Id);
             Assert.All(reopened.Shifts, s => Assert.Equal(new TimeOnly(12, 0), s.EndTime));
+
+            // Grandfathered, like every other schedule-change orphan: still COMPLETED, flagged not cancelled.
+            var booking2 = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.Equal(BookingStatus.COMPLETED, booking2.Status);
+            Assert.Equal(CancellationReason.None, booking2.CancellationReason);
+            Assert.True(booking2.NeedsReview);
+            Assert.Contains("working hours changed", booking2.ReviewReason);
+            Assert.Empty(Factory.EnqueuedEmailJobs());
+        }
+
+        [Fact]
+        public async Task Deleting_a_version_that_strands_nothing_needs_no_confirmation()
+        {
+            int adminId, currentScheduleId, bookingId;
+            using (var db = NewDb())
+            {
+                var admin = db.AddUser(Role.ADMIN);
+                var barber = db.AddBarber();
+                // Prior version is WIDER than the current one, so restoring it can't strand anything.
+                db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30), ShopClock.Today.AddDays(9),
+                    Enumerable.Range(0, 7).Select(d => ((DayOfWeek)d, new TimeOnly(8, 0), new TimeOnly(20, 0))).ToArray());
+                var current = db.AddSchedule(barber.Id, ShopClock.Today.AddDays(10), null);
+                var booking = db.AddBooking(barber.Id, TestData.FutureAt(20, 16), BookingStatus.COMPLETED);
+
+                adminId = admin.Id;
+                currentScheduleId = current.Id;
+                bookingId = booking.Id;
+            }
+            Client.Authenticate(adminId, Role.ADMIN, tokenVersion: 0);
+
+            var response = await Client.DeleteAsync($"/api/schedules/version/{currentScheduleId}");
+
+            // No 409 to click through when there's nothing to warn about - the undo just works.
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            using var assertDb = NewDb();
+            Assert.False((await assertDb.Bookings.SingleAsync(b => b.Id == bookingId)).NeedsReview);
+        }
+
+        [Fact]
+        public async Task A_pending_booking_stranded_by_a_delete_is_neither_warned_about_nor_flagged()
+        {
+            /* Same exclusion as the edit path: a PENDING booking self-resolves. Either the customer finishes
+             * paying and the webhook / ConfirmCashBooking re-check the live schedule and cancel it properly,
+             * or it expires. Warning about one would block the undo on a half-finished checkout. */
+            int adminId, currentScheduleId, bookingId;
+            using (var db = NewDb())
+            {
+                var admin = db.AddUser(Role.ADMIN);
+                var barber = db.AddBarber();
+                db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30), ShopClock.Today.AddDays(9),
+                    Enumerable.Range(0, 7).Select(d => ((DayOfWeek)d, new TimeOnly(9, 0), new TimeOnly(12, 0))).ToArray());
+                var current = db.AddSchedule(barber.Id, ShopClock.Today.AddDays(10), null);
+                bookingId = db.AddBooking(barber.Id, TestData.FutureAt(20, 16), BookingStatus.PENDING).Id;
+
+                adminId = admin.Id;
+                currentScheduleId = current.Id;
+            }
+            Client.Authenticate(adminId, Role.ADMIN, tokenVersion: 0);
+
+            var response = await Client.DeleteAsync($"/api/schedules/version/{currentScheduleId}");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            using var assertDb = NewDb();
+            var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.Equal(BookingStatus.PENDING, booking.Status);
+            Assert.False(booking.NeedsReview);
         }
 
         [Fact]

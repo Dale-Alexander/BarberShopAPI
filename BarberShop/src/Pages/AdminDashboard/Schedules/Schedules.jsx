@@ -7,6 +7,7 @@ import { ToastContext } from "../../../Context/ToastContext";
 import LoadingSpinner from "../../../Components/LoadingSpinner/LoadingSpinner";
 import ErrorState from "../../../Components/ErrorState/ErrorState";
 import { getErrorMessage } from "../../../utils/errorMessage.js";
+import { formatPhone } from "../../../utils/phone.js";
 import "./Schedules.css";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -58,6 +59,9 @@ const Schedules = () => {
     const [creating, setCreating] = useState(false);
     // Set when a save/create would strand confirmed future bookings: { kind, message, affected[] }.
     const [orphanConflict, setOrphanConflict] = useState(null);
+    /* The other direction: bookings that were flagged for falling outside the hours and now fit again,
+       listed after a successful save so the admin knows to go and clear them. */
+    const [backInside, setBackInside] = useState(null);
 
     const activeBarbers = (barbersData ?? []).filter((b) => b.isActive);
     const selectedVersion = (versions ?? []).find((v) => v.id === selectedVersionId) ?? null;
@@ -80,6 +84,17 @@ const Schedules = () => {
             setVersionsLoading(false);
         }
     }, [showToast]);
+
+    /* Widening a barber's hours saves without stopping to ask anything (only narrowing does, because only
+       narrowing strands bookings), so an admin undoing a mistake gets no hint that the bookings it flagged
+       now fit again - and those notes still say the booking falls outside the schedule. This lists them.
+
+       Deliberately a list to go and check, not a "clear them all" button. A flagged booking's note can
+       carry other problems as well - a refund that failed, a customer nobody has phoned - and widening the
+       hours does nothing about those, so each one is read and cleared by hand. */
+    const announceBackInsideHours = (bookings) => {
+        if (bookings?.length) setBackInside(bookings);
+    };
 
     // Preselect a barber from ?barberId (the create-barber handoff) once the roster is in.
     useEffect(() => {
@@ -133,10 +148,11 @@ const Schedules = () => {
         if (shiftError || isReadOnly || !selectedVersion) return;
         setSaving(true);
         try {
-            await adminAxios.put(`/api/Schedules/version/${selectedVersion.id}`,
+            const res = await adminAxios.put(`/api/Schedules/version/${selectedVersion.id}`,
                 { shifts: daysToShifts(days), confirmOrphaned });
             setOrphanConflict(null);
             showToast("Schedule saved", "The barber's working hours have been updated.", "success");
+            announceBackInsideHours(res.data?.backInsideHours);
             await loadVersions(barberId, selectedVersion.id);
         } catch (err) {
             // Confirmed future bookings would fall outside the new hours - review them, then re-save.
@@ -163,6 +179,7 @@ const Schedules = () => {
             });
             setOrphanConflict(null);
             showToast("Schedule change created", `New hours take effect from ${fmtDate(newFrom)}.`, "success");
+            announceBackInsideHours(res.data?.backInsideHours);
             await loadVersions(barberId, res.data.id);
         } catch (err) {
             if (err.response?.status === 409 && err.response.data?.requiresConfirmation) {
@@ -175,15 +192,24 @@ const Schedules = () => {
         }
     };
 
-    const handleDelete = async () => {
+    const handleDelete = async (confirmOrphaned = false) => {
         if (!canDelete) return;
         setSaving(true);
         try {
-            await adminAxios.delete(`/api/Schedules/version/${selectedVersion.id}`);
+            const res = await adminAxios.delete(
+                `/api/Schedules/version/${selectedVersion.id}?confirmOrphaned=${confirmOrphaned}`);
+            setOrphanConflict(null);
             showToast("Schedule removed", "Reverted to the previous schedule.", "success");
+            announceBackInsideHours(res.data?.backInsideHours);
             await loadVersions(barberId);
         } catch (err) {
-            showToast("Couldn't remove schedule", getErrorMessage(err));
+            // Restoring the previous hours would strand confirmed bookings - same review-then-confirm flow
+            // as saving and creating, so the admin isn't told about them only after the fact.
+            if (err.response?.status === 409 && err.response.data?.requiresConfirmation) {
+                setOrphanConflict({ kind: "delete", ...err.response.data });
+            } else {
+                showToast("Couldn't remove schedule", getErrorMessage(err));
+            }
         } finally {
             setSaving(false);
         }
@@ -277,7 +303,10 @@ const Schedules = () => {
                                     <Save size={16} /> {saving ? "Saving…" : "Save changes"}
                                 </button>
                                 {canDelete && (
-                                    <button className="btn-secondary sched-delete" onClick={handleDelete} disabled={saving}>
+                                    /* Wrapped for the same reason as the save button above: handleDelete's
+                                       first parameter is now confirmOrphaned, so passing it bare would send
+                                       React's click event as the confirmation flag. */
+                                    <button className="btn-secondary sched-delete" onClick={() => handleDelete()} disabled={saving}>
                                         <Trash2 size={16} /> Remove this schedule
                                     </button>
                                 )}
@@ -305,14 +334,18 @@ const Schedules = () => {
             {orphanConflict && (
                 <div className="modal-overlay" onClick={() => setOrphanConflict(null)}>
                     <div className="sched-orphan-modal" onClick={(e) => e.stopPropagation()}>
-                        <h2>Bookings outside the new hours</h2>
+                        <h2>
+                            {orphanConflict.kind === "delete"
+                                ? "Bookings outside the restored hours"
+                                : "Bookings outside the new hours"}
+                        </h2>
                         <p>{orphanConflict.message}</p>
                         <ul className="sched-orphan-list">
                             {orphanConflict.affected.map((b) => (
                                 <li key={b.id}>
                                     <span className="sched-orphan-when">{b.date} · {b.time}</span>
                                     <span className="sched-orphan-who">
-                                        {b.customer || "Customer"}{b.phone ? ` · ${b.phone}` : b.email ? ` · ${b.email}` : ""}
+                                        {b.customer || "Customer"}{b.phone ? ` · ${formatPhone(b.phone)}` : b.email ? ` · ${b.email}` : ""}
                                     </span>
                                 </li>
                             ))}
@@ -324,10 +357,46 @@ const Schedules = () => {
                             <button
                                 className="btn-primary"
                                 disabled={saving || creating}
-                                onClick={() => (orphanConflict.kind === "save" ? handleSave(true) : handleCreateVersion(true))}
+                                onClick={() => {
+                                    if (orphanConflict.kind === "save") return handleSave(true);
+                                    if (orphanConflict.kind === "delete") return handleDelete(true);
+                                    return handleCreateVersion(true);
+                                }}
                             >
-                                {saving || creating ? "Saving…" : "Save anyway"}
+                                {saving || creating
+                                    ? "Saving…"
+                                    : orphanConflict.kind === "delete" ? "Remove anyway" : "Save anyway"}
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Counterpart to the modal above: those hours stranded bookings, these ones rescued some. */}
+            {backInside && (
+                <div className="modal-overlay" onClick={() => setBackInside(null)}>
+                    <div className="sched-orphan-modal" onClick={(e) => e.stopPropagation()}>
+                        <h2>These bookings fit again</h2>
+                        <p>
+                            {backInside.length === 1 ? "This booking was" : "These bookings were"} flagged for review
+                            because {backInside.length === 1 ? "it" : "they"} fell outside this barber's hours, and the
+                            hours you just saved cover {backInside.length === 1 ? "it" : "them"} again. Nothing has been
+                            cleared for you — open <strong>Needs Review</strong> and read each note. If the schedule was
+                            the only reason it was flagged, mark it as reviewed. If the note mentions anything else, such
+                            as a refund to sort out or a customer to phone, deal with that first.
+                        </p>
+                        <ul className="sched-orphan-list">
+                            {backInside.map((b) => (
+                                <li key={b.id}>
+                                    <span className="sched-orphan-when">#{b.id} · {b.date} · {b.time}</span>
+                                    <span className="sched-orphan-who">
+                                        {b.customer || "Customer"}{b.phone ? ` · ${formatPhone(b.phone)}` : b.email ? ` · ${b.email}` : ""}
+                                    </span>
+                                </li>
+                            ))}
+                        </ul>
+                        <div className="sched-orphan-actions">
+                            <button className="btn-primary" onClick={() => setBackInside(null)}>Got it</button>
                         </div>
                     </div>
                 </div>

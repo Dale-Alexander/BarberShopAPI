@@ -53,6 +53,17 @@ namespace BarberShopAPI.Controllers
                 EndTime = s.EndTime
             }).ToList();
 
+        /* The inverse, for the delete path: the "proposed" hours there are an EXISTING version's (the prior
+         * one that's about to be reopened), but FindOrphanedBookingsAsync takes the view-model shape the
+         * edit/create paths receive from the client. */
+        private static List<ScheduleShiftViewModel> ToShiftVms(IEnumerable<BarberScheduleShift> shifts) =>
+            shifts.Select(s => new ScheduleShiftViewModel
+            {
+                DayOfWeek = (int)s.DayOfWeek,
+                StartTime = s.StartTime,
+                EndTime = s.EndTime
+            }).ToList();
+
         // Confirmed (COMPLETED) future bookings that would fall outside a proposed set of hours, within the
         // date window the edited/created version governs. Returns the tracked Booking entities so callers can
         // both surface them (409) and flag them for review. Grandfathered - never cancelled. PENDING bookings
@@ -88,6 +99,59 @@ namespace BarberShopAPI.Controllers
             return orphaned;
         }
 
+        /* The mirror of FindOrphanedBookingsAsync: bookings ALREADY in the worklist that these hours bring
+         * back inside the schedule. Widening hours saves without a confirmation (only narrowing stops to
+         * ask), so an admin undoing a mistake gets no hint that the bookings their mistake flagged are now
+         * fine, and those notes sit there describing a schedule the booking no longer falls outside.
+         *
+         * Two filters, and a booking has to pass both:
+         *   - it was flagged BY THIS PATH (its note carries OutsideHoursNote). Otherwise a booking flagged
+         *     over a stuck refund, which happens to sit inside the hours, would be announced as though the
+         *     schedule change had resolved something;
+         *   - the change actually moved it: outside the old shifts, inside the new ones. So each booking is
+         *     mentioned once, at the edit that rescued it, rather than at every later edit.
+         *
+         * The result is INFORMATION. It must never become a "clear them all" button: notes accumulate now
+         * (see BookingReview), so the same booking may also be carrying a failed refund or a customer
+         * nobody has phoned, and widening the hours does nothing about those. The admin reads each note and
+         * clears it by hand. */
+        private async Task<List<Booking>> FindBackInsideHoursAsync(
+            int barberId, DateOnly windowFrom, DateOnly? windowTo,
+            List<ScheduleShiftViewModel> previousShifts, List<ScheduleShiftViewModel> proposedShifts)
+        {
+            var grace = await _context.ShopSettings.Select(s => s.GraceMinutesAfterClose).FirstAsync();
+            var now = ShopClock.Now;
+            var flagged = await _context.Bookings
+                .Include(b => b.User)
+                .Where(b => b.BarberId == barberId && b.Status == BookingStatus.COMPLETED
+                            && b.StartDateTime > now && b.NeedsReview
+                            && b.ReviewReason != null && b.ReviewReason.Contains(OutsideHoursNote))
+                .ToListAsync();
+            if (flagged.Count == 0) return new List<Booking>();
+
+            var before = new List<BarberSchedule>
+            {
+                new BarberSchedule { EffectiveFrom = windowFrom, EffectiveTo = windowTo, Shifts = ToShifts(previousShifts) }
+            };
+            var after = new List<BarberSchedule>
+            {
+                new BarberSchedule { EffectiveFrom = windowFrom, EffectiveTo = windowTo, Shifts = ToShifts(proposedShifts) }
+            };
+
+            var rescued = new List<Booking>();
+            foreach (var b in flagged)
+            {
+                var date = DateOnly.FromDateTime(b.StartDateTime);
+                if (date < windowFrom || (windowTo != null && date > windowTo)) continue;
+                var start = TimeOnly.FromDateTime(b.StartDateTime);
+                var end = TimeOnly.FromDateTime(b.StartDateTime.AddMinutes(b.DurationMin));
+                if (!ScheduleResolver.FitsWithinAShift(before, date, start, end, grace)
+                    && ScheduleResolver.FitsWithinAShift(after, date, start, end, grace))
+                    rescued.Add(b);
+            }
+            return rescued;
+        }
+
         private static OrphanedBookingViewModel ToOrphanVm(Booking b) => new OrphanedBookingViewModel
         {
             Id = b.Id,
@@ -101,22 +165,31 @@ namespace BarberShopAPI.Controllers
         // Flag stranded bookings for the admin's Needs Review worklist so they aren't forgotten once the
         // confirmation modal closes. They stay COMPLETED (grandfathered) - this is a reminder to act, not a
         // cancellation. Mutates the tracked entities; the caller persists them with the schedule change.
+        // The options list deliberately says "cancel it" rather than "refund it": these are cash bookings as
+        // often as card ones (nothing collected yet on cash), and even on a card booking the 24h policy
+        // decides whether a refund is due. Cancelling is the action; the cancel flow works the money out.
+        /* The note this path writes, as a constant, because two things depend on its exact text: the flag
+         * itself, and CountBackInsideHoursAsync recognising ITS OWN notes later. Matching on a sentence is
+         * only safe while the sentence has one author - keep it that way. */
+        private const string OutsideHoursNote =
+            "The barber's working hours changed and this booking now falls outside their "
+            + "schedule - honour it, reschedule it, or cancel it.";
+
         private static void FlagOrphanedForReview(IEnumerable<Booking> orphaned)
         {
-            foreach (var b in orphaned)
-            {
-                b.NeedsReview = true;
-                b.ReviewReason = "The barber's working hours changed and this booking now falls outside their "
-                    + "schedule - reschedule, refund or honour it.";
-            }
+            foreach (var b in orphaned) b.FlagForReview(OutsideHoursNote);
         }
 
-        private static object OrphanConflictPayload(List<Booking> orphaned) => new
+        // `hoursLabel` because the delete path isn't proposing new hours - it's restoring the previous
+        // version's, and telling the admin those bookings fall outside "the new hours" would misdescribe it.
+        private static object OrphanConflictPayload(List<Booking> orphaned, string hoursLabel = "the new hours") => new
         {
             requiresConfirmation = true,
-            message = $"{orphaned.Count} confirmed booking(s) fall outside the new hours. They won't be "
-                + "cancelled - save to keep them (they'll appear in Needs Review), then reschedule, refund or "
-                + "honour each one by hand.",
+            // Same three options as the worklist note, and for the same reason: "refund" would be wrong on a
+            // cash booking, where nothing has been collected to give back.
+            message = $"{orphaned.Count} confirmed booking(s) fall outside {hoursLabel}. They won't be "
+                + "cancelled - save to keep them (they'll appear in Needs Review), then honour, reschedule or "
+                + "cancel each one by hand.",
             affected = orphaned.Select(ToOrphanVm).ToList()
         };
 
@@ -173,13 +246,19 @@ namespace BarberShopAPI.Controllers
                 if (orphaned.Count > 0 && !model.ConfirmOrphaned)
                     return Conflict(OrphanConflictPayload(orphaned));
 
+                // Snapshot the old hours before Clear() empties the collection - the count below compares
+                // against them.
+                var previousShifts = ToShiftVms(version.Shifts);
+                var backInside = await FindBackInsideHoursAsync(
+                    version.BarberId, version.EffectiveFrom, version.EffectiveTo, previousShifts, model.Shifts);
+
                 // Clear + re-add rather than diffing; cascade delete removes the orphaned old shifts.
                 version.Shifts.Clear();
                 foreach (var sh in ToShifts(model.Shifts)) version.Shifts.Add(sh);
                 FlagOrphanedForReview(orphaned);
                 await _context.SaveChangesAsync();
 
-                return Ok(new { message = "Schedule updated" });
+                return Ok(new { message = "Schedule updated", backInsideHours = backInside.Select(ToOrphanVm).ToList() });
             }
             catch (ValidationException ex) { return BadRequest(new { message = ex.Message }); }
             catch (Exception ex)
@@ -205,6 +284,7 @@ namespace BarberShopAPI.Controllers
                     return BadRequest(new { message = "A new schedule can't start in the past" });
 
                 var current = await _context.BarberSchedules
+                    .Include(s => s.Shifts)   // needed by CountBackInsideHoursAsync below
                     .FirstOrDefaultAsync(s => s.BarberId == barberId && s.EffectiveTo == null);
                 if (current == null)
                     return BadRequest(new { message = "This barber has no active schedule to supersede" });
@@ -219,6 +299,10 @@ namespace BarberShopAPI.Controllers
                 var orphaned = await FindOrphanedBookingsAsync(barberId, model.EffectiveFrom, null, model.Shifts);
                 if (orphaned.Count > 0 && !model.ConfirmOrphaned)
                     return Conflict(OrphanConflictPayload(orphaned));
+
+                // The hours the new version replaces, for dates it governs, are the current version's.
+                var backInside = await FindBackInsideHoursAsync(
+                    barberId, model.EffectiveFrom, null, ToShiftVms(current.Shifts), model.Shifts);
 
                 // Close the current version the day before the new one starts, THEN add the new open-ended
                 // version - two saves in a transaction so the filtered unique index (one EffectiveTo==null
@@ -245,7 +329,8 @@ namespace BarberShopAPI.Controllers
                     Id = version.Id,
                     EffectiveFrom = version.EffectiveFrom,
                     EffectiveTo = version.EffectiveTo,
-                    Shifts = model.Shifts
+                    Shifts = model.Shifts,
+                    BackInsideHours = backInside.Select(ToOrphanVm).ToList()
                 });
             }
             catch (ValidationException ex) { return BadRequest(new { message = ex.Message }); }
@@ -260,21 +345,40 @@ namespace BarberShopAPI.Controllers
         // change. Only the latest version can be removed, and never the barber's only one (that would leave
         // them with no schedule = unbookable).
         [HttpDelete("version/{scheduleId}")]
-        public async Task<IActionResult> DeleteVersion(int scheduleId)
+        public async Task<IActionResult> DeleteVersion(int scheduleId, [FromQuery] bool confirmOrphaned = false)
         {
             try
             {
-                var version = await _context.BarberSchedules.FirstOrDefaultAsync(s => s.Id == scheduleId);
+                var version = await _context.BarberSchedules
+                    .Include(s => s.Shifts)   // needed by CountBackInsideHoursAsync below
+                    .FirstOrDefaultAsync(s => s.Id == scheduleId);
                 if (version == null) return NotFound(new { message = "Schedule version not found" });
                 if (version.EffectiveTo != null)
                     return BadRequest(new { message = "Only the current schedule can be removed; edit superseded ones instead" });
 
                 var prior = await _context.BarberSchedules
+                    .Include(s => s.Shifts)
                     .Where(s => s.BarberId == version.BarberId && s.Id != version.Id)
                     .OrderByDescending(s => s.EffectiveFrom)
                     .FirstOrDefaultAsync();
                 if (prior == null)
                     return BadRequest(new { message = "A barber must always have a schedule - this is their only one" });
+
+                /* Removing a version is a schedule change like any other: the prior version's (usually
+                 * narrower) hours snap back over everything this one governed, so bookings taken under these
+                 * hours can be left outside the barber's schedule. Undo is exactly when that's easiest to
+                 * forget, so it gets the same treatment as the edit/create paths - warn once, then flag on
+                 * confirm - rather than silently stranding them. Bookings BEFORE this version's EffectiveFrom
+                 * were already governed by the prior one, so the window starts there. */
+                var orphaned = await FindOrphanedBookingsAsync(
+                    version.BarberId, version.EffectiveFrom, null, ToShiftVms(prior.Shifts));
+                if (orphaned.Count > 0 && !confirmOrphaned)
+                    return Conflict(OrphanConflictPayload(orphaned, "the hours this restores"));
+
+                // Undoing a version can widen as easily as narrow - the prior hours may be the roomier ones.
+                var backInside = await FindBackInsideHoursAsync(
+                    version.BarberId, version.EffectiveFrom, null, ToShiftVms(version.Shifts), ToShiftVms(prior.Shifts));
+                var backInsideVms = backInside.Select(ToOrphanVm).ToList();
 
                 // Delete the open-ended row first, THEN reopen the prior (set its EffectiveTo null) - keeps
                 // the one-open-ended-per-barber index satisfied at every step. Transaction so a failure can't
@@ -283,10 +387,12 @@ namespace BarberShopAPI.Controllers
                 _context.BarberSchedules.Remove(version); // cascade removes its shifts
                 await _context.SaveChangesAsync();
                 prior.EffectiveTo = null;
+                // Flagged in the same transaction as the schedule change, as the edit/create paths do.
+                FlagOrphanedForReview(orphaned);
                 await _context.SaveChangesAsync();
                 await tx.CommitAsync();
 
-                return Ok(new { message = "Schedule removed" });
+                return Ok(new { message = "Schedule removed", backInsideHours = backInsideVms });
             }
             catch (Exception ex)
             {
