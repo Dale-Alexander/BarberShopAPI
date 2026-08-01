@@ -123,23 +123,23 @@ namespace BarberShopAPI.Controllers
                                 return Ok(new { message = "Payment already recorded" });
                             }
 
-                            var bookingAlreadyPaid = await _context.Payments.AnyAsync(p =>
-                            p.BookingId == bookingId && p.Status == PaymentStatus.COMPLETED);
-                            // Guard against multiple PaymentIntents succeeding for the same booking.
-                            // This can happen if the frontend created more than one PaymentIntent (e.g. after a retry)
-                            // and both somehow succeeded. Ensures one booking maps to exactly one completed payment.
-                            if (bookingAlreadyPaid)
-                            {
-                                Console.WriteLine($"Booking {bookingId} already has a completed payment, skipping");
-                                return Ok(new { message = "Booking already paid" });
-                            }
+                            /* A second guard used to sit here: "this booking already has a COMPLETED payment,
+                             * so return 200". It was aimed at two PaymentIntents succeeding for one booking,
+                             * but it returned ABOVE the refund branch below, so the second charge was quietly
+                             * kept - no refund, no review flag, no email, and a 200 that stops Stripe retrying.
+                             * Those deliveries now fall through instead. It costs nothing to let them: a
+                             * COMPLETED payment only ever exists on a booking that is COMPLETED or CANCELLED
+                             * (never PENDING), so they always land in the branch below, which refunds the
+                             * charge and sends the duplicate-payment notice. Genuine Stripe redeliveries are
+                             * still absorbed by the existingPayment check above, which matches on THIS
+                             * PaymentIntent rather than on any payment for the booking. */
 
-                            // Only reachable once we know this specific PaymentIntent was never recorded before
-                            // and this booking has no completed payment yet. If the booking still isn't PENDING
-                            // at this point, it means it expired, was cancelled by a closure, or was completed
-                            // some other way (e.g. cash) while this PaymentIntent was still alive - a stray charge
-                            // with no confirmable booking to attach it to. The card was genuinely charged, so we
-                            // refund it automatically and tell the customer instead of leaving a stuck charge.
+                            // Only reachable once we know this specific PaymentIntent was never recorded before.
+                            // If the booking isn't PENDING at this point, it means it expired, was cancelled by a
+                            // closure, or was completed some other way (in cash, or by an earlier PaymentIntent)
+                            // while this one was still alive - a stray charge with nothing left to confirm. The
+                            // card was genuinely charged, so we refund it automatically and tell the customer
+                            // instead of leaving a stuck charge.
                             if (booking.Status != BookingStatus.PENDING)
                             {
                                 Console.WriteLine($"Booking {bookingId} is no longer pending (status: {booking.Status}); refunding orphaned PaymentIntent {paymentIntent.Id}.");
@@ -153,8 +153,7 @@ namespace BarberShopAPI.Controllers
                                         // the idempotent refund may succeed on a later attempt (which clears the flag below);
                                         // if it never does, the booking stays in the admin's review worklist instead of a
                                         // charge being silently kept once Stripe gives up retrying after ~3 days.
-                                        booking.NeedsReview = true;
-                                        booking.ReviewReason = $"Automatic refund of an orphaned charge failed (PaymentIntent {paymentIntent.Id}) - refund it in Stripe by hand.";
+                                        booking.FlagForReview($"Automatic refund of an orphaned charge failed (PaymentIntent {paymentIntent.Id}) - refund it in Stripe by hand.");
                                         await _context.SaveChangesAsync();
                                         return StatusCode(500, "Refund failed"); // non-2xx => Stripe retries later
                                     }
@@ -236,6 +235,17 @@ namespace BarberShopAPI.Controllers
                             // same "is this slot still open?" question as the closure check, so we fold it into
                             // the same refund-and-cancel gate: a slot that no longer fits the barber's schedule
                             // is treated exactly like one that fell on a closure.
+                            /* DELIBERATE, not an oversight - don't "fix" this to match SchedulesController.
+                             * That path GRANDFATHERS a confirmed booking stranded by an hours change (keeps it,
+                             * flags it for review). This one cancels and refunds instead, so two customers on
+                             * the same slot are treated differently depending on whether their payment landed
+                             * before or after the admin's edit. Accepted knowingly: the customer here has no
+                             * confirmation yet, gets every cent back automatically within minutes, and the
+                             * window is only the ~15 minutes a booking can sit PENDING (BookingExpiryJob). The
+                             * alternative - confirm it and flag it - buys a kept appointment only when the admin
+                             * says yes, and is slower and more manual whenever they say no. A PENDING booking is
+                             * never flagged for review either way: a to-do for a booking that may vanish in ten
+                             * minutes is noise the worklist can't afford. */
                             var graceMin = await _context.ShopSettings.Select(s => s.GraceMinutesAfterClose).FirstAsync();
                             var scheduleVersions = await _context.BarberSchedules
                                 .Include(s => s.Shifts)
@@ -244,7 +254,19 @@ namespace BarberShopAPI.Controllers
                                             && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
                                 .ToListAsync();
                             var outsideSchedule = !ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, graceMin);
-                            if (closure != null || outsideSchedule)
+
+                            // The assigned barber can also be deactivated mid-payment, and it's the same
+                            // "is this slot still real?" question. Deactivation does cancel the barber's future
+                            // bookings, but BookingConflictCanceller deliberately LEAVES a pending one alone when
+                            // its in-flight PaymentIntent can't be voided and defers to this guard - which until
+                            // now only covered closures. Deactivation doesn't touch the barber's schedule either,
+                            // so without this check that payment lands, finds nothing wrong, and confirms the
+                            // customer onto a barber who no longer works here. (A booking created in the instant
+                            // before isActive flipped is never in the deactivation sweep at all, so it needs this
+                            // check too.)
+                            var barberInactive = !await _context.Barbers.AnyAsync(b => b.Id == booking.BarberId && b.isActive);
+
+                            if (barberInactive || closure != null || outsideSchedule)
                             {
                                 // Refund first, outside the DB transaction: cancelling before the money is
                                 // confirmed back would risk the "booking dead but money kept" state. The
@@ -255,11 +277,19 @@ namespace BarberShopAPI.Controllers
                                 var closureRefund = await StripeRefunds.RefundIdempotentlyAsync(paymentIntent.Id);
                                 if (closureRefund == StripeRefunds.Outcome.Failed)
                                 {
-                                    Console.WriteLine($"Booking {bookingId} fell on a closure but the refund failed for PaymentIntent {paymentIntent.Id}. Needs manual refund/follow-up.");
+                                    Console.WriteLine($"Booking {bookingId} could no longer be confirmed but the refund failed for PaymentIntent {paymentIntent.Id}. Needs manual refund/follow-up.");
                                     // Flag before the non-2xx so this surfaces in the review worklist if Stripe's retries
                                     // never get the refund through. Cleared inside the transaction below once one succeeds.
-                                    booking.NeedsReview = true;
-                                    booking.ReviewReason = $"Slot was closed after payment but the automatic refund failed (PaymentIntent {paymentIntent.Id}) - refund it in Stripe by hand.";
+                                    // Same three-way precedence as the CancellationReason below, so the worklist
+                                    // note names the reason the customer will eventually be told. A schedule
+                                    // change used to fall into the closure arm and tell staff the shop was shut.
+                                    var failedRefundCause = barberInactive
+                                        ? "The barber was deactivated after payment"
+                                        : closure != null
+                                            ? "Slot was closed after payment"
+                                            : "Slot fell outside the barber's working hours after payment";
+                                    booking.FlagForReview(
+                                        $"{failedRefundCause} but the automatic refund failed (PaymentIntent {paymentIntent.Id}) - refund it in Stripe by hand.");
                                     await _context.SaveChangesAsync();
                                     return StatusCode(500, "Refund failed");
                                 }
@@ -311,12 +341,17 @@ namespace BarberShopAPI.Controllers
                                     }
                                     booking.ContactEmail = email;
                                     booking.Status = BookingStatus.CANCELLED;
-                                    // A closure and a schedule change both land here; record which one so the
-                                    // customer gets the right cancellation copy (closure takes precedence when
-                                    // both apply).
-                                    booking.CancellationReason = closure != null
-                                        ? CancellationReason.ShopClosure
-                                        : CancellationReason.ScheduleChange;
+                                    // Three things land here; record which one so the customer gets the right
+                                    // cancellation copy. A deactivated barber wins outright - it's the only one
+                                    // whose recovery is "rebook with someone else" rather than "pick another
+                                    // time", and telling them the shop was shut would send them back to the same
+                                    // barber. Closure then takes precedence over a schedule change.
+                                    // ConfirmCashBooking applies the same order so both paths tell one story.
+                                    booking.CancellationReason = barberInactive
+                                        ? CancellationReason.BarberUnavailable
+                                        : closure != null
+                                            ? CancellationReason.ShopClosure
+                                            : CancellationReason.ScheduleChange;
                                     // Refund succeeded and we're committing the cancellation - clear any review flag a
                                     // previous failed attempt set, atomically with the state change.
                                     booking.NeedsReview = false;
@@ -332,8 +367,11 @@ namespace BarberShopAPI.Controllers
                                 }
 
                                 // Match the email to the actual reason so a schedule-driven cancellation doesn't
-                                // tell the customer the shop was closed.
-                                if (closure != null)
+                                // tell the customer the shop was closed, and a departed barber doesn't either.
+                                // refundIssued: true - we only reach here once the refund came back non-Failed.
+                                if (barberInactive)
+                                    BackgroundJob.Enqueue<IEmailService>(service => service.sendBookingCancelledBarberUnavailableEmailAsync(bookingId, true, null));
+                                else if (closure != null)
                                     BackgroundJob.Enqueue<IEmailService>(service => service.sendBookingCancelledDueToClosureEmailAsync(bookingId, null));
                                 else
                                     BackgroundJob.Enqueue<IEmailService>(service => service.sendBookingCancelledDueToScheduleChangeEmailAsync(bookingId, null));
@@ -341,9 +379,11 @@ namespace BarberShopAPI.Controllers
                                  * responses get seen by Stripe not the customer, therefore the only way we can notify the person is through email. 
                                  On the other hand in /confirm-cash, we just send a response because that is sufficient enough to inform the user what 
                                 happened.*/
-                                return Ok(new { message = closure != null
-                                    ? "Slot was closed after payment - refunded and cancelled"
-                                    : "Slot fell outside the barber's schedule after payment - refunded and cancelled" });
+                                return Ok(new { message = barberInactive
+                                    ? "Barber was deactivated after payment - refunded and cancelled"
+                                    : closure != null
+                                        ? "Slot was closed after payment - refunded and cancelled"
+                                        : "Slot fell outside the barber's schedule after payment - refunded and cancelled" });
                             }
 
                             await using var transaction = await _context.Database.BeginTransactionAsync();

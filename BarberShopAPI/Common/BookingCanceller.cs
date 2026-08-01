@@ -22,6 +22,7 @@ namespace BarberShopAPI.Common
         {
             var booking = await context.Bookings
                 .Include(b => b.Payment)
+                .Include(b => b.User)   // for the phone number on the phone-only worklist note below
                 .FirstOrDefaultAsync(b => b.Id == bookingId);
 
             if (booking == null) return Outcome.NotFound;
@@ -75,7 +76,27 @@ namespace BarberShopAPI.Common
             /* Reason-specific wording where we have it, generic otherwise. BarberUnavailable tells the
              * customer their barber left (this is their only notice for a confirmed booking); the closure
              * email explains a shop closure; everything else is the plain cancellation notice. */
-            if (reason == CancellationReason.BarberUnavailable)
+
+            /* A shop-side cancellation is our initiative - the customer did nothing and gets no warning
+             * unless we reach them. Admin-created walk-ins carry only a phone number, so the email jobs
+             * below would no-op on the blank ContactEmail and nobody would ever be told. The pre-confirm
+             * modal does warn the admin, but only once and only before they click, so flag it for the
+             * worklist instead: same list they already work, and it keeps the customer's number with it.
+             * A staff cancel is deliberately excluded - an admin is at the screen and is usually cancelling
+             * because that customer just phoned in. */
+            var shopInitiated = dueToClosure || reason == CancellationReason.BarberUnavailable;
+            if (shopInitiated && string.IsNullOrWhiteSpace(booking.ContactEmail))
+            {
+                booking.FlagForReview(
+                    $"No email on file - call {(string.IsNullOrWhiteSpace(booking.User?.Phone) ? "the customer" : booking.User!.Phone)} "
+                    + $"to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled"
+                    + (reason == CancellationReason.BarberUnavailable
+                        ? " because their barber is no longer available."
+                        : " by a shop closure.")
+                    + (refundIssued ? " Their card payment has been refunded in full." : ""));
+                await context.SaveChangesAsync();
+            }
+            else if (reason == CancellationReason.BarberUnavailable)
                 BackgroundJob.Enqueue<IEmailService>(s => s.sendBookingCancelledBarberUnavailableEmailAsync(bookingId, refundIssued, null));
             else if (dueToClosure)
                 BackgroundJob.Enqueue<IEmailService>(s => s.sendBookingCancelledDueToClosureEmailAsync(bookingId, null));

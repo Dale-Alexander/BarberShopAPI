@@ -54,7 +54,7 @@ namespace BarberShopAPI.Services
         Task sendBookingCancelledDueToScheduleChangeEmailAsync(int bookingId, PerformContext? context);
         /* [AutomaticRetry] here for the same reason as the closure email above (Hangfire reads the filter off
          * the interface method). Only the "booking couldn't be confirmed" shape flags on final failure - the
-         * duplicate-refund shape is a harmless courtesy, so it's left to fail quietly. */
+         * shapes where the appointment still stands are a harmless courtesy, so they're left to fail quietly. */
         [AutomaticRetry(Attempts = EmailJobPolicy.RefundNoticeRetries)]
         Task sendPaymentRefundedUnconfirmedEmailAsync(int bookingId, PerformContext? context);
         Task sendBookingRescheduledEmailAsync(int bookingId, DateTime oldStartDateTime);
@@ -95,6 +95,24 @@ namespace BarberShopAPI.Services
             booking.ConfirmationSentAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
         }
+
+        /* What a Needs-Review worklist entry says about the money, shared by the three cancellation emails
+         * that flag a booking once their retries are spent. Deliberately says something in EVERY case:
+         * staff are about to phone this customer, and staying silent when no refund happened leaves "cash
+         * booking, nothing owed" indistinguishable from "card payment we are still holding". Read off the
+         * Payment row rather than passed in by the caller, so it describes what actually happened by the
+         * time the final attempt gave up. A REFUNDED row is always a card payment - BookingCanceller only
+         * sets that status after Stripe confirms, which needs a PaymentIntent. */
+        private static string RefundNoteForWorklist(Models.Payment? payment) => payment switch
+        {
+            null => " No payment was recorded for this booking.",
+            { Status: PaymentStatus.REFUNDED } => " Their card payment has been refunded in full.",
+            { Method: PaymentMethod.CASH } => " This was a cash booking - there is nothing to refund.",
+            /* Not reachable from today's callers - BookingCanceller returns RefundFailed, and the webhook
+             * returns 500, both BEFORE enqueuing any email - but spelled out so a future caller that does
+             * reach it tells staff the money is still with us instead of saying nothing at all. */
+            _ => " Their card payment has NOT been refunded - check Stripe and refund it by hand."
+        };
 
         public async Task sendBookingReminderEmailAsync(int bookingId)
         {
@@ -193,6 +211,9 @@ namespace BarberShopAPI.Services
             var booking = await _context.Bookings
                 .Include(b => b.User)
                 .Include(b => b.Barber).ThenInclude(b => b.User)
+                // For the worklist note below only - the email body's refund promise still comes from the
+                // refundIssued the caller passed, which is already what the tests pin.
+                .Include(b => b.Payment)
                 .FirstOrDefaultAsync(b => b.Id == bookingId);
             if (booking == null) return;
             if (string.IsNullOrWhiteSpace(booking.ContactEmail)) return;
@@ -239,11 +260,10 @@ namespace BarberShopAPI.Services
                 var retryCount = context?.GetJobParameter<int>("RetryCount") ?? 0;
                 if (retryCount < EmailJobPolicy.BarberUnavailableRetries) throw;
 
-                var refundNote = refundIssued ? " Their payment has been refunded in full." : "";
-                booking.NeedsReview = true;
-                booking.ReviewReason =
+                var refundNote = RefundNoteForWorklist(booking.Payment);
+                booking.FlagForReview(
                     $"Barber-unavailable email to {booking.ContactEmail} failed after {EmailJobPolicy.BarberUnavailableRetries + 1} attempts ({ex.Message}). "
-                    + $"Call the customer to tell them {(booking.Barber?.User?.Name ?? "their barber")} is no longer available and their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled.{refundNote}";
+                    + $"Call the customer to tell them {(booking.Barber?.User?.Name ?? "their barber")} is no longer available and their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled.{refundNote}");
                 await _context.SaveChangesAsync();
             }
         }
@@ -309,10 +329,10 @@ namespace BarberShopAPI.Services
                 var retryCount = context?.GetJobParameter<int>("RetryCount") ?? 0;
                 if (retryCount < EmailJobPolicy.ClosureCancelRetries) throw;
 
-                booking.NeedsReview = true;
-                booking.ReviewReason =
+                booking.FlagForReview(
                     $"Cancellation email to {booking.ContactEmail} failed after {EmailJobPolicy.ClosureCancelRetries + 1} attempts ({ex.Message}). "
-                    + $"Call the customer to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled by the shop closure.";
+                    + $"Call the customer to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled by the shop closure."
+                    + RefundNoteForWorklist(booking.Payment));
                 await _context.SaveChangesAsync();
             }
         }
@@ -371,48 +391,84 @@ namespace BarberShopAPI.Services
                 var retryCount = context?.GetJobParameter<int>("RetryCount") ?? 0;
                 if (retryCount < EmailJobPolicy.ClosureCancelRetries) throw;
 
-                booking.NeedsReview = true;
-                booking.ReviewReason =
+                booking.FlagForReview(
                     $"Cancellation email to {booking.ContactEmail} failed after {EmailJobPolicy.ClosureCancelRetries + 1} attempts ({ex.Message}). "
-                    + $"Call the customer to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled by a schedule change.";
+                    + $"Call the customer to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled by a schedule change."
+                    + RefundNoteForWorklist(booking.Payment));
                 await _context.SaveChangesAsync();
             }
         }
 
         /* Sent when a card payment succeeded but there was no confirmable booking to attach it to, so the
-         * webhook refunded it (see WebHookController's orphaned-charge guard). Two shapes, because the same
-         * refund means different things: if the booking is COMPLETED it still stands (it was settled another
-         * way, e.g. cash) and we only clawed back a duplicate card charge; otherwise the booking couldn't be
-         * confirmed at all and this is their only notice that the money is on its way back. */
+         * webhook refunded it (see WebHookController's orphaned-charge guard). Three shapes, because the same
+         * refund means different things to the customer:
+         *   - booking COMPLETED as CASH: they switched to paying at the shop and this card payment landed
+         *     late (ConfirmCashBooking couldn't void the in-flight intent). Their cash is still uncollected,
+         *     so we must NOT call this a duplicate - that would read as "you've already paid".
+         *   - booking COMPLETED as CARD: an earlier PaymentIntent confirmed it, so this genuinely is a
+         *     second card charge we clawed back. The appointment is unaffected either way.
+         *   - otherwise (CANCELLED): the booking couldn't be confirmed at all, and this is their only notice
+         *     that they have no appointment and the money is on its way back. */
         public async Task sendPaymentRefundedUnconfirmedEmailAsync(int bookingId, PerformContext? context)
         {
-            var booking = await _context.Bookings.Include(b => b.User).FirstOrDefaultAsync(b => b.Id == bookingId);
+            var booking = await _context.Bookings
+                .Include(b => b.User)
+                .Include(b => b.Payment)   // drives the cash-vs-duplicate wording below
+                .FirstOrDefaultAsync(b => b.Id == bookingId);
             if (booking == null) return;
             if (string.IsNullOrWhiteSpace(booking.ContactEmail)) return;
 
             var safeName = WebUtility.HtmlEncode(booking.User?.Name);
             var whenText = booking.StartDateTime.ToString("dddd, MMMM d 'at' h:mm tt");
             var bookingStillStands = booking.Status == BookingStatus.COMPLETED;
+            var settledInCash = booking.Payment?.Method == PaymentMethod.CASH;
+            var isDuplicateCard = booking.Payment?.Method == PaymentMethod.CARD;
 
             var message = new EmailMessage
             {
                 From = "Dale's Barbershop <onboarding@resend.dev>",
-                Subject = bookingStillStands ? "A duplicate payment has been refunded" : "Your payment has been refunded"
+                Subject = !bookingStillStands ? "Your payment has been refunded"
+                        : settledInCash ? "Your online card payment has been refunded"
+                        : isDuplicateCard ? "A duplicate payment has been refunded"
+                        : "An extra payment has been refunded"
             };
             message.To.Add(booking.ContactEmail);
 
             if (bookingStillStands)
             {
+                /* One paragraph differs between the three shapes; the "it's on its way back, your appointment
+                 * is fine" half is the same, so only the explanation is branched. The last arm is a safety net
+                 * for a COMPLETED booking with no Payment row - not reachable today (both confirmation paths
+                 * write one) - so it stays vague rather than promising cash or claiming a double charge. */
+                var explanationHtml = settledInCash
+                    ? $@"You confirmed your appointment on <strong>{whenText}</strong> as a cash payment, but an
+                        online card payment for it came through afterwards, so we've refunded that card payment
+                        in full."
+                    : isDuplicateCard
+                    ? $@"We noticed a duplicate card payment for your appointment on <strong>{whenText}</strong>
+                        and have refunded it in full."
+                    : $@"We received an extra card payment for your appointment on <strong>{whenText}</strong>
+                        and have refunded it in full.";
+
+                var explanationText = settledInCash
+                    ? $"You confirmed your appointment on {whenText} as a cash payment, but an online card payment " +
+                      $"for it came through afterwards, so we've refunded that card payment in full."
+                    : isDuplicateCard
+                    ? $"We noticed a duplicate card payment for your appointment on {whenText} and have refunded it in full."
+                    : $"We received an extra card payment for your appointment on {whenText} and have refunded it in full.";
+
+                // Cash customers still owe at the shop, so their closing line must not imply they're settled.
+                var closingLine = settledInCash
+                    ? "Your appointment is unaffected - you can settle up at the shop as planned."
+                    : "Your appointment is unaffected - we'll see you then!";
+
                 message.HtmlBody = $@"
                 <h2>Hi {safeName},</h2>
-                <p>We noticed a duplicate card payment for your appointment on
-                <strong>{whenText}</strong> and have refunded it in full. It should appear on your original
-                payment method within a few business days.</p>
-                <p>Your appointment is unaffected - we'll see you then!</p>";
+                <p>{explanationHtml} It should appear on your original payment method within a few business days.</p>
+                <p>{closingLine}</p>";
                 message.TextBody = $"Hi {booking.User?.Name},\n\n" +
-                    $"We noticed a duplicate card payment for your appointment on {whenText} and have refunded it in full. " +
-                    $"It should appear on your original payment method within a few business days.\n\n" +
-                    $"Your appointment is unaffected - we'll see you then!";
+                    $"{explanationText} It should appear on your original payment method within a few business days.\n\n" +
+                    $"{closingLine}";
             }
             else
             {
@@ -434,9 +490,9 @@ namespace BarberShopAPI.Services
             }
             catch (Exception ex)
             {
-                /* Two shapes, two outcomes. If the booking still stands (a duplicate card charge we clawed
-                 * back), a failed email is a harmless courtesy - the money is back regardless and their
-                 * appointment is fine, so we let it fail quietly. But if the booking couldn't be confirmed,
+                /* Two outcomes, on the one axis that matters here. If the booking still stands (whichever of
+                 * the two COMPLETED shapes it is), a failed email is a harmless courtesy - the money is back
+                 * regardless and their appointment is fine, so we let it fail quietly. But if it couldn't be confirmed,
                  * this is the customer's only notice that they have no booking and a refund is coming; once
                  * Hangfire's retries are spent, flag it so staff phone them instead of leaving them guessing
                  * about a charge on their statement. The refund itself already went out before this email. */
@@ -445,10 +501,9 @@ namespace BarberShopAPI.Services
                 var retryCount = context?.GetJobParameter<int>("RetryCount") ?? 0;
                 if (retryCount < EmailJobPolicy.RefundNoticeRetries) throw;
 
-                booking.NeedsReview = true;
-                booking.ReviewReason =
+                booking.FlagForReview(
                     $"Refund notice to {booking.ContactEmail} failed after {EmailJobPolicy.RefundNoticeRetries + 1} attempts ({ex.Message}). "
-                    + $"Call the customer to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} booking couldn't be confirmed and their card payment has been refunded in full.";
+                    + $"Call the customer to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} booking couldn't be confirmed and their card payment has been refunded in full.");
                 await _context.SaveChangesAsync();
             }
         }
