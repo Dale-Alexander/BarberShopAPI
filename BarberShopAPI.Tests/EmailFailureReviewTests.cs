@@ -41,6 +41,9 @@ namespace BarberShopAPI.Tests
         public async Task Barber_unavailable_email_flags_the_booking_once_its_retries_are_spent()
         {
             var bookingId = ArrangeCancelledBooking();
+            // A real refunded card payment, so the worklist note below is asserting the state the booking
+            // is actually in rather than a bool the caller happened to pass.
+            using (var arrange = NewDb()) arrange.AddCardPayment(bookingId, status: PaymentStatus.REFUNDED);
 
             using var db = NewDb();
             await FailingEmailService(db).sendBookingCancelledBarberUnavailableEmailAsync(
@@ -53,7 +56,7 @@ namespace BarberShopAPI.Tests
             Assert.Contains("Call the customer", booking.ReviewReason);
             Assert.Contains("no longer available", booking.ReviewReason);
             Assert.Contains(ThrowingResend.FailureMessage, booking.ReviewReason);
-            // refundIssued: true, so the note tells staff the money is already back.
+            // The payment is REFUNDED, so the note tells staff the money is already back.
             Assert.Contains("refunded in full", booking.ReviewReason);
         }
 
@@ -89,6 +92,8 @@ namespace BarberShopAPI.Tests
             Assert.True(booking.NeedsReview);
             Assert.Contains("shop closure", booking.ReviewReason);
             Assert.Contains(ThrowingResend.FailureMessage, booking.ReviewReason);
+            // No Payment row at all - said out loud rather than left as a blank staff have to interpret.
+            Assert.Contains("No payment was recorded", booking.ReviewReason);
         }
 
         [Fact]
@@ -138,6 +143,88 @@ namespace BarberShopAPI.Tests
         }
 
         // ---------------------------------------------------------------------------------------------
+        // What the worklist entry says about the money
+        //
+        // Staff are about to phone this customer, so the note has to be explicit either way: a blank where
+        // "no refund happened" would read the same for a cash booking that was never owed anything and for
+        // a card payment still sitting with us. Derived from the Payment row, not from a caller's flag.
+        // ---------------------------------------------------------------------------------------------
+
+        [Fact]
+        public async Task Barber_unavailable_worklist_note_tells_staff_a_cash_booking_has_nothing_to_refund()
+        {
+            // The shape BarberDeactivationTests actually cancels: a cash booking on a departed barber.
+            // BookingCanceller passes refundIssued: false here (cash has no PaymentIntent to refund), so
+            // while the note came from that bool it said nothing at all about the money - leaving staff
+            // unable to tell this from a card payment we were still holding.
+            var bookingId = ArrangeCancelledBooking();
+            using (var arrange = NewDb()) arrange.AddCashPayment(bookingId);
+
+            using var db = NewDb();
+            await FailingEmailService(db).sendBookingCancelledBarberUnavailableEmailAsync(
+                bookingId, refundIssued: false, HangfireRetryContext.WithRetryCount(EmailJobPolicy.BarberUnavailableRetries));
+
+            using var assertDb = NewDb();
+            var reviewReason = (await assertDb.Bookings.SingleAsync(b => b.Id == bookingId)).ReviewReason;
+            Assert.Contains("cash booking", reviewReason);
+            Assert.Contains("nothing to refund", reviewReason);
+            // The customer settled up in person - promising them a refund would be plainly wrong.
+            Assert.DoesNotContain("refunded in full", reviewReason);
+        }
+
+        [Fact]
+        public async Task Closure_worklist_note_tells_staff_a_card_payment_is_already_refunded()
+        {
+            var bookingId = ArrangeCancelledBooking();
+            using (var arrange = NewDb()) arrange.AddCardPayment(bookingId, status: PaymentStatus.REFUNDED);
+
+            using var db = NewDb();
+            await FailingEmailService(db).sendBookingCancelledDueToClosureEmailAsync(bookingId, HangfireRetryContext.Exhausted);
+
+            using var assertDb = NewDb();
+            var reviewReason = (await assertDb.Bookings.SingleAsync(b => b.Id == bookingId)).ReviewReason;
+            Assert.Contains("refunded in full", reviewReason);
+            // Must not read as a cash booking - staff would then wrongly assume no money ever moved.
+            Assert.DoesNotContain("cash booking", reviewReason);
+        }
+
+        [Fact]
+        public async Task Closure_worklist_note_tells_staff_a_cash_booking_has_nothing_to_refund()
+        {
+            // The shape ClosureConflictTests covers: cash never went through Stripe, so the payment stays
+            // COMPLETED rather than REFUNDED and the customer is settled up in person.
+            var bookingId = ArrangeCancelledBooking();
+            using (var arrange = NewDb()) arrange.AddCashPayment(bookingId);
+
+            using var db = NewDb();
+            await FailingEmailService(db).sendBookingCancelledDueToClosureEmailAsync(bookingId, HangfireRetryContext.Exhausted);
+
+            using var assertDb = NewDb();
+            var reviewReason = (await assertDb.Bookings.SingleAsync(b => b.Id == bookingId)).ReviewReason;
+            Assert.Contains("cash booking", reviewReason);
+            Assert.Contains("nothing to refund", reviewReason);
+            // The one thing staff must never be told here - there is no refund coming.
+            Assert.DoesNotContain("refunded in full", reviewReason);
+        }
+
+        [Fact]
+        public async Task Schedule_change_worklist_note_tells_staff_a_card_payment_is_already_refunded()
+        {
+            // The only state this email is reachable in: it's enqueued solely by the webhook's
+            // refund-and-cancel gate, which writes the payment as REFUNDED before enqueuing.
+            var bookingId = ArrangeCancelledBooking();
+            using (var arrange = NewDb()) arrange.AddCardPayment(bookingId, status: PaymentStatus.REFUNDED);
+
+            using var db = NewDb();
+            await FailingEmailService(db).sendBookingCancelledDueToScheduleChangeEmailAsync(bookingId, HangfireRetryContext.Exhausted);
+
+            using var assertDb = NewDb();
+            var reviewReason = (await assertDb.Bookings.SingleAsync(b => b.Id == bookingId)).ReviewReason;
+            Assert.Contains("refunded in full", reviewReason);
+            Assert.DoesNotContain("cash booking", reviewReason);
+        }
+
+        // ---------------------------------------------------------------------------------------------
         // Refund-notice email - the one site with two outcomes
         // ---------------------------------------------------------------------------------------------
 
@@ -161,8 +248,9 @@ namespace BarberShopAPI.Tests
         [Fact]
         public async Task Refund_notice_for_a_booking_that_still_stands_fails_quietly_without_flagging()
         {
-            // COMPLETED: the appointment is fine and we only clawed back a duplicate card charge. The email
-            // is a courtesy, so it is left to fail rather than pulling staff onto a phone call about nothing.
+            // COMPLETED: the appointment is fine and we only clawed back a charge that arrived too late. The
+            // email is a courtesy, so it is left to fail rather than pulling staff onto a phone call about
+            // nothing - this holds for every COMPLETED wording shape (cash, duplicate card, or neither).
             var bookingId = ArrangeCancelledBooking(BookingStatus.COMPLETED);
 
             using var db = NewDb();

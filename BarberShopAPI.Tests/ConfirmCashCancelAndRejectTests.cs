@@ -9,11 +9,17 @@ namespace BarberShopAPI.Tests
     /* POST /api/bookings/confirm-cash - the guest cash-confirmation path (no auth: the customer is holding
      * only their booking's public slug).
      *
-     * The branch under test is CancelAndReject: a booking can sit PENDING while an admin creates a closure
-     * or edits the barber's hours, so confirmation re-checks BOTH before promoting PENDING -> COMPLETED.
-     * It cancels rather than merely 400-ing, because that's what lets the frontend's "no longer pending"
-     * redirect land on a real cancelled screen. No money has moved on the cash path, so there is no refund
-     * and no email - the customer is present and sees the rejection synchronously. */
+     * The branch under test is CancelAndReject: a booking can sit PENDING while an admin creates a closure,
+     * edits the barber's hours, or deactivates the barber outright, so confirmation re-checks ALL THREE
+     * before promoting PENDING -> COMPLETED. It cancels rather than merely 400-ing, because that's what lets
+     * the frontend's "no longer pending" redirect land on a real cancelled screen. No money has moved on the
+     * cash path, so there is no refund and no email - the customer is present and sees the rejection
+     * synchronously.
+     *
+     * The last section is the exception to that: a customer who started a card payment and then switched to
+     * cash leaves a live PaymentIntent behind, so the request does reach Stripe to void it - on the way to a
+     * confirmation AND on the way to a rejection, since a cancelled booking must not leave a chargeable
+     * intent behind either. Those use FakeStripe. Everything above them is pure DB. */
     public class ConfirmCashCancelAndRejectTests : IntegrationTestBase
     {
         public ConfirmCashCancelAndRejectTests(DatabaseFixture fixture) : base(fixture) { }
@@ -101,6 +107,58 @@ namespace BarberShopAPI.Tests
         }
 
         [Fact]
+        public async Task A_barber_deactivated_while_the_booking_was_pending_cancels_and_rejects_it()
+        {
+            // Deactivation normally sweeps the barber's pending bookings away, but BookingConflictCanceller
+            // leaves one behind when its PaymentIntent can't be voided, and a booking created in the instant
+            // before isActive flipped is never swept at all. This is that leftover: no closure, and the
+            // schedule still fits (deactivation doesn't touch it), so only the isActive check can catch it.
+            var (publicId, bookingId, barberId) = ArrangePendingBooking();
+            using (var db = NewDb())
+            {
+                db.Barbers.Single(b => b.Id == barberId).isActive = false;
+                db.SaveChanges();
+            }
+
+            var response = await Client.PostAsync("/api/bookings/confirm-cash", Body(CashBody(publicId)));
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Contains("no longer available", (await ReadJson(response)).GetProperty("message").GetString());
+
+            using var assertDb = NewDb();
+            var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.Equal(BookingStatus.CANCELLED, booking.Status);
+            // Drives the cancelled screen's "book with another barber" copy - not "we were closed".
+            Assert.Equal(CancellationReason.BarberUnavailable, booking.CancellationReason);
+
+            Assert.Empty(await assertDb.Payments.Where(p => p.BookingId == bookingId).ToListAsync());
+            Assert.Empty(Factory.EnqueuedEmailJobs());
+        }
+
+        [Fact]
+        public async Task A_deactivated_barber_outranks_a_closure_as_the_recorded_reason()
+        {
+            var (publicId, bookingId, barberId) = ArrangePendingBooking(shiftEnd: new TimeOnly(12, 0));
+            using (var db = NewDb())
+            {
+                db.AddClosure(ShopClock.Today.AddDays(14), barberId: barberId);
+                db.Barbers.Single(b => b.Id == barberId).isActive = false;
+                db.SaveChanges();
+            }
+
+            var response = await Client.PostAsync("/api/bookings/confirm-cash", Body(CashBody(publicId)));
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+            using var assertDb = NewDb();
+            // All three reasons apply at once. BarberUnavailable wins because it's the only one whose
+            // recovery is "rebook with someone else"; telling them the shop was shut would send them
+            // straight back to a barber who has gone. The webhook resolves it the same way.
+            Assert.Equal(CancellationReason.BarberUnavailable,
+                (await assertDb.Bookings.SingleAsync(b => b.Id == bookingId)).CancellationReason);
+        }
+
+        [Fact]
         public async Task An_unobstructed_booking_confirms_normally()
         {
             var (publicId, bookingId, _) = ArrangePendingBooking();
@@ -146,6 +204,129 @@ namespace BarberShopAPI.Tests
             // Critically NOT cancelled: the guard must not walk back an already-confirmed booking.
             Assert.Equal(BookingStatus.COMPLETED, after.Status);
             Assert.Equal(CancellationReason.None, after.CancellationReason);
+        }
+
+        // ---------------------------------------------------------------------------------------------
+        // Abandoned card attempt - the customer clicked Pay Online, then switched to cash
+        // ---------------------------------------------------------------------------------------------
+
+        private const string AbandonedIntentId = "pi_test_abandoned_card_attempt";
+
+        /// <summary>A pending booking carrying the live PaymentIntent an unfinished card attempt left behind.</summary>
+        private string ArrangePendingBookingWithCardAttempt(out int bookingId)
+        {
+            var (publicId, id, _) = ArrangePendingBooking();
+            using var db = NewDb();
+            db.Bookings.Single(b => b.Id == id).StripePaymentIntentId = AbandonedIntentId;
+            db.SaveChanges();
+            bookingId = id;
+            return publicId;
+        }
+
+        [Fact]
+        public async Task An_abandoned_card_attempt_is_voided_when_the_customer_switches_to_cash()
+        {
+            var publicId = ArrangePendingBookingWithCardAttempt(out var bookingId);
+            using var stripe = new FakeStripe { PaymentIntentCancels = FakeStripe.CancelOutcome.Succeeds };
+
+            var response = await Client.PostAsync("/api/bookings/confirm-cash", Body(CashBody(publicId)));
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            // Switching to cash does NOT void the intent by itself. If we complete as cash and leave it
+            // live, a slow 3-D Secure could still succeed afterwards and charge a customer who has already
+            // paid in person - so the void has to actually reach Stripe, not merely be intended.
+            Assert.Contains($"POST /v1/payment_intents/{AbandonedIntentId}/cancel", stripe.Requests);
+
+            using var assertDb = NewDb();
+            var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.Equal(BookingStatus.COMPLETED, booking.Status);
+            Assert.Equal(PaymentMethod.CASH,
+                (await assertDb.Payments.SingleAsync(p => p.BookingId == bookingId)).Method);
+        }
+
+        [Fact]
+        public async Task A_card_attempt_that_cannot_be_voided_still_lets_the_cash_confirmation_through()
+        {
+            var publicId = ArrangePendingBookingWithCardAttempt(out var bookingId);
+            // What Stripe returns when the intent is already succeeding and can no longer be cancelled.
+            using var stripe = new FakeStripe { PaymentIntentCancels = FakeStripe.CancelOutcome.Fails };
+
+            var response = await Client.PostAsync("/api/bookings/confirm-cash", Body(CashBody(publicId)));
+
+            // The customer is standing at the counter: a Stripe refusal must not fail their confirmation.
+            // Letting the exception escape would hit the outer catch, roll the transaction back and 500 them
+            // over a charge the webhook's orphaned-charge guard is already designed to refund.
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Contains($"POST /v1/payment_intents/{AbandonedIntentId}/cancel", stripe.Requests);
+
+            using var assertDb = NewDb();
+            var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.Equal(BookingStatus.COMPLETED, booking.Status);
+            Assert.Equal(CancellationReason.None, booking.CancellationReason);
+
+            var payment = await assertDb.Payments.SingleAsync(p => p.BookingId == bookingId);
+            Assert.Equal(PaymentMethod.CASH, payment.Method);
+            Assert.Equal(25m, payment.Amount);
+
+            Assert.Contains(Factory.EnqueuedEmailJobs(),
+                j => j.Method == "sendBookingConfirmationEmailAsync" && j.BookingId == bookingId);
+        }
+
+        [Fact]
+        public async Task A_rejected_booking_voids_the_abandoned_card_attempt_too()
+        {
+            /* The reject paths kill the booking just as surely as the success path completes it, so they owe
+             * the customer the same void. Without it the abandoned attempt can still succeed against a
+             * booking we've already cancelled, and the money only comes back days later through the
+             * webhook's orphaned-charge refund - a round trip that never needed to happen. */
+            var publicId = ArrangePendingBookingWithCardAttempt(out var bookingId);
+            using (var db = NewDb())
+            {
+                var barberId = db.Bookings.Single(b => b.Id == bookingId).BarberId;
+                db.AddClosure(ShopClock.Today.AddDays(14), barberId: barberId);
+            }
+            using var stripe = new FakeStripe { PaymentIntentCancels = FakeStripe.CancelOutcome.Succeeds };
+
+            var response = await Client.PostAsync("/api/bookings/confirm-cash", Body(CashBody(publicId)));
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Contains($"POST /v1/payment_intents/{AbandonedIntentId}/cancel", stripe.Requests);
+
+            using var assertDb = NewDb();
+            var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.Equal(BookingStatus.CANCELLED, booking.Status);
+            Assert.Equal(CancellationReason.ShopClosure, booking.CancellationReason);
+            // Voiding is not charging: there is still no payment row and nothing to email about.
+            Assert.Empty(await assertDb.Payments.Where(p => p.BookingId == bookingId).ToListAsync());
+            Assert.Empty(Factory.EnqueuedEmailJobs());
+        }
+
+        [Fact]
+        public async Task A_rejection_still_goes_through_when_the_card_attempt_cannot_be_voided()
+        {
+            // Stripe refuses because the intent is already succeeding. The customer is at the counter being
+            // told their slot is gone, so that refusal must not turn into a 500 - the webhook's
+            // orphaned-charge guard refunds the charge when it lands, which is exactly the fallback.
+            var publicId = ArrangePendingBookingWithCardAttempt(out var bookingId);
+            using (var db = NewDb())
+            {
+                var barberId = db.Bookings.Single(b => b.Id == bookingId).BarberId;
+                db.AddClosure(ShopClock.Today.AddDays(14), barberId: barberId);
+            }
+            using var stripe = new FakeStripe { PaymentIntentCancels = FakeStripe.CancelOutcome.Fails };
+
+            var response = await Client.PostAsync("/api/bookings/confirm-cash", Body(CashBody(publicId)));
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Contains("shop closure", (await ReadJson(response)).GetProperty("message").GetString());
+            Assert.Contains($"POST /v1/payment_intents/{AbandonedIntentId}/cancel", stripe.Requests);
+
+            using var assertDb = NewDb();
+            var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            // The cancellation must still be committed - leaving it PENDING would strand the customer on a
+            // checkout screen for a slot that no longer exists.
+            Assert.Equal(BookingStatus.CANCELLED, booking.Status);
+            Assert.Equal(CancellationReason.ShopClosure, booking.CancellationReason);
         }
     }
 }

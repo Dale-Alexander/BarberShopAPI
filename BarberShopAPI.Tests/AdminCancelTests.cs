@@ -88,6 +88,36 @@ namespace BarberShopAPI.Tests
         }
 
         [Fact]
+        public async Task A_phone_only_booking_cancelled_by_staff_is_not_flagged_for_review()
+        {
+            /* The mirror of the closure/deactivation behaviour, and the reason that flag is keyed to who
+             * initiated the cancellation rather than to the missing email. A staff cancel happens with an
+             * admin at the screen, usually because this customer just phoned in - they already know, so
+             * putting them in the worklist would be busywork. */
+            AuthenticateAsAdmin();
+            int bookingId;
+            using (var db = NewDb())
+            {
+                var barber = db.AddBarber();
+                db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30));
+                var booking = db.AddBooking(barber.Id, TestData.FutureAt(14, 16), BookingStatus.COMPLETED,
+                    contactEmail: null);
+                db.AddCashPayment(booking.Id);
+                bookingId = booking.Id;
+            }
+
+            var response = await Client.PatchAsync($"/api/bookings/cancel/{bookingId}", null);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            using var assertDb = NewDb();
+            var booking2 = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.Equal(BookingStatus.CANCELLED, booking2.Status);
+            Assert.False(booking2.NeedsReview);
+            Assert.Null(booking2.ReviewReason);
+        }
+
+        [Fact]
         public async Task A_card_booking_inside_the_refund_cutoff_is_cancelled_with_the_refund_withheld()
         {
             AuthenticateAsAdmin();

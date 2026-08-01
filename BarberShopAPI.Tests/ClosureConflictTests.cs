@@ -161,7 +161,51 @@ namespace BarberShopAPI.Tests
             Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
             var payload = await ReadJson(response);
             Assert.False(payload.GetProperty("conflicts")[0].GetProperty("willBeEmailed").GetBoolean());
-            Assert.Contains("must be contacted by phone", payload.GetProperty("message").GetString());
+            // The modal promises the worklist entry that the confirm step below actually creates - the admin
+            // is told up front that these customers won't be silently forgotten once they click through.
+            Assert.Contains("flagged in Needs Review", payload.GetProperty("message").GetString());
+        }
+
+        [Fact]
+        public async Task Confirming_flags_a_phone_only_booking_for_review_instead_of_emailing_nobody()
+        {
+            AuthenticateAsAdmin();
+            int bookingId;
+            string phone;
+            using (var db = NewDb())
+            {
+                var barber = db.AddBarber();
+                db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30));
+                var customer = db.AddUser();
+                var booking = db.AddBooking(barber.Id, TestData.FutureAt(14, 16), BookingStatus.COMPLETED,
+                    customer: customer, contactEmail: null);
+                db.AddCashPayment(booking.Id);
+                bookingId = booking.Id;
+                phone = customer.Phone!;
+            }
+
+            var response = await Client.PostAsync("/api/dates",
+                Body(ClosureBody(ShopClock.Today.AddDays(14), confirm: true)));
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            using var assertDb = NewDb();
+            var booking2 = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.Equal(BookingStatus.CANCELLED, booking2.Status);
+            Assert.Equal(CancellationReason.ShopClosure, booking2.CancellationReason);
+
+            /* The cancellation itself worked - this flag isn't about a failure, it's about reach. We cancelled
+             * a walk-in's appointment on our own initiative and have no way to tell them, so the worklist
+             * carries the phone number instead of the customer just turning up to a closed shop. */
+            Assert.True(booking2.NeedsReview);
+            Assert.Contains("No email on file", booking2.ReviewReason);
+            Assert.Contains(phone, booking2.ReviewReason);
+            Assert.Contains("shop closure", booking2.ReviewReason);
+            // Cash booking, so nothing was refunded - the note must not promise money that never moved.
+            Assert.DoesNotContain("refunded", booking2.ReviewReason);
+
+            // No email job at all: enqueuing one would only no-op on the blank address.
+            Assert.Empty(Factory.EnqueuedEmailJobs());
         }
 
         [Fact]

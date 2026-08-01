@@ -53,10 +53,10 @@ namespace BarberShopAPI.Tests.Infrastructure
         }
 
         /// <summary>A barber plus their linked user account, with no schedule - callers add the version they need.</summary>
-        public static Barber AddBarber(this BarberShopContext db, bool isActive = true)
+        public static Barber AddBarber(this BarberShopContext db, bool isActive = true, bool acceptsNewBookings = true)
         {
             var user = db.AddUser(Role.BARBER);
-            var barber = new Barber { UserId = user.Id, isActive = isActive, Bio = "Test barber" };
+            var barber = new Barber { UserId = user.Id, isActive = isActive, AcceptsNewBookings = acceptsNewBookings, Bio = "Test barber" };
             db.Barbers.Add(barber);
             db.SaveChanges();
             return barber;
@@ -163,14 +163,17 @@ namespace BarberShopAPI.Tests.Infrastructure
          * short-circuits to CancelledNoRefund. Any test that would let a refund actually be attempted
          * belongs in tier 2; the dummy intent id below makes that mistake fail loudly rather than quietly
          * talking to Stripe. */
-        public static Payment AddCardPayment(this BarberShopContext db, int bookingId, decimal amount = 25m)
+        public static Payment AddCardPayment(this BarberShopContext db, int bookingId, decimal amount = 25m,
+            PaymentStatus status = PaymentStatus.COMPLETED)
         {
             var payment = new Payment
             {
                 BookingId = bookingId,
                 Amount = amount,
                 Method = PaymentMethod.CARD,
-                Status = PaymentStatus.COMPLETED,
+                /* REFUNDED is the settled aftermath of a shop-side cancellation - the money is already back
+                 * and nothing here will call Stripe again, so it's safe outside tier 2. */
+                Status = status,
                 StripePaymentIntentId = $"pi_test_never_sent_to_stripe_{Next()}",
                 PaidAt = DateTime.UtcNow
             };
