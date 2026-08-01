@@ -123,3 +123,25 @@
     padding:3px 8px;
     border-radius:999px;
 }
+
+/* Closed to new bookings but still working. Amber rather than the grey INACTIVE badge: this is a
+   live barber in a temporary state, not an archived row. */
+.barber-card-badge--winding-down{
+    background:hsl(38, 92%, 50%);
+    color:hsl(220, 25%, 10%);
+}
+.barber-card--winding-down .barber-card-img{
+    border-color:hsl(38, 92%, 50%);
+}
+.barber-action-bookable{
+    background:hsl(220, 15%, 24%);
+    color:hsl(38, 92%, 55%);
+}
+.barber-action-bookable:hover{
+    background:hsl(38, 92%, 50%);
+    color:hsl(220, 25%, 10%);
+}
+.barber-action-btn:disabled{
+    opacity:0.5;
+    cursor:not-allowed;
+}

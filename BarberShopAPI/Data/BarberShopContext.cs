@@ -174,6 +174,11 @@ namespace BarberShopAPI.Data
             barber.Property(b => b.isActive)
                    .HasDefaultValue(true);
 
+            // Existing barbers must stay bookable when this column is added, and every new barber starts
+            // bookable - the admin opts them out explicitly.
+            barber.Property(b => b.AcceptsNewBookings)
+                   .HasDefaultValue(true);
+
             // Default timestamps
             barber.Property(b => b.CreatedAt)
                    .HasDefaultValueSql("GETUTCDATE()");
