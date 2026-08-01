@@ -117,47 +117,50 @@ namespace BarberShopAPI.Tests
         }
 
         [Fact]
-        public async Task Deactivating_a_barber_whose_refund_fails_flags_the_booking()
+        public async Task Deactivating_a_barber_never_touches_a_confirmed_bookings_money()
         {
             AuthenticateAsAdmin();
-            var (barberId, bookingId, _) = ArrangePaidCardBooking();
+            var (barberId, bookingId, paymentId) = ArrangePaidCardBooking();
 
+            // Armed to fail, but it should never be called: deactivation no longer cancels or refunds a
+            // confirmed booking, it hands it to the admin. A refund here would be money moved on a
+            // decision nobody has made yet.
             using var stripe = new FakeStripe { Refunds = FakeStripe.RefundOutcome.Fails };
 
-            var response = await Client.DeleteAsync($"/api/barbers/delete/{barberId}?confirmCancelBookings=true");
+            var response = await Client.DeleteAsync($"/api/barbers/delete/{barberId}?confirm=true");
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(0, stripe.RefundAttempts);
 
             using var assertDb = NewDb();
-            // The barber is still deactivated - one stuck refund must not leave them bookable.
             Assert.False((await assertDb.Barbers.SingleAsync(b => b.Id == barberId)).isActive);
 
             var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
             Assert.Equal(BookingStatus.COMPLETED, booking.Status);
             Assert.True(booking.NeedsReview);
-            Assert.Contains("BarberUnavailable", booking.ReviewReason);
-            Assert.Contains("RefundFailed", booking.ReviewReason);
+            Assert.Equal(PaymentStatus.COMPLETED, (await assertDb.Payments.SingleAsync(p => p.Id == paymentId)).Status);
         }
 
         [Fact]
         public async Task An_already_refunded_charge_counts_as_success_rather_than_a_failure()
         {
             AuthenticateAsAdmin();
-            var (barberId, bookingId, paymentId) = ArrangePaidCardBooking();
+            var (_, bookingId, paymentId) = ArrangePaidCardBooking();
 
             // Stripe says the money is already back - a previous attempt whose DB write failed, or a
             // manual refund. There is nothing left to do, so this must NOT be treated as a failure and
-            // must NOT land in the worklist.
+            // must NOT land in the worklist. Driven through the staff cancel now that deactivation no
+            // longer refunds anything.
             using var stripe = new FakeStripe { Refunds = FakeStripe.RefundOutcome.AlreadyRefunded };
 
-            var response = await Client.DeleteAsync($"/api/barbers/delete/{barberId}?confirmCancelBookings=true");
+            var response = await Client.PatchAsync($"/api/bookings/cancel/{bookingId}", null);
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
             using var assertDb = NewDb();
             var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
             Assert.Equal(BookingStatus.CANCELLED, booking.Status);
-            Assert.Equal(CancellationReason.BarberUnavailable, booking.CancellationReason);
+            Assert.Equal(CancellationReason.AdminCancelled, booking.CancellationReason);
             Assert.False(booking.NeedsReview);
             Assert.Equal(PaymentStatus.REFUNDED, (await assertDb.Payments.SingleAsync(p => p.Id == paymentId)).Status);
         }

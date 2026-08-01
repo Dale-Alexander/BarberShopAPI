@@ -1,4 +1,4 @@
-import { Plus, Trash2, X, Users, Check, RotateCcw, UserX, Mail, Phone } from "lucide-react";
+import { Plus, Trash2, X, Users, Check, RotateCcw, UserX, AlertTriangle } from "lucide-react";
 import { useState , useEffect, useContext, useRef} from "react";
 import { useNavigate } from "react-router-dom";
 import MemberCard from "./MemberCard/MemberCard";
@@ -12,6 +12,7 @@ import { PulseLoader } from "react-spinners";
 import { resolveBarberImage } from "../../../utils/barberImage.js";
 import { validateName, validateNameInline, validateEmail, validatePassword } from "../../../utils/validation.js";
 import { getErrorMessage } from "../../../utils/errorMessage.js";
+import { formatPhone } from "../../../utils/phone.js";
 const TeamMembers = () => {
     const navigate = useNavigate();
     const {data, loading, error, reFetch} = useFetch("/api/barbers/admin", true);
@@ -21,9 +22,12 @@ const TeamMembers = () => {
     const [password, setPassword] = useState("");
     const [deleteBarberId, setDeleteBarberId] = useState(null);
     /* Set when a deactivate is refused with 409 because the barber has upcoming bookings: holds the
-     * backend's { message, conflicts } plus the barberId so the admin can review who'd be cancelled and
+     * backend's { message, conflicts } plus the barberId so the admin can review what they're taking on and
      * re-submit with confirmCancelBookings. Null = no conflict pending. */
     const [deactivateConflict, setDeactivateConflict] = useState(null);
+    /* The reverse of that: after reactivating a barber, the bookings their departure left flagged, so the
+       admin can go and clear the ones that are now fine. { barberName, bookings[] }. */
+    const [backOnDuty, setBackOnDuty] = useState(null);
     const [email, setEmail] = useState("");
     // Server-side "email already in use" (409). Shown inline under the Email field rather than as a
     // toast, since it's a fix-this-field problem and the admin should keep what they typed.
@@ -35,6 +39,9 @@ stored i the browser's memory which the backend cant access*/
     // Guards all three modal actions (create/edit/delete) - only one modal is open at a time - so a
     // slow request can't be fired twice (a double-submitted create would make two barbers).
     const [submitting, setSubmitting] = useState(false);
+    // Which row's "taking new bookings" toggle is in flight (null = none). Per-row rather than a single
+    // boolean so one slow toggle doesn't freeze the buttons on every other card.
+    const [togglingBookableId, setTogglingBookableId] = useState(null);
     const { showToast } = useContext(ToastContext);
     const createModalContainerRef = useRef(null);
 
@@ -78,14 +85,14 @@ stored i the browser's memory which the backend cant access*/
             setDeleteBarberId(null);
         }
         catch(err){
-            // Barber has upcoming bookings: the backend refuses to silently orphan them and hands back the
-            // affected list. Swap the are-you-sure modal for the conflict modal so the admin can review who'd
-            // be cancelled/refunded and confirm.
+            // Barber has upcoming bookings: the backend won't take their login away without showing them
+            // first. Swap the are-you-sure modal for the conflict modal so the admin can see which bookings
+            // they'll be picking up in Needs Review, and which unconfirmed ones just get dropped.
             if (err.response?.status === 409 && err.response.data?.requiresConfirmation) {
                 setDeleteBarberId(null);
                 setDeactivateConflict({ barberId: id, ...err.response.data });
             } else {
-                showToast("Couldn't delete barber", getErrorMessage(err));
+                showToast("Couldn't deactivate barber", getErrorMessage(err));
             }
         }
         finally{
@@ -93,21 +100,25 @@ stored i the browser's memory which the backend cant access*/
         }
     }
 
-    // Second step of the conflict flow: re-run the deactivate with confirmCancelBookings=true, which cancels
-    // & refunds the upcoming bookings and notifies those customers.
+    /* Second step of the conflict flow: re-run the deactivate with confirm=true. Confirmed bookings are
+       kept and flagged into Needs Review for the admin to reassign or cancel; only the unconfirmed ones
+       (still at checkout) are cancelled. */
     const confirmDeactivateWithCancellations = async () => {
         if (!deactivateConflict || submitting) return;
         const id = deactivateConflict.barberId;
         setSubmitting(true);
         try {
-            await adminAxios.delete(`/api/barbers/delete/${id}?confirmCancelBookings=true`);
+            const res = await adminAxios.delete(`/api/barbers/delete/${id}?confirm=true`);
             setBarbers(barbers.map(b => b.id === id ? { ...b, isActive: false } : b));
-            const callList = deactivateConflict.conflicts.filter(c => !c.willBeEmailed);
+            // Server counts, not the modal's - they're the ones that actually happened.
+            const flagged = res.data?.flaggedForReview ?? 0;
+            const cancelled = res.data?.cancelled ?? 0;
             showToast(
                 "Barber deactivated",
-                callList.length > 0
-                    ? `${deactivateConflict.conflicts.length} booking(s) cancelled. Please phone the ${callList.length} customer(s) with no email on file.`
-                    : `${deactivateConflict.conflicts.length} booking(s) cancelled and those customers emailed.`,
+                [
+                    flagged > 0 && `${flagged} booking(s) are in Needs Review - reassign or cancel them.`,
+                    cancelled > 0 && `${cancelled} unconfirmed booking(s) were cancelled.`
+                ].filter(Boolean).join(" ") || "They had no upcoming bookings.",
                 "info"
             );
             setDeactivateConflict(null);
@@ -119,6 +130,35 @@ stored i the browser's memory which the backend cant access*/
             setSubmitting(false);
         }
     }
+    /* Opens/closes a barber to NEW customer bookings. Deliberately NOT part of the delete flow: their
+       existing appointments are left exactly as they are, so a barber working their notice keeps their
+       login and their calendar and settles their remaining bookings himself. Scoped to its own
+       per-row guard rather than `submitting`, which belongs to the modals. */
+    const handleToggleBookable = async (barber) => {
+        if (togglingBookableId != null) return;
+        const next = !(barber.acceptsNewBookings !== false);
+        setTogglingBookableId(barber.id);
+        try {
+            const res = await adminAxios.patch(`/api/barbers/${barber.id}/accepting-bookings`, { acceptsNewBookings: next });
+            // Trust the server's value rather than `next` - it's the one that got persisted.
+            const saved = res.data.acceptsNewBookings;
+            setBarbers(barbers.map(b => b.id === barber.id ? { ...b, acceptsNewBookings: saved } : b));
+            showToast(
+                saved ? "Taking new bookings" : "Closed to new bookings",
+                saved
+                    ? `Customers can book ${barber.firstName} again.`
+                    : `Customers can no longer book ${barber.firstName}. Their existing appointments are unchanged and they keep their login.`,
+                "info"
+            );
+        }
+        catch (err) {
+            showToast("Couldn't update this barber", getErrorMessage(err));
+        }
+        finally {
+            setTogglingBookableId(null);
+        }
+    }
+
     const handleCreate = async(e) => {
         e.preventDefault();
         // The submit button is disabled until these pass, so this is just a safety net.
@@ -152,9 +192,16 @@ stored i the browser's memory which the backend cant access*/
             // appending, then follow the barber to the tab they just moved to.
             setBarbers(barbers.map(b => b.id === reactivateBarber.id
                 ? { ...b, firstName: row.firstName, lastName: row.lastName, imageUrl: row.imageUrl,
-                    email: row.email, totalBookings: row.totalBookings, isActive: true }
+                    email: row.email, totalBookings: row.totalBookings, isActive: true,
+                    // The revive branch resets this server-side, so mirror it - otherwise a barber who was
+                    // closed to new bookings before deactivation comes back still badged as winding down.
+                    acceptsNewBookings: row.acceptsNewBookings !== false }
                 : b));
             setActiveTab("active");
+            /* Bookings their departure stranded are fine again now they're back, but the flags stay -
+               the notes may have picked up other problems while they were away, and only the admin can
+               judge that. So list them and let them clear each one by hand. */
+            if (row.backOnDuty?.length) setBackOnDuty({ barberName: row.firstName, bookings: row.backOnDuty });
         }
         else {
             setBarbers([...(barbers ?? []), row]);
@@ -390,7 +437,8 @@ stored i the browser's memory which the backend cant access*/
                 <div className="team-grid">
                     {visibleBarbers.length ? (
                         visibleBarbers.map((b) => (
-                        <MemberCard key={b.id} barber={b} setDeleteBarberId = {setDeleteBarberId} onEdit={openEdit} onReactivate={openReactivate}/>
+                        <MemberCard key={b.id} barber={b} setDeleteBarberId = {setDeleteBarberId} onEdit={openEdit} onReactivate={openReactivate}
+                            onToggleBookable={handleToggleBookable} togglingBookable={togglingBookableId === b.id}/>
                         ))) : activeTab === "inactive" ? (
                             /* Deliberately no action button - the way a barber lands here is by being
                                deleted from the Active tab, so there's nothing to do from an empty one. */
@@ -608,14 +656,18 @@ stored i the browser's memory which the backend cant access*/
                         <div className="modal-overlay" onClick={() => setDeleteBarberId(null)}>
                         <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
                           <div className="modal-header">
-                            <h2>Confirm Deletion</h2>
+                            {/* "Deactivation", not "Deletion" - it's a soft delete the Reactivate flow undoes,
+                                and the body text below promises exactly that. */}
+                            <h2>Confirm Deactivation</h2>
                             <button className="modal-close" onClick={() => setDeleteBarberId(null)}>
                               <X size={20} />
                             </button>
                           </div>
                           <div className="modal-body">
                             <p style={{ color: "var(--muted-fg)", lineHeight: 1.6 }}>
-                              Are you sure you want to delete this barber? This action cannot be undone.
+                              Deactivate this barber? They'll lose access to their dashboard immediately and customers
+                              won't be able to book them. If they still have upcoming appointments you'll be shown them
+                              first — nothing is cancelled without your say-so.
                             </p>
                           </div>
                           <div className="modal-footer">
@@ -626,7 +678,7 @@ stored i the browser's memory which the backend cant access*/
                       </div>
             )}
 
-            {/* Deactivate blocked by upcoming bookings: review who'd be cancelled/refunded, then confirm. */}
+            {/* Deactivate blocked by upcoming bookings: review what survives vs what gets dropped, then confirm. */}
             {deactivateConflict && (
                 <div className="modal-overlay" onClick={() => !submitting && setDeactivateConflict(null)}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
@@ -646,13 +698,13 @@ stored i the browser's memory which the backend cant access*/
                                             <span style={{ fontWeight: 600 }}>{c.date} · {c.time}</span>
                                             {c.customer && <span style={{ color: "var(--muted-fg)", fontSize: 13 }}>{c.customer}</span>}
                                         </div>
-                                        {c.willBeEmailed ? (
-                                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "#2e7d32", fontSize: 13, whiteSpace: "nowrap" }}>
-                                                <Mail size={14} /> Will be emailed
+                                        {c.willBeCancelled ? (
+                                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "#c9770a", fontSize: 13, whiteSpace: "nowrap" }}>
+                                                <X size={14} /> Unconfirmed · will be cancelled
                                             </span>
                                         ) : (
-                                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "#c9770a", fontSize: 13, whiteSpace: "nowrap" }}>
-                                                <Phone size={14} /> {c.phone ? `Call: ${c.phone}` : c.email ? `Email ${c.email}` : "No contact on file"}
+                                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "#2e7d32", fontSize: 13, whiteSpace: "nowrap" }}>
+                                                <AlertTriangle size={14} /> {c.email ? "Kept · flagged for review" : c.phone ? `Kept · flagged, call ${formatPhone(c.phone)}` : "Kept · flagged for review"}
                                             </span>
                                         )}
                                     </li>
@@ -660,16 +712,52 @@ stored i the browser's memory which the backend cant access*/
                             </ul>
 
                             <p style={{ color: "var(--muted-fg)", fontSize: 13, lineHeight: 1.6, marginTop: 16 }}>
-                                Confirming cancels and refunds these bookings and deactivates the barber. Customers with an
-                                email are notified automatically; if an email fails to send, that booking appears in your
-                                Needs Review list so you can phone them by hand.
+                                Confirming deactivates the barber and revokes their login. Their confirmed appointments are
+                                <strong> not cancelled</strong> — they stay live and appear in your Needs Review list, where you
+                                can reassign each one to another barber or cancel it. Those customers are not notified until you
+                                decide. Only unconfirmed bookings still at checkout are cancelled automatically.
                             </p>
                         </div>
                         <div className="modal-footer">
                             <button className="btn-secondary" onClick={() => setDeactivateConflict(null)} disabled={submitting}>Keep barber</button>
                             <button className="btn-primary" style={{ background: "#e74c3c" }} onClick={confirmDeactivateWithCancellations} disabled={submitting}>
-                                {submitting ? <PulseLoader size={8} color="#fff" /> : `Cancel ${deactivateConflict.conflicts.length} booking(s) & deactivate`}
+                                {submitting ? <PulseLoader size={8} color="#fff" /> : `Deactivate & flag ${deactivateConflict.conflicts.filter(c => !c.willBeCancelled).length} booking(s)`}
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Counterpart to the modal above: that one stranded bookings, this one un-strands them. */}
+            {backOnDuty && (
+                <div className="modal-overlay" onClick={() => setBackOnDuty(null)}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
+                        <div className="modal-header">
+                            <h2>These bookings are fine again</h2>
+                            <button className="modal-close" onClick={() => setBackOnDuty(null)}><X size={20} /></button>
+                        </div>
+                        <div className="modal-body">
+                            <p style={{ color: "var(--muted-fg)", lineHeight: 1.6, marginBottom: 16 }}>
+                                {backOnDuty.bookings.length === 1 ? "This booking was" : "These bookings were"} flagged for
+                                review when {backOnDuty.barberName} left, and {backOnDuty.bookings.length === 1 ? "it's" : "they're"} still
+                                on their chair — so now they're back, {backOnDuty.bookings.length === 1 ? "it stands" : "they stand"} as
+                                normal. Nothing has been cleared for you: open <strong>Needs Review</strong> and read each note. If the
+                                barber leaving was the only reason it was flagged, mark it as reviewed. If the note mentions
+                                anything else, such as a refund to sort out or a customer to phone, deal with that first.
+                            </p>
+                            <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8, maxHeight: 260, overflowY: "auto" }}>
+                                {backOnDuty.bookings.map((b) => (
+                                    <li key={b.id} style={{ display: "flex", flexDirection: "column", padding: "8px 12px", border: "1px solid var(--border, #e5e5e5)", borderRadius: 6 }}>
+                                        <span style={{ fontWeight: 600 }}>#{b.id} · {b.date} · {b.time}</span>
+                                        <span style={{ color: "var(--muted-fg)", fontSize: 13 }}>
+                                            {b.customer || "Customer"}{b.phone ? ` · ${formatPhone(b.phone)}` : b.email ? ` · ${b.email}` : ""}
+                                        </span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                        <div className="modal-footer">
+                            <button className="btn-primary" onClick={() => setBackOnDuty(null)}>Got it</button>
                         </div>
                     </div>
                 </div>

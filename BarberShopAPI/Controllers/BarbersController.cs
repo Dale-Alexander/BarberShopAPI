@@ -22,8 +22,18 @@ namespace BarberShopAPI.Controllers
             _context = context;
         }
 
+        /* `includeUnbookable` switches this from the customer roster to the staff one, and is honoured only
+         * for a signed-in ADMIN or BARBER - the endpoint is anonymous, so an unauthenticated caller passing
+         * it still gets the customer view.
+         *
+         * The difference is AcceptsNewBookings, which per the Barber model means "can a CUSTOMER pick
+         * them?" and nothing else. Staff were reading the customer roster, so a barber closed to new
+         * bookings vanished from the picker - including from their OWN edit page, leaving them unable to
+         * move the appointments they were still working through, which is the whole point of that toggle.
+         * It also put the UI out of step with the backend, where CreateAdminBooking and UpdateBooking have
+         * only ever gated staff on isActive. */
         [HttpGet("barbers-with-bookings")]
-        public async Task<IActionResult> GetBarbersWithBookings()
+        public async Task<IActionResult> GetBarbersWithBookings([FromQuery] bool includeUnbookable = false)
         {
             try
             {
@@ -32,7 +42,10 @@ namespace BarberShopAPI.Controllers
                 var nowMalta = ShopClock.Now;
                 /* it is important that these are declared outside because EF Core cant
                  * translate them*/
-                var barbers = await _context.Barbers.Where(b => b.isActive == true)
+                var staffView = includeUnbookable && (User.IsInRole("ADMIN") || User.IsInRole("BARBER"));
+                // Customer-facing roster answers "who can I book?" - which needs BOTH flags. A barber
+                // working their notice is still staff (isActive) but must not appear in the customer picker.
+                var barbers = await _context.Barbers.Where(b => b.isActive == true && (staffView || b.AcceptsNewBookings))
                 .Select(b => new BarberBookingViewModel
                 {
                     BarberId = b.Id,
@@ -156,6 +169,7 @@ namespace BarberShopAPI.Controllers
                                    ImageUrl = b.ImageUrl,
                                    TotalBookings = b.Bookings.Count(bk => bk.Status == BookingStatus.COMPLETED),
                                    IsActive = b.isActive,
+                                   AcceptsNewBookings = b.AcceptsNewBookings,
                                    Email = b.User.Email
                                });
             var result = await BarbersList.ToListAsync();
@@ -177,6 +191,14 @@ namespace BarberShopAPI.Controllers
             if (firstName.Length > 50 || lastName.Length > 50) return false;
             return true;
         }
+
+        /* The distinctive part of the note DeleteBarber leaves on a departing barber's live bookings, kept
+         * as a constant because the revive branch has to recognise its own handiwork later: bring the
+         * barber back and those bookings are fine again, so the admin is shown which ones to go and clear.
+         * Same trick as SchedulesController.OutsideHoursNote - matching on a sentence is only safe while
+         * that sentence has exactly one author. The barber's name and the appointment time sit either side
+         * of it, which is why the marker is a fragment rather than the whole note. */
+        private const string BarberLeftMarker = "has left the shop, and this booking is still live";
 
         // The default schedule handed to a brand-new barber (and to a revived one with no schedule
         // to reuse): one open-ended current version, every weekday 09:00-17:30 - the shop's historic
@@ -286,6 +308,10 @@ namespace BarberShopAPI.Controllers
                         existingUser.Password = BCrypt.Net.BCrypt.HashPassword(request.Password);
                         existingUser.Role = Role.BARBER;
                         existingUser.Barber.isActive = true;
+                        // Reset the bookable flag too. A barber who was closed to new bookings while working
+                        // their notice keeps that flag through deactivation, so without this they'd come back
+                        // live on the team screen but invisible in the customer picker, with no obvious cause.
+                        existingUser.Barber.AcceptsNewBookings = true;
 
                         // Reuse the barber's own schedule if it survived deactivation (soft-delete keeps
                         // the rows), so a revived barber comes back with their real hours rather than a
@@ -345,6 +371,34 @@ namespace BarberShopAPI.Controllers
                             if (System.IO.File.Exists(oldPath)) System.IO.File.Delete(oldPath);
                         }
 
+                        /* The bookings this barber's departure stranded are fine again now that they're
+                         * back: same barber, same time, and the note saying they'd left is no longer true.
+                         * Nothing is unflagged here - the note may have picked up other problems since
+                         * (see BookingReview), and only the admin can judge that. So they're listed, and
+                         * the admin clears each one having read it, exactly as with a widened schedule.
+                         * Bookings already reassigned or cancelled while the barber was away won't match:
+                         * a reassigned one sits on a different chair and a cancelled one isn't COMPLETED. */
+                        var nowMalta = ShopClock.Now;
+                        var revivedBarberId = existingUser.Barber.Id;
+                        var backOnDuty = await _context.Bookings
+                            .Include(bk => bk.User)
+                            .Where(bk => bk.BarberId == revivedBarberId
+                                         && bk.Status == BookingStatus.COMPLETED
+                                         && bk.StartDateTime > nowMalta
+                                         && bk.NeedsReview
+                                         && bk.ReviewReason != null
+                                         && bk.ReviewReason.Contains(BarberLeftMarker))
+                            .Select(bk => new
+                            {
+                                bk.Id,
+                                Date = bk.StartDateTime.ToString("dddd, MMMM d, yyyy"),
+                                Time = bk.StartDateTime.ToString("h:mm tt"),
+                                Customer = bk.User != null ? (bk.User.Name + " " + bk.User.Surname).Trim() : null,
+                                Email = bk.ContactEmail,
+                                Phone = bk.User != null ? bk.User.Phone : null
+                            })
+                            .ToListAsync();
+
                         // Return the same shape as the create branch below, and the same shape the admin
                         // team list is built from - the caller drops this straight into its list. The id
                         // in particular was missing here, so a revived barber rendered with an undefined
@@ -360,8 +414,11 @@ namespace BarberShopAPI.Controllers
                             lastName = lastName,
                             email = existingUser.Email,
                             isActive = true,
+                            acceptsNewBookings = true,
                             totalBookings = await _context.Bookings.CountAsync(bk =>
-                                bk.BarberId == existingUser.Barber.Id && bk.Status == BookingStatus.COMPLETED)
+                                bk.BarberId == existingUser.Barber.Id && bk.Status == BookingStatus.COMPLETED),
+                            // Empty on the create branch below - a brand-new barber has stranded nothing.
+                            backOnDuty
                         });
 
                         //otherwise create a new barber
@@ -407,6 +464,7 @@ namespace BarberShopAPI.Controllers
                         lastName = lastName,
                         email = user.Email,
                         isActive = true,
+                        acceptsNewBookings = true,
                         totalBookings = 0
                     });
                 }
@@ -522,28 +580,87 @@ namespace BarberShopAPI.Controllers
             }
         }
 
+        /* Opens/closes a barber to NEW customer bookings without deactivating them. This is the
+         * "working their notice" switch: they stay staff, keep their login and their calendar, and honour
+         * or cancel their remaining appointments themselves - customers just can't pick them any more.
+         *
+         * Existing bookings are deliberately untouched. Cancelling and refunding is what DeleteBarber does,
+         * and the whole point of this endpoint is to stop new bookings WITHOUT that.
+         *
+         * ADMIN-only: a barber must not be able to hide themselves from the roster. */
         [Authorize(Roles = "ADMIN")]
-        [HttpDelete("delete/{id}")]
-        public async Task<IActionResult> DeleteBarber(int id, [FromQuery] bool confirmCancelBookings = false)
+        [HttpPatch("{id}/accepting-bookings")]
+        public async Task<IActionResult> SetAcceptingBookings(int id, [FromBody] SetAcceptsNewBookingsViewModel request)
         {
             try
             {
-                var barber = await _context.Barbers.FirstOrDefaultAsync(b => b.Id == id);
+                if (!ModelState.IsValid)
+                    return BadRequest(new { message = "acceptsNewBookings is required" });
+
+                // Live barbers only, matching UpdateBarber. A deactivated row is already unbookable through
+                // the isActive half of the filter, so flipping this on one would be a no-op that reads like
+                // it did something.
+                var barber = await _context.Barbers.FirstOrDefaultAsync(b => b.Id == id && b.isActive);
+                if (barber == null) return NotFound(new { message = "Barber not found" });
+
+                barber.AcceptsNewBookings = request.AcceptsNewBookings!.Value;
+                await _context.SaveChangesAsync();
+
+                return Ok(new
+                {
+                    message = barber.AcceptsNewBookings
+                        ? "This barber is taking new bookings again"
+                        : "This barber is no longer taking new bookings",
+                    acceptsNewBookings = barber.AcceptsNewBookings
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex);
+                return StatusCode(500, new { message = "An unexpected error occurred" });
+            }
+        }
+
+        /* Deactivating no longer destroys the barber's upcoming work. Firing someone and cancelling every
+         * appointment they had are two different decisions, and only the admin can make the second one -
+         * some of those customers will happily see another barber. So:
+         *
+         *   CONFIRMED (COMPLETED) bookings  - left exactly as they are and flagged into the Needs Review
+         *                                     worklist, where the admin reassigns them to another barber
+         *                                     (bookings/update-booking) or cancels them (bookings/cancel).
+         *                                     Nothing is refunded and no customer is emailed here: the
+         *                                     appointment still stands until the admin decides otherwise.
+         *   PENDING bookings                - cancelled outright, as before. Their payment is still in
+         *                                     flight and they were never confirmed to anyone, so there is
+         *                                     nothing to honour and nothing to reassign (UpdateBooking
+         *                                     refuses a PENDING booking anyway).
+         *
+         * `confirm` is still required whenever there's upcoming work, because the admin needs to see what
+         * they're taking on before the barber loses their login. */
+        [Authorize(Roles = "ADMIN")]
+        [HttpDelete("delete/{id}")]
+        public async Task<IActionResult> DeleteBarber(int id, [FromQuery] bool confirm = false)
+        {
+            try
+            {
+                var barber = await _context.Barbers.Include(b => b.User).FirstOrDefaultAsync(b => b.Id == id);
                 if (barber == null) return NotFound(new { message = "Barber not found" });
                 if (!barber.isActive) return BadRequest(new { message = "This barber is already inactive" });
 
-                // Deactivating orphans the barber's upcoming appointments - the customer would show up to a
-                // barber who's gone. Surface them and make the admin confirm before we cancel & refund them,
-                // the same two-step the closure flow uses. Past bookings are left alone (they're history).
+                // Past bookings are left alone (they're history).
                 var futureBookings = await _context.Bookings
                     .Include(b => b.User)
                     .Where(b => b.BarberId == id && b.Status != BookingStatus.CANCELLED && b.StartDateTime > ShopClock.Now)
                     .ToListAsync();
 
-                if (futureBookings.Count > 0 && !confirmCancelBookings)
+                var pendingBookings = futureBookings.Where(b => b.Status == BookingStatus.PENDING).ToList();
+                var confirmedBookings = futureBookings.Where(b => b.Status != BookingStatus.PENDING).ToList();
+
+                if (futureBookings.Count > 0 && !confirm)
                 {
-                    // Mirror the closure conflict payload so the frontend can reuse the same modal: who the
-                    // automatic cancellation email can reach (COMPLETED + ContactEmail) and who needs a call.
+                    // Same shape as the closure conflict payload so the frontend modal stays familiar, but
+                    // `willBeCancelled` replaces `willBeEmailed`: what the admin needs to know here is which
+                    // bookings survive for them to deal with, not who gets a cancellation email.
                     var conflictDetails = futureBookings.Select(b => new
                     {
                         b.Id,
@@ -553,15 +670,23 @@ namespace BarberShopAPI.Controllers
                         Status = b.Status.ToString(),
                         Email = b.ContactEmail,
                         Phone = b.User != null ? b.User.Phone : null,
-                        WillBeEmailed = b.Status == BookingStatus.COMPLETED && !string.IsNullOrWhiteSpace(b.ContactEmail)
+                        WillBeCancelled = b.Status == BookingStatus.PENDING
                     }).ToList();
 
-                    var emailedCount = conflictDetails.Count(c => c.WillBeEmailed);
-                    var phoneOnlyCount = conflictDetails.Count - emailedCount;
+                    // The softer option is only worth surfacing here, at the moment the admin is about to
+                    // take someone's login away. Deactivating is right when the barber has gone; if they're
+                    // working their notice they can still serve these themselves, and nothing else in the UI
+                    // tells the admin there's another way.
                     var message = $"This barber has {conflictDetails.Count} upcoming booking(s). "
-                        + "Deactivating will cancel and refund them. "
-                        + (emailedCount > 0 ? $"{emailedCount} customer(s) with an email on file will be notified automatically. " : "")
-                        + (phoneOnlyCount > 0 ? $"{phoneOnlyCount} have no email and must be contacted by phone." : "");
+                        + (confirmedBookings.Count > 0
+                            ? $"The {confirmedBookings.Count} confirmed one(s) will NOT be cancelled - they stay live and are flagged in Needs Review "
+                              + "for you to reassign to another barber or cancel yourself. Those customers are not notified yet. "
+                            : "")
+                        + (pendingBookings.Count > 0
+                            ? $"{pendingBookings.Count} unconfirmed booking(s) still at checkout will be cancelled automatically. "
+                            : "")
+                        + "If they're working their notice, close them to new bookings instead - these appointments stand "
+                        + "and they keep their login until the last one is done.";
 
                     return Conflict(new
                     {
@@ -586,13 +711,36 @@ namespace BarberShopAPI.Controllers
                  * still access the dashboard until it expires — which is a real security hole.*/
                 await _context.SaveChangesAsync();
 
-                // Deactivate first (blocks NEW bookings via the isActive availability filter), then clear the
-                // existing future ones so no one can book this barber mid-cancellation. Same reason/refund
-                // handling as a closure, via the shared helper - PENDING voided, COMPLETED refunded + emailed.
-                if (futureBookings.Count > 0)
-                    await BookingConflictCanceller.CancelConflictingBookingsAsync(_context, futureBookings, CancellationReason.BarberUnavailable);
+                // Deactivate first (blocks NEW bookings via the isActive availability filter), then deal with
+                // the existing ones so nobody can book this barber mid-sweep. Only the PENDING ones go to the
+                // shared canceller (it voids the in-flight PaymentIntent and sends no email, since a pending
+                // booking was never confirmed to the customer in the first place).
+                if (pendingBookings.Count > 0)
+                    await BookingConflictCanceller.CancelConflictingBookingsAsync(_context, pendingBookings, CancellationReason.BarberUnavailable);
 
-                return Ok(new { message = "Barber deleted successfully" });
+                /* The confirmed ones keep their barber, their time and their money, and land in the worklist
+                 * instead. The note has to say the customer hasn't been told: unlike every other NeedsReview
+                 * entry, nothing has happened to this booking yet - it is still on, and it stays on until the
+                 * admin reassigns or cancels it. The phone number rides along because a walk-in booked by
+                 * staff may have no email to reassign-notify or cancel-notify later. */
+                var barberName = barber.User != null ? $"{barber.User.Name} {barber.User.Surname}".Trim() : "This barber";
+                foreach (var booking in confirmedBookings)
+                {
+                    booking.FlagForReview(
+                        $"{barberName} {BarberLeftMarker} - {booking.StartDateTime:MMM d 'at' h:mm tt}. "
+                        + "The customer has NOT been told. Reassign it to another barber or cancel it."
+                        + (string.IsNullOrWhiteSpace(booking.ContactEmail)
+                            ? $" No email on file - reach them on {(string.IsNullOrWhiteSpace(booking.User?.Phone) ? "the number on the booking" : booking.User!.Phone)}."
+                            : ""));
+                }
+                if (confirmedBookings.Count > 0) await _context.SaveChangesAsync();
+
+                return Ok(new
+                {
+                    message = "Barber deactivated successfully",
+                    flaggedForReview = confirmedBookings.Count,
+                    cancelled = pendingBookings.Count
+                });
             }
             catch (Exception ex)
             {
