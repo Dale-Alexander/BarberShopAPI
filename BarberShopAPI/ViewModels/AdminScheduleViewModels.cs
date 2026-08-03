@@ -52,5 +52,15 @@ namespace BarberShopAPI.ViewModels
         public string? Customer { get; set; }
         public string? Email { get; set; }
         public string? Phone { get; set; }
+
+        /* Only meaningful on the "these are fine again" lists. What is STILL wrong with this booking's slot
+         * after the change that just rescued it, or null if nothing is. Without it every one of those lists
+         * could only offer the same guess - "if this was the only reason, mark it reviewed" - and the admin
+         * had to work out for themselves whether it was.
+         *
+         * Covers the slot only (departed barber, live closure). A stuck refund or a customer nobody has
+         * phoned lives in the note text and can't be answered from state, so a null here means "nothing else
+         * about the SLOT", not "safe to clear". */
+        public string? StillBlockedBy { get; set; }
     }
 }

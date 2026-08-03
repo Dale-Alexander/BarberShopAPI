@@ -49,7 +49,9 @@ namespace BarberShopAPI.Common
                     // dueToClosure covers closures, forceRefund covers barber-unavailable. The reason also
                     // selects which email BookingCanceller enqueues.
                     var dueToClosure = reason == CancellationReason.ShopClosure;
-                    var outcome = await BookingCanceller.CancelAsync(context, booking.Id, dueToClosure: dueToClosure, forceRefund: !dueToClosure, reason: reason);
+                    // Everything that reaches this sweep is the shop's doing - a closure or a departing
+                    // barber - so the customer-only 24h penalty never applies.
+                    var outcome = await BookingCanceller.CancelAsync(context, booking.Id, dueToClosure: dueToClosure, forceRefund: !dueToClosure, reason: reason, shopInitiated: true);
 
                     /* Nothing here will retry and there's no interactive admin to re-click, so a booking that
                      * didn't get cancelled would otherwise be silently stuck: the barber's gone / slot's closed

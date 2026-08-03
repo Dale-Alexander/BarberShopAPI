@@ -29,6 +29,101 @@ namespace BarberShopAPI.Tests
             Client.Authenticate(admin.Id, Role.ADMIN, tokenVersion: 0);
         }
 
+        /* An hours change is the one shop-side cause the cancel endpoint can't read off the slot: staff book
+         * outside a barber's hours deliberately, so "doesn't fit the shifts" proves nothing either way. It
+         * reads the note the schedule path left instead. Without this the customer got the plain notice and,
+         * inside the cutoff, no refund - for a slot the shop moved out from under them. */
+        [Fact]
+        public async Task Cancelling_a_booking_a_schedule_change_stranded_uses_the_schedule_wording()
+        {
+            AuthenticateAsAdmin();
+            int scheduleId, bookingId;
+            using (var db = NewDb())
+            {
+                var barber = db.AddBarber();
+                scheduleId = db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30)).Id;
+                bookingId = db.AddBooking(barber.Id, TestData.FutureAt(14, 16), BookingStatus.COMPLETED).Id;
+            }
+
+            // Narrow the hours so the 16:00 booking is stranded and flagged.
+            var narrowed = await Client.PutAsync($"/api/schedules/version/{scheduleId}", Body(new
+            {
+                shifts = Enumerable.Range(0, 7).Select(d => new
+                {
+                    dayOfWeek = d,
+                    startTime = new TimeOnly(9, 0),
+                    endTime = new TimeOnly(15, 0)
+                }).ToArray(),
+                confirmOrphaned = true
+            }));
+            Assert.Equal(HttpStatusCode.OK, narrowed.StatusCode);
+
+            var response = await Client.PatchAsync($"/api/bookings/cancel/{bookingId}", null);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            using var assertDb = NewDb();
+            var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.Equal(BookingStatus.CANCELLED, booking.Status);
+            Assert.Equal(CancellationReason.ScheduleChange, booking.CancellationReason);
+
+            // The schedule wording, not the generic notice and not the closure one.
+            Assert.Contains(Factory.EnqueuedEmailJobs(),
+                j => j.Method == "sendBookingCancelledDueToScheduleChangeEmailAsync" && j.BookingId == bookingId);
+        }
+
+        /* The other half of the pair above, and the reason the fit check is there at all. Nothing ever
+         * withdraws a review note, so a booking can still be carrying "falls outside their schedule" long
+         * after the hours were put back. Acting on that note alone would tell the customer their barber
+         * doesn't work at that time when he does, and refund them in full for a slot that was never
+         * disturbed - money the 24h policy says they don't get. */
+        [Fact]
+        public async Task A_stale_hours_note_does_not_make_an_ordinary_cancellation_look_shop_caused()
+        {
+            AuthenticateAsAdmin();
+            int scheduleId, bookingId;
+            using (var db = NewDb())
+            {
+                var barber = db.AddBarber();
+                scheduleId = db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30)).Id;
+                bookingId = db.AddBooking(barber.Id, TestData.FutureAt(14, 16), BookingStatus.COMPLETED).Id;
+            }
+
+            object Shifts(int endHour) => Enumerable.Range(0, 7).Select(d => new
+            {
+                dayOfWeek = d,
+                startTime = new TimeOnly(9, 0),
+                endTime = new TimeOnly(endHour, 0)
+            }).ToArray();
+
+            // Strand the 16:00 booking, then put the hours straight back - without marking it reviewed.
+            await Client.PutAsync($"/api/schedules/version/{scheduleId}",
+                Body(new { shifts = Shifts(15), confirmOrphaned = true }));
+            await Client.PutAsync($"/api/schedules/version/{scheduleId}",
+                Body(new { shifts = Shifts(18), confirmOrphaned = true }));
+
+            using (var db = NewDb())
+            {
+                // The note is deliberately still there - that is the whole point of the test.
+                var flagged = await db.Bookings.SingleAsync(b => b.Id == bookingId);
+                Assert.True(flagged.NeedsReview);
+                Assert.Contains("falls outside their", flagged.ReviewReason);
+            }
+
+            var response = await Client.PatchAsync($"/api/bookings/cancel/{bookingId}", null);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            using var assertDb = NewDb();
+            var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            // Nothing is actually wrong with this slot, so it's an ordinary admin cancellation.
+            Assert.Equal(CancellationReason.AdminCancelled, booking.CancellationReason);
+            Assert.Contains(Factory.EnqueuedEmailJobs(),
+                j => j.Method == "sendBookingCancellationEmailAsync" && j.BookingId == bookingId);
+            Assert.DoesNotContain(Factory.EnqueuedEmailJobs(),
+                j => j.Method == "sendBookingCancelledDueToScheduleChangeEmailAsync");
+        }
+
         [Fact]
         public async Task Cancelling_a_confirmed_cash_booking_records_the_reason_and_emails_the_customer()
         {

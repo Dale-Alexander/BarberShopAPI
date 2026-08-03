@@ -1293,7 +1293,47 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 /* The refund + reminder-job-delete + cancel + email logic lives in BookingCanceller so
                  * the shop-closure flow (which cancels the same way) shares one code path. We just map
                  * its Outcome to the right HTTP response here.*/
-                var outcome = await BookingCanceller.CancelAsync(_context, bookingId, dueToClosure: false, forceRefund: refundAnyway, reason: CancellationReason.AdminCancelled);
+                /* Why the booking is being cancelled is decided from the slot's CURRENT state, not from who
+                 * clicked. Deactivating a barber deliberately leaves their confirmed bookings live and
+                 * flagged ("reassign it or cancel it"), so following that instruction landed here and sent
+                 * the customer the generic notice - never telling them their barber had gone - and, inside
+                 * the 24h cutoff, withheld a refund for something the shop caused. The same applies to a
+                 * booking left stranded by a closure or an hours change. Nothing wrong with the slot means
+                 * it really is an ordinary admin cancellation. */
+                var target = await _context.Bookings.FirstOrDefaultAsync(b => b.Id == bookingId);
+                if (target == null) return NotFound(new { message = "This booking was not found" });
+
+                var blockingReason = target.Status == BookingStatus.COMPLETED
+                    ? await BookingSlotGuard.ResolveBlockingReasonAsync(_context, target)
+                    : null;
+
+                /* An hours change takes BOTH halves to identify, and neither works alone.
+                 *
+                 * The note says the schedule flow stranded this booking - but nothing ever withdraws a note,
+                 * so it may describe hours that have since been put back, and acting on it alone would tell a
+                 * customer their barber doesn't work at that time when he does (and hand back money the 24h
+                 * policy says they don't get). The live fit check says whether it's outside the hours right
+                 * now - but staff book outside a barber's hours on purpose, so that alone would blame the shop
+                 * for an appointment it deliberately made late.
+                 *
+                 * Together they're exact: flagged by the schedule flow AND still outside the hours. That
+                 * leaves every note in place, identically for all three reasons, and still gets the refund
+                 * right - which is why nothing here tries to tidy the note up afterwards (see BookingReview).
+                 *
+                 * Last, so a live problem always wins: a booking flagged over the hours whose barber has since
+                 * been deactivated is a departure, not a schedule change, and the customer needs to be told to
+                 * rebook with someone else rather than to pick another time. */
+                if (blockingReason == null && target.Status == BookingStatus.COMPLETED
+                    && target.NeedsReview
+                    && target.ReviewReason?.Contains(ReviewMarkers.OutsideHours) == true
+                    && !await BookingSlotGuard.FitsBarbersHoursAsync(_context, target))
+                    blockingReason = CancellationReason.ScheduleChange;
+
+                var outcome = await BookingCanceller.CancelAsync(_context, bookingId, dueToClosure: false,
+                    forceRefund: refundAnyway,
+                    reason: blockingReason ?? CancellationReason.AdminCancelled,
+                    // Shop-initiated: full refund regardless of the customer-only 24h penalty.
+                    shopInitiated: blockingReason != null);
                 // A flagged booking stays flagged through a cancellation - see the note in UpdateBooking.
                 return outcome switch
                 {
@@ -1417,7 +1457,13 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                  * survives any amount of rescheduling. Rather than have the flag sometimes clear itself and
                  * sometimes not, which leaves staff unable to tell which rows they still have to work,
                  * mark-reviewed is the ONLY way out of the worklist. The frontend marks the row the admin
-                 * just touched so the one they need to clear is easy to spot. */
+                 * just touched so the one they need to clear is easy to spot.
+                 *
+                 * No exceptions, including the hours note - which the app COULD disprove here, since this
+                 * booking has just been moved somewhere that fits. Withdrawing it would make the hours the
+                 * only reason that ever cleaned up after itself, and an admin who watched that happen would
+                 * fairly expect the same after reviving a barber or deleting a closure, neither of which can
+                 * do it. See the note in BookingReview for the full reasoning and what it costs. */
 
                 var timeChanged = request.StartDateTime.HasValue;
                 if (timeChanged)

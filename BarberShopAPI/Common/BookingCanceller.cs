@@ -18,7 +18,11 @@ namespace BarberShopAPI.Common
     {
         public enum Outcome { Cancelled, CancelledNoRefund, NotFound, AlreadyCancelled, Pending, RefundFailed }
 
-        public static async Task<Outcome> CancelAsync(BarberShopContext context, int bookingId, bool dueToClosure, bool forceRefund = false, CancellationReason reason = CancellationReason.None)
+        /* shopInitiated: the shop caused this cancellation, so the customer-only 24h penalty must not apply
+         * and they're owed the reason-specific notice. Separate from dueToClosure, which ALSO selects the
+         * closure wording - an admin cancelling a booking whose barber has left is shop-initiated but must
+         * not be told the shop was shut. */
+        public static async Task<Outcome> CancelAsync(BarberShopContext context, int bookingId, bool dueToClosure, bool forceRefund = false, CancellationReason reason = CancellationReason.None, bool shopInitiated = false)
         {
             var booking = await context.Bookings
                 .Include(b => b.Payment)
@@ -37,7 +41,7 @@ namespace BarberShopAPI.Common
             var refundCutoff = TimeSpan.FromHours(await context.ShopSettings.Select(s => s.RefundCutoffHours).FirstAsync());
 
             /* StartDateTime is Malta wall-clock and so is ShopClock.Now, so this compares like with like. */
-            bool refundAllowed = dueToClosure || forceRefund || (booking.StartDateTime - ShopClock.Now) >= refundCutoff;
+            bool refundAllowed = shopInitiated || forceRefund || (booking.StartDateTime - ShopClock.Now) >= refundCutoff;
             bool refundIssued = false;
 
             var payment = booking.Payment;
@@ -84,22 +88,28 @@ namespace BarberShopAPI.Common
              * worklist instead: same list they already work, and it keeps the customer's number with it.
              * A staff cancel is deliberately excluded - an admin is at the screen and is usually cancelling
              * because that customer just phoned in. */
-            var shopInitiated = dueToClosure || reason == CancellationReason.BarberUnavailable;
             if (shopInitiated && string.IsNullOrWhiteSpace(booking.ContactEmail))
             {
                 booking.FlagForReview(
                     $"No email on file - call {(string.IsNullOrWhiteSpace(booking.User?.Phone) ? "the customer" : booking.User!.Phone)} "
                     + $"to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled"
-                    + (reason == CancellationReason.BarberUnavailable
-                        ? " because their barber is no longer available."
-                        : " by a shop closure.")
+                    + reason switch
+                    {
+                        CancellationReason.BarberUnavailable => " because their barber is no longer available.",
+                        CancellationReason.ScheduleChange => " because their barber no longer works at that time.",
+                        _ => " by a shop closure."
+                    }
                     + (refundIssued ? " Their card payment has been refunded in full." : ""));
                 await context.SaveChangesAsync();
             }
+            /* Keyed off the reason, not dueToClosure: an admin cancelling a booking that has since fallen on
+             * a closure passes the reason without that flag, and used to drop through to the generic notice. */
             else if (reason == CancellationReason.BarberUnavailable)
                 BackgroundJob.Enqueue<IEmailService>(s => s.sendBookingCancelledBarberUnavailableEmailAsync(bookingId, refundIssued, null));
-            else if (dueToClosure)
+            else if (reason == CancellationReason.ShopClosure || dueToClosure)
                 BackgroundJob.Enqueue<IEmailService>(s => s.sendBookingCancelledDueToClosureEmailAsync(bookingId, null));
+            else if (reason == CancellationReason.ScheduleChange)
+                BackgroundJob.Enqueue<IEmailService>(s => s.sendBookingCancelledDueToScheduleChangeEmailAsync(bookingId, null));
             else
                 BackgroundJob.Enqueue<IEmailService>(s => s.sendBookingCancellationEmailAsync(bookingId, refundIssued));
 
