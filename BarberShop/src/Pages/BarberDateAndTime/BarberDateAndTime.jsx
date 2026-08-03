@@ -1,7 +1,7 @@
 ﻿import { useState, useMemo, useEffect, useContext } from "react";
 import UserFormModal from "./UserFormModal/UserFormModal.jsx";
 import { resolveBarberImage, handleBarberImageError } from "../../utils/barberImage.js";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import axios from "axios";
 import {
@@ -103,10 +103,23 @@ const BarberDateAndTime = () => {
     const [originalTime, setOriginalTime] = useState(null);
     const [originalDate, setOriginalDate] = useState(null);
     const navigate = useNavigate();
+    const location = useLocation();
     const { user, loading } = useContext(AuthContext);
     const [searchParams] = useSearchParams();
     const isAdminBooking = searchParams.get("adminBooking") === "true";
     const isAdmin = user?.role === "ADMIN";
+    /* Where "back to the list" goes. The bookings tables hand over the URL they were showing (filters and
+       all) in history state, because a bare "/admin" drops the query string - and with it the needs-review
+       worklist the admin was working through. Landing on the default confirmed view after fixing a flagged
+       booking hides the very row they still have to mark reviewed, which is the one thing the
+       recentlyEditedBookingId marker below exists to stop them forgetting.
+       Survives a refresh without any help from us: React Router keeps location.state in history.state,
+       which the browser restores for the entry on reload - so don't "fix" this by mirroring it into
+       storage, which would only add a stale copy outliving the visit that set it. The fallback is for
+       entries that never had it: creating a booking, or a pasted/bookmarked /datetime/:id URL.
+       Nothing needs to clear it either - only recentlyEditedBookingId is passed back to the list, so
+       `from` stays on this page's own history entry, where a browser Back still wants it. */
+    const returnTo = location.state?.from ?? (isAdmin ? "/admin" : `/admin/team/${user?.barberId}`);
     // Staff (admin OR barber) create bookings from the dashboard; customers use the public flow.
     const isStaffMode = (isAdmin || user?.role === "BARBER") && isAdminBooking;
     /* A barber only ever works on their own chair, creating or editing, so the picker is locked to them
@@ -237,7 +250,7 @@ const BarberDateAndTime = () => {
     useEffect(() => {
         if (isEditMode && editBookingError && editBookingError.response?.status !== 401) {
             showToast("Couldn't load booking", getErrorMessage(editBookingError, "This booking may no longer exist."));
-            navigate(isAdmin ? "/admin" : `/admin/team/${user?.barberId}`, { replace: true });
+            navigate(returnTo, { replace: true });
         }
     }, [isEditMode, editBookingError]);
 
@@ -565,8 +578,7 @@ const BarberDateAndTime = () => {
                is indistinguishable from the rest by the time they land. Hand the id back in history state
                and the table marks it - which matters most for a flagged booking, where they still have to
                mark it reviewed and would otherwise have to remember which one it was. */
-            navigate(isAdmin ? "/admin" : `/admin/team/${user?.barberId}`,
-                { state: { recentlyEditedBookingId: Number(bookingId) } });
+            navigate(returnTo, { state: { recentlyEditedBookingId: Number(bookingId) } });
         }
         catch (err) {
             /* Was console-only, which meant a rejected save looked like nothing happened at all - the page
@@ -600,7 +612,7 @@ const BarberDateAndTime = () => {
                 ConfirmOutsideHours: outsideHoursConfirmed,
             });
             setShowModal(false);
-            navigate(isAdmin ? "/admin" : `/admin/team/${user?.barberId}`);
+            navigate(returnTo);
         } catch (err) {
             console.error(err.response?.data?.message || err.response?.data);
             showToast("Booking Failed", getErrorMessage(err));

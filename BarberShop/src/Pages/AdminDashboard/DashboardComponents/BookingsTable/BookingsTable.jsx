@@ -499,7 +499,12 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                                                     {!isCancelled(b) && (
                                                     <>
                                                     <button className="action-dropdown-item edit-item" disabled={isPast(b)} title={isPast(b) ? "This booking has already passed" : undefined} onClick={() => {
-                                                    navigate(`/datetime/${b.id}`); setOpenMenuId(null);
+                                                    /* Hand over the view we're on (filters live in the query
+                                                       string) so saving comes back to it. Without this the
+                                                       edit page returns to a bare "/admin", which drops the
+                                                       needs-review worklist and hides the row the admin
+                                                       still has to mark reviewed. */
+                                                    navigate(`/datetime/${b.id}`, { state: { from: `${location.pathname}${location.search}` } }); setOpenMenuId(null);
                                                     }}><SquarePen size={14}/> Edit</button>
                                                 <button className="action-dropdown-item cancel-item" disabled={isPast(b)} title={isPast(b) ? "This booking has already passed" : undefined} onClick={() => {
                                                     setCancelTarget(b); setRefundAnyway(false); setOpenMenuId(null);

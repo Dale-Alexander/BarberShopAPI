@@ -431,7 +431,9 @@ const BarberBookings = () => {
                                                 {openMenuId === b.id && (
                                                     <div className="action-dropdown-menu" style={menuStyle}>
                                                         <button className="action-dropdown-item edit-item" disabled={isPast(b)} title={isPast(b) ? "This booking has already passed" : undefined} onClick={() => {
-                                                            navigate(`/datetime/${b.id}`); setOpenMenuId(null);
+                                                            // Same as the admin table: carry the current URL over so
+                                                            // saving returns to this filtered view, not a bare path.
+                                                            navigate(`/datetime/${b.id}`, { state: { from: `${location.pathname}${location.search}` } }); setOpenMenuId(null);
                                                         }}><SquarePen size={14}/> Edit</button>
                                                         <button className="action-dropdown-item cancel-item" disabled={isPast(b)} title={isPast(b) ? "This booking has already passed" : undefined} onClick={() => {
                                                             setCancelTarget(b); setRefundAnyway(false); setOpenMenuId(null);
