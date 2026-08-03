@@ -505,3 +505,54 @@
 .calendar-error-banner__retry:hover {
     background: rgba(127, 127, 127, 0.15);
 }
+
+/* "These bookings are back on" - shown after deleting a closure that had bookings flagged against it.
+   Mirrors the schedule page's back-inside-hours modal (.sched-orphan-*), which does the same job for
+   widened working hours. */
+.cal-reopened-modal {
+    background: #fff;
+    border-radius: 12px;
+    padding: 1.75rem;
+    width: 100%;
+    max-width: 520px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.cal-reopened-modal h2 { font-size: 1.15rem; margin: 0; color: #1a1a1a; }
+.cal-reopened-modal p { margin: 0; font-size: 0.9rem; color: #555; line-height: 1.5; }
+
+.cal-reopened-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.cal-reopened-list li {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    background: #fafafa;
+}
+
+.cal-reopened-when { font-weight: 600; font-size: 0.88rem; color: #1a1a1a; }
+.cal-reopened-who { font-size: 0.8rem; color: #777; }
+
+.cal-reopened-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+}
+
+/* Counterpart to .sched-orphan-blocked: something other than the deleted closure still shuts this slot. */
+.cal-reopened-blocked { font-size: 0.78rem; color: #b45309; margin-top: 2px; }

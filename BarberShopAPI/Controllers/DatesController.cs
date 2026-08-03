@@ -87,12 +87,20 @@ namespace BarberShopAPI.Controllers
 
                 // Soft warn: don't create the closure yet - hand the admin the conflicting bookings so they
                 // can decide. They re-submit with ConfirmCancelBookings = true to go ahead.
+                /* Confirmed bookings are GRANDFATHERED, exactly as a barber deactivation or an hours change
+                 * treats them: they stay live and go into the worklist for the admin to reassign, move or
+                 * cancel. Cancelling them automatically was the only irreversible act in the admin screens -
+                 * one wrong end date pushed real refunds through Stripe that fixing the date couldn't undo -
+                 * and it threw away the better outcome, which is usually "let's move you to Thursday" rather
+                 * than handing the money back and hoping they rebook.
+                 *
+                 * Pending ones are still cancelled outright: nobody needs to review a checkout in flight, and
+                 * the customer recovers on the spot. */
+                var pendingConflicts = conflicts.Where(b => b.Status == BookingStatus.PENDING).ToList();
+                var confirmedConflicts = conflicts.Where(b => b.Status != BookingStatus.PENDING).ToList();
+
                 if (conflicts.Count > 0 && !newClosure.ConfirmCancelBookings)
                 {
-                    // Tell the admin exactly who the automatic cancellation email can reach and who it can't.
-                    // A booking is only actually emailed on cancel when it's COMPLETED *and* has a ContactEmail:
-                    // PENDING conflicts are never emailed (they were never confirmed - see CancelConflictingBookingsAsync),
-                    // and admin-created bookings carry only a phone, no email. Everyone else must be reached by phone.
                     var conflictDetails = conflicts.Select(b => new
                     {
                         b.Id,
@@ -102,19 +110,20 @@ namespace BarberShopAPI.Controllers
                         Status = b.Status.ToString(),
                         Email = b.ContactEmail,
                         Phone = b.User != null ? b.User.Phone : null,
-                        WillBeEmailed = b.Status == BookingStatus.COMPLETED && !string.IsNullOrWhiteSpace(b.ContactEmail)
+                        // Nothing is emailed on confirm any more - a grandfathered booking is still ON, so
+                        // telling the customer anything yet would be wrong. Kept as a field because the
+                        // admin still needs to know who they'll be able to reach when they do act.
+                        WillBeEmailed = false
                     }).ToList();
 
-                    var emailedCount = conflictDetails.Count(c => c.WillBeEmailed);
-                    var phoneOnlyCount = conflictDetails.Count - emailedCount;
-
                     var message = $"This closure overlaps {conflictDetails.Count} existing booking(s). "
-                        + "Confirming will cancel and refund them. "
-                        + (emailedCount > 0
-                            ? $"{emailedCount} customer(s) with an email on file will be notified automatically. "
+                        + (confirmedConflicts.Count > 0
+                            ? $"{confirmedConflicts.Count} confirmed booking(s) will NOT be cancelled - they stay live "
+                              + "and are flagged in Needs Review for you to reassign, move or cancel. The customer "
+                              + "has not been told. "
                             : "")
-                        + (phoneOnlyCount > 0
-                            ? $"{phoneOnlyCount} have no email and will be flagged in Needs Review for you to phone."
+                        + (pendingConflicts.Count > 0
+                            ? $"{pendingConflicts.Count} booking(s) still at checkout will be cancelled automatically."
                             : "");
 
                     return Conflict(new
@@ -142,7 +151,22 @@ namespace BarberShopAPI.Controllers
                 // Closure now exists, so the slot is blocked against NEW bookings. Clear out the ones that
                 // were already on it. We create the closure first so that even if a cancellation below fails,
                 // the slot stays closed and the failure is isolated to that one booking (logged for follow-up).
-                await BookingConflictCanceller.CancelConflictingBookingsAsync(_context, conflicts, CancellationReason.ShopClosure);
+                await BookingConflictCanceller.CancelConflictingBookingsAsync(_context, pendingConflicts, CancellationReason.ShopClosure);
+
+                /* The confirmed ones keep their slot, their barber and their money, and land in the worklist.
+                 * The note has to say the customer hasn't been told: unlike most NeedsReview entries nothing
+                 * has happened to this booking yet - it is still on, and stays on until the admin acts. The
+                 * phone number rides along because a walk-in booked by staff may have no email at all. */
+                foreach (var booking in confirmedConflicts)
+                {
+                    booking.FlagForReview(
+                        $"{ReviewMarkers.ShopClosed} - {booking.StartDateTime:MMM d 'at' h:mm tt}. "
+                        + "The customer has NOT been told. Reassign it, move it, or cancel it."
+                        + (string.IsNullOrWhiteSpace(booking.ContactEmail)
+                            ? $" No email on file - reach them on {(string.IsNullOrWhiteSpace(booking.User?.Phone) ? "the number on the booking" : booking.User!.Phone)}."
+                            : ""));
+                }
+                if (confirmedConflicts.Count > 0) await _context.SaveChangesAsync();
 
                 // Only barber-scoped closures carry a name; shop-wide (BarberId == null) stays null so the
                 // admin calendar renders just the reason. Lets the client show "Name - reason" immediately
@@ -323,9 +347,49 @@ namespace BarberShopAPI.Controllers
                     if (shopClosure.BarberId == null || shopClosure.BarberId != callerBarberId)
                         return StatusCode(403, new { message = "You can only delete your own closures" });
                 }
+                /* Bookings this closure flagged and left live. Gathered BEFORE it's switched off, so the
+                 * overlap test still has the closure's own dates to work from. */
+                var closureStart = shopClosure.IsFullDay
+                    ? shopClosure.StartDate.ToDateTime(TimeOnly.MinValue)
+                    : shopClosure.StartDate.ToDateTime(shopClosure.StartTime!.Value);
+                var closureEnd = shopClosure.IsFullDay
+                    ? (shopClosure.EndDate ?? shopClosure.StartDate).AddDays(1).ToDateTime(TimeOnly.MinValue)
+                    : shopClosure.StartDate.ToDateTime(shopClosure.EndTime!.Value);
+
+                var now = ShopClock.Now;
+                var flagged = await _context.Bookings
+                    .Include(b => b.User)
+                    .Where(b => b.Status == BookingStatus.COMPLETED
+                                && b.StartDateTime > now
+                                && b.NeedsReview
+                                && b.ReviewReason != null && b.ReviewReason.Contains(ReviewMarkers.ShopClosed)
+                                && (shopClosure.BarberId == null || b.BarberId == shopClosure.BarberId)
+                                && b.StartDateTime < closureEnd
+                                && b.StartDateTime.AddMinutes(b.DurationMin) > closureStart)
+                    .ToListAsync();
+
                 shopClosure.IsActive = false;
                 await _context.SaveChangesAsync();
-                return Ok(new { message = $"The event '{shopClosure.Reason}' was deleted" });
+
+                /* Only the ones no OTHER closure still shuts. Closures overlap - a shop-wide holiday on top
+                 * of a barber's day off - so removing one doesn't necessarily reopen the slot, and calling a
+                 * booking reopened while a second closure covers it would be false. Run after the save, so
+                 * the closure being deleted is already out of the picture.
+                 *
+                 * Closures only - deliberately not "is anything at all wrong with this booking". A departed
+                 * barber or a stuck refund leaves its own note for the admin to read; suppressing the
+                 * booking here would hide that the CLOSURE problem is resolved, which is what this list is
+                 * for. Each list vouches for its own dimension, and none of them clears anything. */
+                var reopened = new List<Booking>();
+                foreach (var b in flagged)
+                    if (!await BookingSlotGuard.IsSlotClosedAsync(_context, b))
+                        reopened.Add(b);
+
+                return Ok(new
+                {
+                    message = $"The event '{shopClosure.Reason}' was deleted",
+                    noLongerClosed = await BookingSlotGuard.DescribeAsync(_context, reopened)
+                });
             }
             catch(Exception ex)
             {

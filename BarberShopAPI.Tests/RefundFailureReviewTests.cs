@@ -44,11 +44,14 @@ namespace BarberShopAPI.Tests
         // ---------------------------------------------------------------------------------------------
 
         [Fact]
-        public async Task A_closure_whose_refund_fails_flags_the_booking_instead_of_cancelling_it()
+        public async Task A_closure_never_touches_a_confirmed_bookings_money()
         {
             AuthenticateAsAdmin();
             var (_, bookingId, paymentId) = ArrangePaidCardBooking();
 
+            // Armed to fail, but it must never be called at all: a closure no longer cancels or refunds a
+            // confirmed booking, it hands it to the admin. Refunding here would move money on a decision
+            // nobody has made yet - and a mistyped closure date would do it irreversibly.
             using var stripe = new FakeStripe { Refunds = FakeStripe.RefundOutcome.Fails };
 
             var response = await Client.PostAsync("/api/dates", Body(new
@@ -63,39 +66,32 @@ namespace BarberShopAPI.Tests
                 confirmCancelBookings = true
             }));
 
-            // The closure itself still succeeds - the slot must end up closed even if one booking's money
-            // couldn't be moved, otherwise a failed refund would silently leave the shop open.
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            Assert.Equal(1, stripe.RefundAttempts);
+            Assert.Equal(0, stripe.RefundAttempts);
 
             using var assertDb = NewDb();
             var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
-
-            // NOT cancelled: cancelling while still holding the customer's money is the one outcome this
-            // whole ordering exists to prevent.
             Assert.Equal(BookingStatus.COMPLETED, booking.Status);
             Assert.True(booking.NeedsReview);
-            Assert.Contains("ShopClosure", booking.ReviewReason);
-            Assert.Contains("RefundFailed", booking.ReviewReason);
-            Assert.Contains("check Stripe", booking.ReviewReason);
 
-            // Money untouched, and no cancellation email claiming an appointment is gone when it isn't.
             Assert.Equal(PaymentStatus.COMPLETED, (await assertDb.Payments.SingleAsync(p => p.Id == paymentId)).Status);
             Assert.Empty(Factory.EnqueuedEmailJobs());
         }
 
         [Fact]
-        public async Task A_closure_whose_refund_succeeds_cancels_refunds_and_emails()
+        public async Task Cancelling_a_booking_the_closure_flagged_refunds_in_full_and_sends_the_closure_email()
         {
             AuthenticateAsAdmin();
-            var (_, bookingId, paymentId) = ArrangePaidCardBooking();
-
+            // Deliberately INSIDE the refund cutoff, which is the case that used to go wrong: the closure
+            // used to guarantee a full refund, so routing this through the admin's cancel button had to keep
+            // that guarantee rather than applying the customer-only 24h penalty to the shop's own decision.
+            var (_, bookingId, paymentId) = ArrangePaidCardBooking(daysAhead: 0);
             using var stripe = new FakeStripe { Refunds = FakeStripe.RefundOutcome.Succeeds };
 
-            var response = await Client.PostAsync("/api/dates", Body(new
+            var closure = await Client.PostAsync("/api/dates", Body(new
             {
                 barberId = (int?)null,
-                startDate = ShopClock.Today.AddDays(14),
+                startDate = ShopClock.Today,
                 endDate = (DateOnly?)null,
                 isFullDay = true,
                 startTime = (TimeOnly?)null,
@@ -103,15 +99,23 @@ namespace BarberShopAPI.Tests
                 reason = "Test closure",
                 confirmCancelBookings = true
             }));
+            Assert.Equal(HttpStatusCode.OK, closure.StatusCode);
+
+            // The admin works the flagged row and decides to cancel it.
+            var response = await Client.PatchAsync($"/api/bookings/cancel/{bookingId}", null);
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            // Not the "no refund within 24 hours" message - the shop closed the shop, not the customer.
+            Assert.DoesNotContain("No refund", (await ReadJson(response)).GetProperty("message").GetString());
 
             using var assertDb = NewDb();
             var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
             Assert.Equal(BookingStatus.CANCELLED, booking.Status);
+            // Worked out from the slot's state, not from who clicked cancel.
             Assert.Equal(CancellationReason.ShopClosure, booking.CancellationReason);
-            Assert.False(booking.NeedsReview);
             Assert.Equal(PaymentStatus.REFUNDED, (await assertDb.Payments.SingleAsync(p => p.Id == paymentId)).Status);
+
+            // The closure email, not the generic cancellation notice.
             Assert.Contains(Factory.EnqueuedEmailJobs(),
                 j => j.Method == "sendBookingCancelledDueToClosureEmailAsync" && j.BookingId == bookingId);
         }

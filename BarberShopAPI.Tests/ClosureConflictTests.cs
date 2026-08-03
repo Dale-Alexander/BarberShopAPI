@@ -6,14 +6,22 @@ using System.Net;
 
 namespace BarberShopAPI.Tests
 {
-    /* POST /api/dates - creating a shop closure, and the bookings it clears off the slot
-     * (BookingConflictCanceller via CancellationReason.ShopClosure).
+    /* POST /api/dates - creating a shop closure, and what it does to the bookings already on the slot.
      *
      * Two-step by design: the first request reports the conflicts and creates nothing; the admin re-submits
-     * with ConfirmCancelBookings to go ahead. The 409 payload's WillBeEmailed flags matter operationally -
-     * they tell the admin exactly which customers the system will notify and which they must phone.
+     * with ConfirmCancelBookings to go ahead.
      *
-     * Cash/unpaid bookings only, so the refund branch is never entered (that's tier 2). */
+     * The split is the thing to hold on to, and it matches a barber deactivation and an hours change:
+     *   - CONFIRMED bookings are grandfathered. They keep their slot, their barber and their money, and go
+     *     into Needs Review for the admin to reassign, move or cancel. Nothing is emailed, because nothing
+     *     has happened to them yet - they are still on.
+     *   - PENDING bookings are cancelled outright. Nobody needs to review a checkout in flight.
+     *
+     * They used to be cancelled and refunded on confirm. That was the only irreversible action in the admin
+     * screens - a wrong end date pushed real refunds through Stripe that correcting the date couldn't undo -
+     * and it threw away the outcome the customer usually wants, which is being moved rather than refunded.
+     *
+     * Cash/unpaid bookings only here; the money paths are tier 2 (RefundFailureReviewTests). */
     public class ClosureConflictTests : IntegrationTestBase
     {
         public ClosureConflictTests(DatabaseFixture fixture) : base(fixture) { }
@@ -63,8 +71,9 @@ namespace BarberShopAPI.Tests
             var conflicts = payload.GetProperty("conflicts").EnumerateArray().ToList();
             Assert.Single(conflicts);
             Assert.Equal(bookingId, conflicts[0].GetProperty("id").GetInt32());
-            // COMPLETED + has a ContactEmail => the system will email this one automatically.
-            Assert.True(conflicts[0].GetProperty("willBeEmailed").GetBoolean());
+            // Nothing is emailed on confirm any more. A grandfathered booking is still ON, so telling the
+            // customer anything at this point would be announcing a cancellation that hasn't happened.
+            Assert.False(conflicts[0].GetProperty("willBeEmailed").GetBoolean());
 
             using var assertDb = NewDb();
             Assert.Empty(await assertDb.ShopClosures.ToListAsync());
@@ -75,7 +84,7 @@ namespace BarberShopAPI.Tests
         }
 
         [Fact]
-        public async Task Confirming_creates_the_closure_and_cancels_the_booking_with_a_closure_email()
+        public async Task Confirming_creates_the_closure_and_flags_the_confirmed_booking_instead_of_cancelling_it()
         {
             AuthenticateAsAdmin();
             int bookingId, paymentId;
@@ -94,19 +103,22 @@ namespace BarberShopAPI.Tests
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
             using var assertDb = NewDb();
+            // The closure is created regardless - the slot must end up shut either way.
             Assert.Single(await assertDb.ShopClosures.ToListAsync());
 
             var booking2 = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
-            Assert.Equal(BookingStatus.CANCELLED, booking2.Status);
-            Assert.Equal(CancellationReason.ShopClosure, booking2.CancellationReason);
-            Assert.False(booking2.NeedsReview); // the cancel succeeded, so nothing to follow up by hand
+            // Still on. The admin decides whether it's moved or cancelled, and the cancel path works the
+            // money out from there (full refund, closure email - see AdminCancelTests).
+            Assert.Equal(BookingStatus.COMPLETED, booking2.Status);
+            Assert.Equal(CancellationReason.None, booking2.CancellationReason);
 
-            // The closure email, specifically - not the generic cancellation notice.
-            Assert.Contains(Factory.EnqueuedEmailJobs(),
-                j => j.Method == "sendBookingCancelledDueToClosureEmailAsync" && j.BookingId == bookingId);
+            Assert.True(booking2.NeedsReview);
+            Assert.Contains("shop is closed", booking2.ReviewReason);
+            // The note must say so out loud: unlike most worklist entries, nothing has happened here yet.
+            Assert.Contains("NOT been told", booking2.ReviewReason);
 
-            // Cash never went through Stripe, so there is nothing to refund - the payment stays COMPLETED
-            // rather than being marked REFUNDED. The customer is settled up in person.
+            // Nothing has happened to the customer, so nothing is sent and no money moves.
+            Assert.Empty(Factory.EnqueuedEmailJobs());
             Assert.Equal(PaymentStatus.COMPLETED,
                 (await assertDb.Payments.SingleAsync(p => p.Id == paymentId)).Status);
         }
@@ -167,7 +179,7 @@ namespace BarberShopAPI.Tests
         }
 
         [Fact]
-        public async Task Confirming_flags_a_phone_only_booking_for_review_instead_of_emailing_nobody()
+        public async Task The_worklist_note_carries_the_phone_number_when_there_is_no_email()
         {
             AuthenticateAsAdmin();
             int bookingId;
@@ -191,21 +203,125 @@ namespace BarberShopAPI.Tests
 
             using var assertDb = NewDb();
             var booking2 = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
-            Assert.Equal(BookingStatus.CANCELLED, booking2.Status);
-            Assert.Equal(CancellationReason.ShopClosure, booking2.CancellationReason);
+            // Grandfathered like any other confirmed booking - having no email doesn't change that.
+            Assert.Equal(BookingStatus.COMPLETED, booking2.Status);
 
-            /* The cancellation itself worked - this flag isn't about a failure, it's about reach. We cancelled
-             * a walk-in's appointment on our own initiative and have no way to tell them, so the worklist
-             * carries the phone number instead of the customer just turning up to a closed shop. */
+            /* A walk-in booked by staff carries a phone number and nothing else, so whenever the admin does
+             * act on this one, no email can reach them. Putting the number in the note means that call is
+             * possible without going digging for it. */
             Assert.True(booking2.NeedsReview);
             Assert.Contains("No email on file", booking2.ReviewReason);
             Assert.Contains(phone, booking2.ReviewReason);
-            Assert.Contains("shop closure", booking2.ReviewReason);
-            // Cash booking, so nothing was refunded - the note must not promise money that never moved.
-            Assert.DoesNotContain("refunded", booking2.ReviewReason);
 
-            // No email job at all: enqueuing one would only no-op on the blank address.
             Assert.Empty(Factory.EnqueuedEmailJobs());
+        }
+
+        /* PATCH /api/dates/delete/{id} - the mirror of the above. Removing a closure makes the bookings it
+         * flagged fine again, and the admin is shown which ones so they can clear the notes. Same treatment
+         * as a widened schedule and a reactivated barber; without it those notes sit there describing a
+         * closure that no longer exists.
+         *
+         * INFORMATION, never a "clear them all" button: notes accumulate, so the same booking may also be
+         * carrying a failed refund. The admin reads each one and clears it by hand. */
+        [Fact]
+        public async Task Deleting_a_closure_lists_the_bookings_it_was_holding_up()
+        {
+            AuthenticateAsAdmin();
+            int bookingId;
+            using (var db = NewDb())
+            {
+                var barber = db.AddBarber();
+                db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30));
+                bookingId = db.AddBooking(barber.Id, TestData.FutureAt(14, 16), BookingStatus.COMPLETED).Id;
+            }
+
+            var created = await Client.PostAsync("/api/dates",
+                Body(ClosureBody(ShopClock.Today.AddDays(14), confirm: true)));
+            Assert.Equal(HttpStatusCode.OK, created.StatusCode);
+            var closureId = (await ReadJson(created)).GetProperty("id").GetInt32();
+
+            using (var db = NewDb())
+                Assert.True((await db.Bookings.SingleAsync(b => b.Id == bookingId)).NeedsReview);
+
+            var deleted = await Client.PatchAsync($"/api/dates/delete/{closureId}", null);
+
+            Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+            var reopened = (await ReadJson(deleted)).GetProperty("noLongerClosed").EnumerateArray().ToList();
+            Assert.Single(reopened);
+            Assert.Equal(bookingId, reopened[0].GetProperty("id").GetInt32());
+
+            // Announced, NOT auto-cleared - the booking may be carrying other notes too.
+            using var assertDb = NewDb();
+            Assert.True((await assertDb.Bookings.SingleAsync(b => b.Id == bookingId)).NeedsReview);
+        }
+
+        /* A booking in the worklist for more than one thing is still announced when the closure half is
+         * resolved. Hiding it would mean the admin never learns that part is done, and the booking would
+         * sit there until someone re-derived the whole picture by hand. */
+        [Fact]
+        public async Task A_booking_flagged_for_something_else_too_is_still_listed_when_the_closure_goes()
+        {
+            AuthenticateAsAdmin();
+            int bookingId;
+            using (var db = NewDb())
+            {
+                var barber = db.AddBarber();
+                db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30));
+                bookingId = db.AddBooking(barber.Id, TestData.FutureAt(14, 16), BookingStatus.COMPLETED).Id;
+            }
+
+            var created = await Client.PostAsync("/api/dates",
+                Body(ClosureBody(ShopClock.Today.AddDays(14), confirm: true)));
+            var closureId = (await ReadJson(created)).GetProperty("id").GetInt32();
+
+            // A second, unrelated problem lands on the same booking - money this time.
+            using (var db = NewDb())
+            {
+                var b = await db.Bookings.SingleAsync(x => x.Id == bookingId);
+                b.FlagForReview("Refund failed - check Stripe by hand.");
+                await db.SaveChangesAsync();
+            }
+
+            var deleted = await Client.PatchAsync($"/api/dates/delete/{closureId}", null);
+
+            Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+            var reopened = (await ReadJson(deleted)).GetProperty("noLongerClosed").EnumerateArray().ToList();
+            Assert.Single(reopened);
+            Assert.Equal(bookingId, reopened[0].GetProperty("id").GetInt32());
+
+            using var assertDb = NewDb();
+            var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            // Both notes intact: the closure note can't be removed (it has a time pasted into it), and the
+            // refund one can't be verified from state at all. The admin reads them and decides.
+            Assert.Contains("Refund failed", booking.ReviewReason);
+            Assert.True(booking.NeedsReview);
+        }
+
+        [Fact]
+        public async Task A_booking_another_closure_still_covers_is_not_announced_as_reopened()
+        {
+            AuthenticateAsAdmin();
+            int bookingId, barberId;
+            using (var db = NewDb())
+            {
+                var barber = db.AddBarber();
+                db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30));
+                barberId = barber.Id;
+                bookingId = db.AddBooking(barber.Id, TestData.FutureAt(14, 16), BookingStatus.COMPLETED).Id;
+            }
+
+            // Two closures over the same slot - a shop-wide holiday on top of this barber's day off.
+            var barberClosure = await Client.PostAsync("/api/dates",
+                Body(ClosureBody(ShopClock.Today.AddDays(14), confirm: true, barberId: barberId)));
+            var closureId = (await ReadJson(barberClosure)).GetProperty("id").GetInt32();
+            Assert.Equal(HttpStatusCode.OK, (await Client.PostAsync("/api/dates",
+                Body(ClosureBody(ShopClock.Today.AddDays(14), confirm: true)))).StatusCode);
+
+            var deleted = await Client.PatchAsync($"/api/dates/delete/{closureId}", null);
+
+            Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+            // The shop is still shut that day, so calling this booking fine again would be a lie.
+            Assert.Empty((await ReadJson(deleted)).GetProperty("noLongerClosed").EnumerateArray());
         }
 
         [Fact]
@@ -231,10 +347,11 @@ namespace BarberShopAPI.Tests
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
             using var assertDb = NewDb();
-            Assert.Equal(BookingStatus.CANCELLED,
-                (await assertDb.Bookings.SingleAsync(b => b.Id == closedBarberBookingId)).Status);
-            Assert.Equal(BookingStatus.COMPLETED,
-                (await assertDb.Bookings.SingleAsync(b => b.Id == otherBarberBookingId)).Status);
+            // Both stay COMPLETED now, so the flag is what tells them apart.
+            Assert.True((await assertDb.Bookings.SingleAsync(b => b.Id == closedBarberBookingId)).NeedsReview);
+            var untouched = await assertDb.Bookings.SingleAsync(b => b.Id == otherBarberBookingId);
+            Assert.Equal(BookingStatus.COMPLETED, untouched.Status);
+            Assert.False(untouched.NeedsReview);
         }
 
         [Fact]

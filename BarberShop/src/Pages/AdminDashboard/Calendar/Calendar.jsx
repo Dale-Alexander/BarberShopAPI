@@ -31,6 +31,8 @@ const AdminCalendar = () => {
     // "" = whole shop (BarberId null); otherwise the selected barber's id.
     const [selectedBarberId, setSelectedBarberId] = useState("");
     const [deleteSelectedEvent, setDeleteSelectedEvent] = useState(null);
+    // Bookings a just-deleted closure was holding up - announced, never cleared for them (see below).
+    const [reopened, setReopened] = useState(null);
     const [events, setEvents] = useState([]);
     const [sidebarOpen, setSidebarOpen] = useState(false);
     /* Set when a closure POST comes back 409 because it overlaps existing bookings: holds the backend's
@@ -236,13 +238,20 @@ const AdminCalendar = () => {
             const res = await adminAxios.post(`/api/dates`, payload);
             appendClosureEvent(res.data);
             if (payload.confirmCancelBookings && conflictData) {
-                // Remind the admin about the ones the automatic email can't reach.
-                const callList = conflictData.conflicts.filter(c => !c.willBeEmailed);
+                /* Confirmed bookings aren't cancelled any more - they stay live and go into the worklist, so
+                   the toast has to say that plainly. Telling the admin "cancelled and emailed" while the
+                   appointments are still on, and the customers still expecting them, would be the worst kind
+                   of wrong: they'd stop looking. Only the checkouts are actually gone. */
+                const confirmedCount = conflictData.conflicts.filter(c => c.status !== "PENDING").length;
+                const pendingCount = conflictData.conflicts.length - confirmedCount;
                 showToast(
                     "Closure created",
-                    callList.length > 0
-                        ? `${conflictData.conflicts.length} booking(s) cancelled. ${callList.length} customer(s) with no email are in Needs Review for you to phone.`
-                        : `${conflictData.conflicts.length} booking(s) cancelled and those customers emailed.`
+                    [
+                        confirmedCount > 0
+                            ? `${confirmedCount} confirmed booking(s) are still on and flagged in Needs Review — reassign, move or cancel them.`
+                            : null,
+                        pendingCount > 0 ? `${pendingCount} booking(s) still at checkout were cancelled.` : null,
+                    ].filter(Boolean).join(" ")
                 );
             }
             setConflictData(null);
@@ -272,6 +281,11 @@ const AdminCalendar = () => {
             console.log(shopClosureToDelete?.data?.message);
             setEvents(prev => prev.filter(c => c.id != eventId));
             setDeleteSelectedEvent(null);
+            /* Bookings this closure was holding up. Nothing else shuts their slot now, so their worklist
+               notes describe a closure that no longer exists - the admin is shown which ones to go and
+               clear, the same courtesy a widened schedule and a reactivated barber already extend. */
+            if (shopClosureToDelete?.data?.noLongerClosed?.length)
+                setReopened(shopClosureToDelete.data.noLongerClosed);
         }
         catch (err) {
             console.log(err);
@@ -549,15 +563,14 @@ const AdminCalendar = () => {
                             >
                                 Keep bookings
                             </button>
+                            {/* No longer red or destructive-sounding: confirming closes the shop and flags the
+                                confirmed bookings, it doesn't cancel them. */}
                             <button
                                 className="btn-primary"
-                                style={{ background: "#e74c3c" }}
                                 disabled={submitting}
                                 onClick={confirmClosureWithCancellations}
                             >
-                                {submitting
-                                    ? "Cancelling…"
-                                    : `Cancel ${conflictData.conflicts.length} booking(s) & close`}
+                                {submitting ? "Closing…" : "Close anyway & flag the bookings"}
                             </button>
                         </div>
                     </div>
@@ -691,6 +704,40 @@ const AdminCalendar = () => {
                             >
                                 <Trash2 size={16} />
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* The mirror of the conflict modal: that one warns which bookings a closure holds up, this one
+                says which ones it stopped holding up. */}
+            {reopened && (
+                <div className="modal-overlay" onClick={() => setReopened(null)}>
+                    <div className="cal-reopened-modal" onClick={(e) => e.stopPropagation()}>
+                        <h2>These bookings are back on</h2>
+                        <p>
+                            {reopened.length === 1 ? "This booking was" : "These bookings were"} flagged for review
+                            because the shop was closed for {reopened.length === 1 ? "its" : "their"} slot, and the
+                            event you just deleted was what closed it. Nothing has been cleared for you — open{" "}
+                            <strong>Needs Review</strong> and read each note. If the closure was the only reason it
+                            was flagged, mark it as reviewed. If the note mentions anything else, such as a refund to
+                            sort out or a customer to phone, deal with that first.
+                        </p>
+                        <ul className="cal-reopened-list">
+                            {reopened.map((b) => (
+                                <li key={b.id}>
+                                    <span className="cal-reopened-when">#{b.id} · {b.date} · {b.time}</span>
+                                    <span className="cal-reopened-who">
+                                        {b.customer || "Customer"}{b.phone ? ` · ${formatPhone(b.phone)}` : b.email ? ` · ${b.email}` : ""}
+                                    </span>
+                                    {b.stillBlockedBy && (
+                                        <span className="cal-reopened-blocked">Still blocked: {b.stillBlockedBy}</span>
+                                    )}
+                                </li>
+                            ))}
+                        </ul>
+                        <div className="cal-reopened-actions">
+                            <button className="btn-primary" onClick={() => setReopened(null)}>Got it</button>
                         </div>
                     </div>
                 </div>
