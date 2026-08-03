@@ -14,7 +14,14 @@ namespace BarberShopAPI.Tests
      *   - existing bookings are untouched (no cancel, no refund, no email) - that's DeleteBarber's job;
      *   - the barber keeps their login and dashboard access, because isActive never changes;
      *   - staff can still book and reassign onto them, so the shop can honour a phone request.
-     * Only the two customer-facing queries read it: the public roster and create-pending. */
+     * Only the two customer-facing queries read it: the public roster and create-pending.
+     *
+     * Neither confirmation point (confirm-cash, the Stripe webhook) reads it, and that is DELIBERATE, not a
+     * gap. Both re-check isActive, closures and the schedule before promoting PENDING -> COMPLETED; adding
+     * this flag to that gate would cancel-and-refund a customer who picked the barber while they were still
+     * bookable, for a barber who is still standing behind the chair - the opposite of "existing bookings are
+     * untouched", and harsher than the deactivation case it would sit next to. The last two tests here pin
+     * that down from both directions so the absence can't be mistaken for an oversight later. */
     public class BarberBookableToggleTests : IntegrationTestBase
     {
         public BarberBookableToggleTests(DatabaseFixture fixture) : base(fixture) { }
@@ -116,8 +123,9 @@ namespace BarberShopAPI.Tests
                 b => b.GetProperty("barberId").GetInt32() == barberId);
         }
 
+        /* The gate is at slot-hold time, NOT at checkout - see the two confirmation tests below. */
         [Fact]
-        public async Task Customer_checkout_is_refused_once_the_barber_is_closed_to_new_bookings()
+        public async Task Create_pending_is_refused_once_the_barber_is_closed_to_new_bookings()
         {
             int barberId, serviceId;
             using (var db = NewDb())
@@ -153,6 +161,88 @@ namespace BarberShopAPI.Tests
 
             Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
             Assert.Equal("Barber was not found", (await ReadJson(refused)).GetProperty("message").GetString());
+        }
+
+        // ---------------------------------------------------------------------------------------------
+        // Checkout - a booking already PENDING when the toggle flips
+        // ---------------------------------------------------------------------------------------------
+
+        /// <summary>A PENDING booking at 16:00 two weeks out, whose barber has since been closed to new bookings.</summary>
+        private (string PublicId, int BookingId) ArrangePendingBookingThenClose(string? paymentIntentId = null)
+        {
+            using var db = NewDb();
+            var barber = db.AddBarber();
+            db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30));
+            var booking = db.AddBooking(barber.Id, TestData.FutureAt(14, 16), BookingStatus.PENDING);
+
+            // The order that matters: the customer held the slot while the barber was still bookable, and
+            // the admin closed them during the ~15 minutes it can sit PENDING (BookingExpiryJob).
+            booking.StripePaymentIntentId = paymentIntentId;
+            barber.AcceptsNewBookings = false;
+            db.SaveChanges();
+            return (booking.PublicId, booking.Id);
+        }
+
+        [Fact]
+        public async Task A_pending_cash_booking_still_confirms_after_the_barber_is_closed_to_new_bookings()
+        {
+            var (publicId, bookingId) = ArrangePendingBookingThenClose();
+
+            var response = await Client.PostAsync("/api/bookings/confirm-cash", Body(new
+            {
+                fullName = "Cash Customer",
+                phone = "+35679555001",
+                bookingId = publicId,
+                email = "cash.customer@example.test"
+            }));
+
+            // ConfirmCashBooking's CancelAndReject gate covers deactivation, closures and schedule changes -
+            // this flag is none of those, so the customer gets the ordinary confirmed screen.
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            using var assertDb = NewDb();
+            var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.Equal(BookingStatus.COMPLETED, booking.Status);
+            Assert.Equal(CancellationReason.None, booking.CancellationReason);
+
+            var payment = await assertDb.Payments.SingleAsync(p => p.BookingId == bookingId);
+            Assert.Equal(PaymentMethod.CASH, payment.Method);
+            // Cash is still owed at this point - it settles when staff hit mark-cash-paid on the day.
+            Assert.Equal(PaymentStatus.PENDING, payment.Status);
+
+            // A real confirmation, not a quiet half-success: the customer is told and the reminder is set.
+            Assert.Contains(Factory.EnqueuedEmailJobs(),
+                j => j.Method == "sendBookingConfirmationEmailAsync" && j.BookingId == bookingId);
+            Assert.NotNull(booking.ReminderJobId);
+        }
+
+        [Fact]
+        public async Task A_pending_card_booking_still_confirms_after_the_barber_is_closed_to_new_bookings()
+        {
+            const string paymentIntentId = "pi_test_barber_closed_to_new_bookings";
+            var (_, bookingId) = ArrangePendingBookingThenClose(paymentIntentId);
+            using var stripe = new FakeStripe();
+
+            var response = await Client.SendAsync(StripeWebhookRequest.PaymentIntentSucceeded(bookingId, paymentIntentId));
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            // The point of the whole test: the card is KEPT. If this flag ever leaked into the webhook's
+            // refund-and-cancel gate alongside the isActive/closure/schedule checks, the customer would be
+            // silently refunded and cancelled here - and the only visible symptom would be this count.
+            Assert.Equal(0, stripe.RefundAttempts);
+
+            using var assertDb = NewDb();
+            var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.Equal(BookingStatus.COMPLETED, booking.Status);
+            Assert.Equal(CancellationReason.None, booking.CancellationReason);
+            Assert.False(booking.NeedsReview);
+
+            var payment = await assertDb.Payments.SingleAsync(p => p.BookingId == bookingId);
+            Assert.Equal(PaymentMethod.CARD, payment.Method);
+            Assert.Equal(PaymentStatus.COMPLETED, payment.Status);
+
+            Assert.Contains(Factory.EnqueuedEmailJobs(),
+                j => j.Method == "sendBookingConfirmationEmailAsync" && j.BookingId == bookingId);
         }
 
         [Fact]
