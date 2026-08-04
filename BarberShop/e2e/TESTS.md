@@ -59,7 +59,11 @@ them. What do they actually see?
       Note: a PENDING booking already holds the slot — the roster filters on `Status != CANCELLED`,
       not "confirmed only" — so a customer mid-checkout blocks everyone else from that time.
       `openSlotGrid` / `timeChip` in `helpers.js` drive the picker; reuse them for section E.
-- [ ] A6. The barber's hours are narrowed so the slot falls outside them mid-checkout.
+- [x] A6. The barber's hours are narrowed so the slot falls outside them mid-checkout → the customer
+      is told the SLOT has gone, not the barber. `hours-narrowed.spec.js`
+      Note: this does kill a live checkout. All three schedule save paths hand PENDING conflicts to
+      `BookingConflictCanceller` with `CancellationReason.ScheduleChange`. Confirmed bookings are
+      flagged instead, as everywhere else.
 - [ ] A7. Customer pays, then hits browser Back to the checkout page → must not be able to pay twice.
 - [ ] A8. Customer has the same checkout open in two tabs and pays in one → the other tab must not
       produce a second charge.

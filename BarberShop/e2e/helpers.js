@@ -162,6 +162,29 @@ export async function reviveBarber(api, { fullName, email, password }) {
     if (!res.ok()) throw new Error(`revive failed: ${res.status()} ${await res.text()}`);
 }
 
+/** Every 09:00-17:30 - the hours the fixture seeds, and what specs restore to. */
+export const FULL_WEEK_SHIFTS = Array.from({ length: 7 }, (_, d) => ({
+    DayOfWeek: d, StartTime: "09:00:00", EndTime: "17:30:00",
+}));
+
+/** The barber's current schedule versions, newest rules first. */
+export async function getSchedule(api, barberId) {
+    const res = await api.get(`/api/schedules/barber/${barberId}`);
+    if (!res.ok()) throw new Error(`getSchedule failed: ${res.status()}`);
+    return await res.json();
+}
+
+/* Replaces the shifts on an existing schedule version.
+   ConfirmOrphaned is the second click of the admin's conflict modal: without it the endpoint answers
+   409 and lists the CONFIRMED bookings the change would strand. PENDING ones are never part of that
+   conversation - they are cancelled outright with CancellationReason.ScheduleChange. */
+export async function setShifts(api, scheduleId, shifts, { confirmOrphaned = true } = {}) {
+    const res = await api.put(`/api/schedules/version/${scheduleId}`, {
+        data: { Shifts: shifts, ConfirmOrphaned: confirmOrphaned },
+    });
+    return res; // a 409 is a legitimate outcome some specs assert on
+}
+
 /** Staff cancellation. refundAnyway overrides the 24h no-refund policy. */
 export async function cancelBooking(api, bookingId, { refundAnyway = false } = {}) {
     const res = await api.patch(`/api/bookings/cancel/${bookingId}?refundAnyway=${refundAnyway}`);
