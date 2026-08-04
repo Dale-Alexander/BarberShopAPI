@@ -119,14 +119,22 @@ const SidebarContent = ({ collapsed, showCollapseToggle = false, isCollapsed, se
                             </Box>
                         )}
                         {role === "BARBER" ? (
-                            // Barbers only get the pages they can actually reach: their own bookings and
-                            // their own closures (Calendar). The admin-only pages are hidden rather than
-                            // shown-and-bounced.
+                            // Barbers only get the pages they can actually reach: their own bookings, the
+                            // closures that affect them (Calendar) and the shifts they've been given
+                            // (My Schedule). The last two are read-only - setting either is the admin's.
+                            // The admin-only pages are hidden rather than shown-and-bounced.
                             <>
                                 <Item
                                     title="My Bookings"
                                     to={`/admin/team/${barberId}`}
                                     icon={<PeopleOutlinedIcon />}
+                                    selected={selected}
+                                    setSelected={setSelected}
+                                />
+                                <Item
+                                    title="My Schedule"
+                                    to="/admin/schedules"
+                                    icon={<ScheduleOutlinedIcon />}
                                     selected={selected}
                                     setSelected={setSelected}
                                 />
@@ -155,6 +163,20 @@ const SidebarContent = ({ collapsed, showCollapseToggle = false, isCollapsed, se
                                 >
                                     Data
                                 </Typography>
+                                {/* Only when the admin is a bookable barber themselves (an owner who also
+                                    cuts hair - see ADMIN_IS_BARBER in the seed). They can always reach this
+                                    page through Manage Team; this is the shortcut to their OWN chair, which
+                                    is the one they open every morning. Admins with no barber row get no
+                                    barberId and no item. */}
+                                {barberId != null && (
+                                    <Item
+                                        title="My Bookings"
+                                        to={`/admin/team/${barberId}`}
+                                        icon={<ContentCutOutlinedIcon />}
+                                        selected={selected}
+                                        setSelected={setSelected}
+                                    />
+                                )}
                                 <Item
                                     title="Manage Team"
                                     to="/admin/team"
@@ -274,8 +296,16 @@ const Sidebar = () => {
     useEffect(() => {
         let title = titleRoutes[location.pathname] ?? titleRoutes[location.pathname.split("/").slice(0, 3).join("/")];
         // Barbers reach /admin/team/:id via their own "My Bookings" item, not the admin "Manage Team",
-        // so highlight that instead when a barber is on their bookings page.
+        // so highlight that instead when a barber is on their bookings page. Same for /admin/schedules,
+        // which titleRoutes maps to the admin's "Schedules" but a barber navigates to as "My Schedule" -
+        // without this their sidebar item never highlights on the page they're actually looking at.
         if (user?.role === "BARBER" && location.pathname.startsWith("/admin/team")) title = "My Bookings";
+        if (user?.role === "BARBER" && location.pathname === "/admin/schedules") title = "My Schedule";
+        /* An admin who also cuts hair has both "My Bookings" and "Manage Team" pointing into /admin/team,
+           so the exact id decides which one lights up: their own chair is My Bookings, anyone else's is
+           Manage Team. Without this, opening their own page would highlight Manage Team. */
+        if (user?.role === "ADMIN" && user?.barberId != null
+            && location.pathname === `/admin/team/${user.barberId}`) title = "My Bookings";
         if (title) setSelected(title);
     }, [location.pathname, user?.role]);
     /* the above is used so that when the user goes directly to /admin/team without using the sidebar, the correct link on the sidebar 

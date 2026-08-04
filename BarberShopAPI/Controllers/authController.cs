@@ -163,12 +163,18 @@ namespace BarberShopAPI.Controllers
                     Expires = DateTime.UtcNow.AddDays(1)
                 });
                 Console.WriteLine("Login successful");
-                // Barbers navigate to their own bookings page at /admin/team/{barberId},
-                // which is keyed by the Barber row's Id (NOT the User id). Surface it here
-                // so the frontend can build that route; null for admins, who don't need it.
-                int? barberId = user.Role.ToString() == "BARBER"
-                    ? await _context.Barbers.Where(b => b.UserId == user.Id).Select(b => (int?)b.Id).FirstOrDefaultAsync()
-                    : null;
+                /* Staff navigate to their own bookings page at /admin/team/{barberId}, which is keyed by
+                 * the Barber row's Id (NOT the User id). Surface it here so the frontend can build that
+                 * route.
+                 *
+                 * Looked up for ANY role, not just BARBER. An owner who also cuts hair is one account: role
+                 * ADMIN (what they may do) plus a Barber row (a chair customers can book). Gating this on
+                 * the role would hand that person a null barberId and hide their own chair from them.
+                 * Admins without a Barber row still get null, exactly as before. */
+                int? barberId = await _context.Barbers
+                    .Where(b => b.UserId == user.Id)
+                    .Select(b => (int?)b.Id)
+                    .FirstOrDefaultAsync();
                 return Ok(new
                 {
                     user.Id,
@@ -232,10 +238,12 @@ namespace BarberShopAPI.Controllers
                 /* Load the user from the database. Why this step?
                  * User may have need deleted, role may have changed,account
                  may have been disabeld*/
-                // Same as login: barbers need their Barber row id to reach /admin/team/{barberId}.
-                int? barberId = user.Role.ToString() == "BARBER"
-                    ? await _context.Barbers.Where(b => b.UserId == user.Id).Select(b => (int?)b.Id).FirstOrDefaultAsync()
-                    : null;
+                // Same as login, and for the same reason: looked up for any role, because an owner who
+                // cuts hair is an ADMIN who also owns a Barber row. Null when they have no row.
+                int? barberId = await _context.Barbers
+                    .Where(b => b.UserId == user.Id)
+                    .Select(b => (int?)b.Id)
+                    .FirstOrDefaultAsync();
                 return Ok(new { user.Id, user.Email, user.Role, BarberId = barberId });
 
             /* [Authorize] will automatically return 401 if the token is missing or invalid
