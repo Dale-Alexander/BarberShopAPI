@@ -20,6 +20,10 @@ verification, email retry exhaustion. Those are listed at the bottom.
   what the C# suite is for, and a browser test that checks it has left the browser out of the point.
 - **Never assert on a spinner or an empty state as proof of success.** A test that passes because the
   page never loaded is worse than no test.
+- **If a spec claims to guard a specific fix, mutation-test it**: break the fix, confirm the spec goes
+  red, put the fix back. A7 claimed to guard a caching header, survived the header being removed, and
+  the claim had to be withdrawn. Writing "this protects X" without checking is how a suite ends up
+  full of tests nobody can rely on.
 - Admin specs: `test.use({ storageState: ADMIN_STATE })`. Never log in inside a spec — the login
   endpoint is rate limited to 10/min and a suite that logs in per-spec will start throwing 429s.
 - Customer specs must NOT use the admin state, or they're testing a different application.
@@ -64,7 +68,13 @@ them. What do they actually see?
       Note: this does kill a live checkout. All three schedule save paths hand PENDING conflicts to
       `BookingConflictCanceller` with `CancellationReason.ScheduleChange`. Confirmed bookings are
       flagged instead, as everywhere else.
-- [ ] A7. Customer pays, then hits browser Back to the checkout page → must not be able to pay twice.
+- [x] A7. Customer pays, then hits browser Back to the checkout page → lands on the completed screen,
+      not a live payment form. `pay-twice.spec.js`
+      **Partly covered, and the gap is deliberate.** Mutation-tested by commenting out the
+      `Cache-Control: no-store` headers on the checkout endpoint — the spec still passed, so it does
+      NOT guard those headers. Playwright's `goBack` re-runs the SPA fetch either way. The status
+      guard behind the redirect is covered; the caching fix is not, and would need a different
+      approach (bfcache, or asserting on response headers directly).
 - [ ] A8. Customer has the same checkout open in two tabs and pays in one → the other tab must not
       produce a second charge.
 
