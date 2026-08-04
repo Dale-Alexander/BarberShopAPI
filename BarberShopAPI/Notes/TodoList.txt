@@ -15,6 +15,10 @@ notes about migrations and applicability of changes when changing from null to n
   sent to the backend
   VITE_BASE_URL and STRIPE_PUBLISHABLE_KEY that are used in development should stay in .env (already done) but the ones used in production should be written
   in .env.production(already set up, you just have to replace the values).
+  If an admin who was purely a manager and not a barber suddenly wants to be a barber, you just simply switch ADMIN_IS_BARBER to true and run the seed file(dotnet run -- --seed-admin) again with the same email.(I said again because the account was already created, hence why i said "with the same email") 
+  If the admin doesnt want to be a barber dont forget to set it to false before running the seed file for the first time. Dont forget to replace the name for ADMIN_NAME in env file.
+  If you want to create another admin, just use another email and run the file
+
 
 Check if you the filtered index and not just a normal index.  see what happens when creating a barber, deleting it and creating 
 it with the same email and how that relates to the amount of people. I dont think you even have a statcard in the dashboard showing the amount of different people. 
@@ -49,3 +53,19 @@ Is description in Services required/should you remove it/or nullable?
 Check the "if you had to start over what would you do" list in the A5 booklet in the very last page and see if you can implement some of them.
 
 Edit confirmation email so it displays the booking details aswell.
+
+If you ever need to fire an admin:
+
+-------------------------------------------------------------------------------------------------------------------
+	SET QUOTED_IDENTIFIER ON;
+	UPDATE Users
+	SET Role = 'CUSTOMER', TokenVersion = TokenVersion + 1
+	WHERE Email = 'person@example.com';
+
+	- Role = 'CUSTOMER' — they can never log in or reset password again
+	- TokenVersion + 1 — their current session dies on their next click
+
+	⚠️ SET QUOTED_IDENTIFIER ON is not optional. The Users table has filtered indexes, and without it the UPDATE silently does nothing and reports success. You'd think they were fired when they weren't. Run a SELECT afterwards to confirm.
+
+	If they're also a barber, deactivate their chair in the Team page first so their bookings get handled properly.
+-------------------------------------------------------------------------------------------------------------------
