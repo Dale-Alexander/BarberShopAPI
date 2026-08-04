@@ -6,6 +6,7 @@ import "./TeamMembers.css";
 import useFetch from "../../../Hooks/useFetch";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
 import { ToastContext } from "../../../Context/ToastContext";
+import { AuthContext } from "../../../Context/AuthContext";
 import LoadingSpinner from "../../../Components/LoadingSpinner/LoadingSpinner";
 import ErrorState from "../../../Components/ErrorState/ErrorState";
 import { PulseLoader } from "react-spinners";
@@ -43,6 +44,9 @@ stored i the browser's memory which the backend cant access*/
     // boolean so one slow toggle doesn't freeze the buttons on every other card.
     const [togglingBookableId, setTogglingBookableId] = useState(null);
     const { showToast } = useContext(ToastContext);
+    // An admin who also cuts hair has their own row in this list; the deactivate warning is worded
+    // differently when it's them reading it about themselves.
+    const { user } = useContext(AuthContext);
     const createModalContainerRef = useRef(null);
 
     // Active / Inactive tabs. The list endpoint returns both, so switching is a pure client-side
@@ -90,7 +94,13 @@ stored i the browser's memory which the backend cant access*/
             // they'll be picking up in Needs Review, and which unconfirmed ones just get dropped.
             if (err.response?.status === 409 && err.response.data?.requiresConfirmation) {
                 setDeleteBarberId(null);
-                setDeactivateConflict({ barberId: id, ...err.response.data });
+                // isAdmin rides along so the modal's warning can tell the truth: an admin's login and
+                // password survive deactivation, a barber's don't.
+                setDeactivateConflict({
+                    barberId: id,
+                    isAdmin: !!barbers.find(b => b.id === id)?.isAdmin,
+                    ...err.response.data,
+                });
             } else {
                 showToast("Couldn't deactivate barber", getErrorMessage(err));
             }
@@ -683,7 +693,13 @@ stored i the browser's memory which the backend cant access*/
                 <div className="modal-overlay" onClick={() => !submitting && setDeactivateConflict(null)}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
                         <div className="modal-header">
-                            <h2>Upcoming bookings for this barber</h2>
+                            <h2>
+                                {deactivateConflict.isAdmin
+                                    ? (deactivateConflict.barberId === user?.barberId
+                                        ? "Upcoming bookings on your chair"
+                                        : "Upcoming bookings for this manager")
+                                    : "Upcoming bookings for this barber"}
+                            </h2>
                             <button className="modal-close" onClick={() => !submitting && setDeactivateConflict(null)}>
                                 <X size={20} />
                             </button>
@@ -711,11 +727,30 @@ stored i the browser's memory which the backend cant access*/
                                 ))}
                             </ul>
 
+                            {/* An admin's dashboard access comes from their role, not their barber row, so
+                                closing their chair takes no login away and they stay signed in - saying
+                                otherwise would be plainly false. The "close to new bookings instead"
+                                nudge is dropped for their own row: they're reading it about themselves
+                                and already know which they meant. */}
                             <p style={{ color: "var(--muted-fg)", fontSize: 13, lineHeight: 1.6, marginTop: 16 }}>
-                                Confirming deactivates the barber and revokes their login. Their confirmed appointments are
-                                <strong> not cancelled</strong> — they stay live and appear in your Needs Review list, where you
-                                can reassign each one to another barber or cancel it. Those customers are not notified until you
-                                decide. Only unconfirmed bookings still at checkout are cancelled automatically.
+                                {deactivateConflict.isAdmin ? (
+                                    <>
+                                        Confirming closes {deactivateConflict.barberId === user?.barberId ? "your" : "their"} chair
+                                        so customers can no longer book {deactivateConflict.barberId === user?.barberId ? "you" : "them"}.
+                                        {" "}{deactivateConflict.barberId === user?.barberId ? "You keep" : "They keep"} full admin
+                                        access and {deactivateConflict.barberId === user?.barberId ? "stay" : "stays"} signed in — this is
+                                        an admin account, so no login is revoked. The confirmed appointments are
+                                        <strong> not cancelled</strong> — they stay live and appear in Needs Review to reassign or
+                                        cancel by hand. Only unconfirmed bookings still at checkout are cancelled automatically.
+                                    </>
+                                ) : (
+                                    <>
+                                        Confirming deactivates the barber and revokes their login. Their confirmed appointments are
+                                        <strong> not cancelled</strong> — they stay live and appear in your Needs Review list, where you
+                                        can reassign each one to another barber or cancel it. Those customers are not notified until you
+                                        decide. Only unconfirmed bookings still at checkout are cancelled automatically.
+                                    </>
+                                )}
                             </p>
                         </div>
                         <div className="modal-footer">

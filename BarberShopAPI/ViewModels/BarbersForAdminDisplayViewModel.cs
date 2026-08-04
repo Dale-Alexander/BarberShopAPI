@@ -18,5 +18,10 @@ namespace BarberShopAPI.ViewModels
         // out their notice. The card badges this state and the toggle flips it.
         public bool AcceptsNewBookings { get; set; }
         public string Email { get; set; }
+        /* True when this chair belongs to an ADMIN account - an owner or manager who also cuts hair.
+         * Deactivating them does NOT revoke their login (their dashboard access comes from the role, not
+         * the Barber row), and reactivating them doesn't reset their password, so the team screen's
+         * warnings have to say something different for these rows or they'd simply be untrue. */
+        public bool IsAdmin { get; set; }
     }
 }

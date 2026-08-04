@@ -170,51 +170,16 @@ namespace BarberShopAPI.Controllers
                                    TotalBookings = b.Bookings.Count(bk => bk.Status == BookingStatus.COMPLETED),
                                    IsActive = b.isActive,
                                    AcceptsNewBookings = b.AcceptsNewBookings,
-                                   Email = b.User.Email
+                                   Email = b.User.Email,
+                                   IsAdmin = b.User.Role == Role.ADMIN
                                });
             var result = await BarbersList.ToListAsync();
             return Ok(result);
         }
-        // Same rules customer names go through in BookingsController.IsValidName: non-empty,
-        // at least 2 real characters, and no digits - a barber is a person, not "123".
-        private bool IsValidName(string name)
-        {
-            if (string.IsNullOrWhiteSpace(name)) return false;
-            if (name.Trim().Length < 2) return false;
-            if (name.Any(char.IsDigit)) return false;
-            // The name is split into first/last and stored in User.Name/User.Surname, each nvarchar(50).
-            // Validate against the same split so an over-long part gets a clean 400 here instead of a
-            // truncation error on save.
-            var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            var firstName = parts.Length > 0 ? parts[0] : "";
-            var lastName = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
-            if (firstName.Length > 50 || lastName.Length > 50) return false;
-            return true;
-        }
-
-        // The default schedule handed to a brand-new barber (and to a revived one with no schedule
-        // to reuse): one open-ended current version, every weekday 09:00-17:30 - the shop's historic
-        // hardcoded hours, kept in step with the day-one seed migration. Guarantees no barber ever
-        // exists in an unbookable "no schedule" state. The admin refines it in the schedule editor.
-        private static BarberSchedule BuildDefaultSchedule()
-        {
-            var schedule = new BarberSchedule
-            {
-                EffectiveFrom = ShopClock.Today,
-                EffectiveTo = null,
-                Shifts = new List<BarberScheduleShift>()
-            };
-            for (int d = 0; d < 7; d++)
-            {
-                schedule.Shifts.Add(new BarberScheduleShift
-                {
-                    DayOfWeek = (DayOfWeek)d,
-                    StartTime = new TimeOnly(9, 0),
-                    EndTime = new TimeOnly(17, 30)
-                });
-            }
-            return schedule;
-        }
+        // The default schedule handed to a brand-new barber (and to a revived one with no schedule to
+        // reuse). Moved to Common/DefaultSchedule.cs now that the admin seed needs the same hours - see
+        // that file for why it isn't copy-pasted into both.
+        private static BarberSchedule BuildDefaultSchedule() => DefaultSchedule.Build();
 
         private bool IsUniqueConstraintViolation(DbUpdateException ex)
         /* important that this is private otherwise Swagger might think that it is an endpoint and it doesnt see
@@ -239,7 +204,9 @@ namespace BarberShopAPI.Controllers
                     .FirstOrDefault();
                 return BadRequest(new { message = errors ?? "Invalid request" });
             }
-            if (!IsValidName(request.FullName))
+            // Validates and splits in one go - the halves are used further down, where this used to
+            // re-split the same string by hand.
+            if (!PersonName.TrySplit(request.FullName, out var firstName, out var lastName))
                 return BadRequest(new { message = "Please enter a valid full name" });
             await using var transaction = await _context.Database.BeginTransactionAsync();
             try
@@ -268,11 +235,6 @@ namespace BarberShopAPI.Controllers
                 {
                     finalImageUrl = request.ImageUrl;
                 }
-                var parts = request.FullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                //the above splits by space and ignores extra spaces
-                string firstName = parts.Length > 0 ? parts[0] : "";
-                string lastName = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
-
                 var existingUser = await _context.Users.Include(u => u.Barber).FirstOrDefaultAsync(b => b.Email == request.Email);
 
                 if (existingUser != null)
@@ -294,11 +256,25 @@ namespace BarberShopAPI.Controllers
                     }
                     else
                     {
+                        /* An ADMIN who also cuts hair owns a Barber row like anyone else, so reactivating
+                         * their chair lands here - and the three credential lines below would quietly take
+                         * the shop off them: demoted to BARBER, password overwritten with whatever was typed
+                         * in the modal, and signed out. Recoverable only from the database.
+                         *
+                         * Reviving a chair says nothing about the person's rank or their login. For an admin
+                         * we reactivate the barber row and touch neither: no role change, no password, no
+                         * TokenVersion bump. The credential reset exists for a returning EMPLOYEE, where the
+                         * admin is handing out a fresh password and needs to be sure it's the one in use. */
+                        var isAdminAccount = existingUser.Role == Role.ADMIN;
+
                         existingUser.Name = firstName;
                         existingUser.Surname = lastName;
                         existingUser.Email = request.Email;
-                        existingUser.Password = BCrypt.Net.BCrypt.HashPassword(request.Password);
-                        existingUser.Role = Role.BARBER;
+                        if (!isAdminAccount)
+                        {
+                            existingUser.Password = BCrypt.Net.BCrypt.HashPassword(request.Password);
+                            existingUser.Role = Role.BARBER;
+                        }
                         existingUser.Barber.isActive = true;
                         // Reset the bookable flag too. A barber who was closed to new bookings while working
                         // their notice keeps that flag through deactivation, so without this they'd come back
@@ -336,8 +312,11 @@ namespace BarberShopAPI.Controllers
 
                             existingUser.Barber.ImageUrl = finalImageUrl;
                         }
-                        existingUser.TokenVersion++;
-                        /* Why increment instead of resetting to 0 ? 
+                        // Skipped for an admin: the reasoning below is about forcing a returning employee
+                        // onto the new password, and no new password was set for them. Bumping it would
+                        // only bounce the owner to the login screen for reopening their own chair.
+                        if (!isAdminAccount) existingUser.TokenVersion++;
+                        /* Why increment instead of resetting to 0 ?
                          * Resetting to 0 could theoretically match an old token that also had version 0 from before 
                          * they were deactivated, letting them log in without fresh credentials. Incrementing 
                          * guarantees any old tokens are invalidated and they must log in again with the new password you just set.
@@ -500,12 +479,12 @@ namespace BarberShopAPI.Controllers
 
             if (request.FullName != null)
             {
-                // IsValidName also caps each split part at 50 to match User.Name/Surname (nvarchar(50)).
-                if (!IsValidName(request.FullName))
+                // TrySplit also caps each half at 50 to match User.Name/Surname (nvarchar(50)), and hands
+                // back the exact halves it validated - so what's checked is what gets stored.
+                if (!PersonName.TrySplit(request.FullName, out var firstName, out var lastName))
                     return BadRequest(new { message = "Please enter a valid full name" });
-                var parts = request.FullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                barber.User.Name = parts.Length > 0 ? parts[0] : "";
-                barber.User.Surname = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
+                barber.User.Name = firstName;
+                barber.User.Surname = lastName;
             }
 
             try
@@ -663,10 +642,15 @@ namespace BarberShopAPI.Controllers
                         WillBeCancelled = b.Status == BookingStatus.PENDING
                     }).ToList();
 
-                    // The softer option is only worth surfacing here, at the moment the admin is about to
-                    // take someone's login away. Deactivating is right when the barber has gone; if they're
-                    // working their notice they can still serve these themselves, and nothing else in the UI
-                    // tells the admin there's another way.
+                    /* The softer option is only worth surfacing here, at the moment the admin is about to
+                     * take someone's login away. Deactivating is right when the barber has gone; if they're
+                     * working their notice they can still serve these themselves, and nothing else in the UI
+                     * tells the admin there's another way.
+                     *
+                     * Except on an ADMIN's chair, where no login is at stake - their dashboard access comes
+                     * from the role, not this row - so the closing sentence would be describing a
+                     * consequence that doesn't happen. */
+                    var isAdminAccount = barber.User != null && barber.User.Role == Role.ADMIN;
                     var message = $"This barber has {conflictDetails.Count} upcoming booking(s). "
                         + (confirmedBookings.Count > 0
                             ? $"The {confirmedBookings.Count} confirmed one(s) will NOT be cancelled - they stay live and are flagged in Needs Review "
@@ -675,8 +659,11 @@ namespace BarberShopAPI.Controllers
                         + (pendingBookings.Count > 0
                             ? $"{pendingBookings.Count} unconfirmed booking(s) still at checkout will be cancelled automatically. "
                             : "")
-                        + "If they're working their notice, close them to new bookings instead - these appointments stand "
-                        + "and they keep their login until the last one is done.";
+                        + (isAdminAccount
+                            ? "This is an admin account, so no login is revoked - only the chair closes. To stop new "
+                              + "bookings without touching these appointments, close them to new bookings instead."
+                            : "If they're working their notice, close them to new bookings instead - these appointments stand "
+                              + "and they keep their login until the last one is done.");
 
                     return Conflict(new
                     {
@@ -694,11 +681,19 @@ namespace BarberShopAPI.Controllers
                 barber.isActive = false;
 
                 var user = await _context.Users.FindAsync(barber.UserId);
-                if (user != null) user.TokenVersion++;
-                /* That's it. When the deactivated barber makes their next request, the middleware will see the token version mismatch and return a 401 —
-                 * locking them out instantly without needing any extra middleware logic.
-                 * Otherwise, If a barber gets deactivated, their JWT is still valid and they can
-                 * still access the dashboard until it expires — which is a real security hole.*/
+                /* BARBER accounts only. When the deactivated barber makes their next request, the middleware
+                 * sees the token version mismatch and returns a 401 - locking them out instantly without any
+                 * extra middleware logic. Otherwise a deactivated barber's JWT stays valid and they can keep
+                 * reaching the dashboard until it expires, which is a real security hole.
+                 *
+                 * An ADMIN who also cuts hair is the exception, and the role tested is the DEACTIVATED
+                 * person's, not the caller's - so it holds whether they closed their own chair or another
+                 * admin closed it for them. Their dashboard access comes from the role, not the Barber row,
+                 * so closing the chair revokes no privilege and the bump protects nothing: they can log
+                 * straight back in anyway (the login block only fires for BARBER accounts). All it would do
+                 * is dump them on the login screen mid-click, which reads as a crash - and it would strand
+                 * them outside the very dashboard they need to deal with the bookings this just flagged. */
+                if (user != null && user.Role == Role.BARBER) user.TokenVersion++;
                 await _context.SaveChangesAsync();
 
                 // Deactivate first (blocks NEW bookings via the isActive availability filter), then deal with
