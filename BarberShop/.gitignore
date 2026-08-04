@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright browser-test output. Regenerated on every run - never committed.
+playwright-report/
+/blob-report/
+/playwright/.cache/

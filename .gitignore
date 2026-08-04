@@ -5,6 +5,11 @@
 
 # dotenv files
 .env
+# The pattern above is an exact match and does NOT cover .env.e2e, which holds the browser tests'
+# database and Stripe test keys. The committed template is .env.e2e.example.
+# (Visual Studio's "*.e2e" trace-file pattern further down happens to catch it too - that's a
+# coincidence of naming, not intent, so don't rely on it.)
+.env.e2e
 
 # User-specific files
 *.rsuser

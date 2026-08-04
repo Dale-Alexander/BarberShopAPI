@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e": "dotnet build ../BarberShopAPI/BarberShopAPI.csproj && playwright test",
+    "e2e:headed": "dotnet build ../BarberShopAPI/BarberShopAPI.csproj && playwright test --headed",
+    "e2e:ui": "dotnet build ../BarberShopAPI/BarberShopAPI.csproj && playwright test --ui",
+    "e2e:report": "playwright show-report"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -40,9 +44,11 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.62.1",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
+    "dotenv": "^17.4.2",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",

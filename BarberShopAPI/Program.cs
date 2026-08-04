@@ -15,7 +15,31 @@ using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 
 
-DotNetEnv.Env.Load();
+/* Env.Load OVERWRITES variables already present in the environment, so a test or CI run cannot simply
+ * export DefaultConnection and launch - the developer's .env silently wins and the run chews through the
+ * real dev database. Choosing the FILE is the way round it: this variable is read before the load, so
+ * nothing can clobber it.
+ *
+ * Missing file is a hard failure rather than a fall back to .env. Falling back would point an E2E run at
+ * the dev database, which is the exact accident this exists to prevent, and it would do it silently. */
+var envFile = Environment.GetEnvironmentVariable("BARBERSHOP_ENV_FILE");//PlayWright sets this. when you run the app normally, its unset so this is null. 
+if (!string.IsNullOrWhiteSpace(envFile))
+{
+    // System.IO.File spelled out: `using Stripe;` below brings a Stripe.File into scope too.
+    if (!System.IO.File.Exists(envFile))//Why system.IO.File and not just file? Further down, using Stripe; imports Stripe library and Stripe has its own class called File
+        throw new InvalidOperationException(
+            $"BARBERSHOP_ENV_FILE is set to '{envFile}' but no such file exists. Refusing to fall back to "
+            + ".env, which would point this run at the development database.");
+    /* Why crash instead of carrying on? If we shrugged and loaded .env instead, the tests would run against the real database and quietly destory it. A crash
+     * is louf and costs nothing*/
+    DotNetEnv.Env.Load(envFile);//loads that specific file
+    Console.WriteLine($"Loaded environment from {envFile}");
+}
+else
+{
+    DotNetEnv.Env.Load();//no filename given -> original behaviour, load .env
+}
+
 var builder = WebApplication.CreateBuilder(args);
 var connectionString = Environment.GetEnvironmentVariable("DefaultConnection");
 builder.Services.AddDbContext<BarberShopContext>(options => options.UseSqlServer(connectionString));
@@ -184,6 +208,17 @@ if (args.Contains("--seed-admin"))
     var db = scope.ServiceProvider.GetRequiredService<BarberShopContext>();
     BarberShopAPI.Seed.SeedAdmin.Run(db);
     return; // one-shot maintenance command - never starts the web server
+}
+
+// Same one-shot shape as --seed-admin. Wipes and rebuilds the browser-test fixture, and refuses to run
+// against any database whose name doesn't say it's a test one.
+if (args.Contains("--seed-e2e"))
+{
+    using var scope = app.Services.CreateScope();/* The database connection object is designed to be short lived(normally one per web request). There's no
+                                                  * web request here so we manually create a scope to borrow one from. "using" automatically closes and disposes it when the block ends*/
+    var db = scope.ServiceProvider.GetRequiredService<BarberShopContext>();/* fetches the database object. Required means throw if its missing rather rhan hand back null */
+    BarberShopAPI.Seed.SeedE2E.Run(db);
+    return;//stops the program, the website enver starts
 }
 
 app.Use(async (context, next) =>
