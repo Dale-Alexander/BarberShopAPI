@@ -752,6 +752,14 @@ stored i the browser's memory which the backend cant access*/
                                         <span style={{ color: "var(--muted-fg)", fontSize: 13 }}>
                                             {b.customer || "Customer"}{b.phone ? ` · ${formatPhone(b.phone)}` : b.email ? ` · ${b.email}` : ""}
                                         </span>
+                                        {/* Having their barber back doesn't always make the slot workable - a
+                                            closure may have landed on it while they were away. Only shown when
+                                            something is actually in the way. */}
+                                        {b.stillBlockedBy && (
+                                            <span style={{ color: "#b45309", fontSize: 12, marginTop: 2 }}>
+                                                Still blocked: {b.stillBlockedBy}
+                                            </span>
+                                        )}
                                     </li>
                                 ))}
                             </ul>

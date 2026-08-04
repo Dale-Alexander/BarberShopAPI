@@ -192,14 +192,6 @@ namespace BarberShopAPI.Controllers
             return true;
         }
 
-        /* The distinctive part of the note DeleteBarber leaves on a departing barber's live bookings, kept
-         * as a constant because the revive branch has to recognise its own handiwork later: bring the
-         * barber back and those bookings are fine again, so the admin is shown which ones to go and clear.
-         * Same trick as SchedulesController.OutsideHoursNote - matching on a sentence is only safe while
-         * that sentence has exactly one author. The barber's name and the appointment time sit either side
-         * of it, which is why the marker is a fragment rather than the whole note. */
-        private const string BarberLeftMarker = "has left the shop, and this booking is still live";
-
         // The default schedule handed to a brand-new barber (and to a revived one with no schedule
         // to reuse): one open-ended current version, every weekday 09:00-17:30 - the shop's historic
         // hardcoded hours, kept in step with the day-one seed migration. Guarantees no barber ever
@@ -380,24 +372,22 @@ namespace BarberShopAPI.Controllers
                          * a reassigned one sits on a different chair and a cancelled one isn't COMPLETED. */
                         var nowMalta = ShopClock.Now;
                         var revivedBarberId = existingUser.Barber.Id;
-                        var backOnDuty = await _context.Bookings
+                        var stranded = await _context.Bookings
                             .Include(bk => bk.User)
                             .Where(bk => bk.BarberId == revivedBarberId
                                          && bk.Status == BookingStatus.COMPLETED
                                          && bk.StartDateTime > nowMalta
                                          && bk.NeedsReview
                                          && bk.ReviewReason != null
-                                         && bk.ReviewReason.Contains(BarberLeftMarker))
-                            .Select(bk => new
-                            {
-                                bk.Id,
-                                Date = bk.StartDateTime.ToString("dddd, MMMM d, yyyy"),
-                                Time = bk.StartDateTime.ToString("h:mm tt"),
-                                Customer = bk.User != null ? (bk.User.Name + " " + bk.User.Surname).Trim() : null,
-                                Email = bk.ContactEmail,
-                                Phone = bk.User != null ? bk.User.Phone : null
-                            })
+                                         && bk.ReviewReason.Contains(ReviewMarkers.BarberLeft))
                             .ToListAsync();
+
+                        /* Scoped to THIS barber being back and nothing else. A closure created over the slot
+                         * while they were away leaves its own note, which the admin reads - filtering those
+                         * out here would hide that the departure problem really is resolved. Same rule as the
+                         * widened-hours list: each one vouches for its own dimension only, and says on each
+                         * row (StillBlockedBy) whether anything else about the slot is still in the way. */
+                        var backOnDuty = await BookingSlotGuard.DescribeAsync(_context, stranded);
 
                         // Return the same shape as the create branch below, and the same shape the admin
                         // team list is built from - the caller drops this straight into its list. The id
@@ -727,7 +717,7 @@ namespace BarberShopAPI.Controllers
                 foreach (var booking in confirmedBookings)
                 {
                     booking.FlagForReview(
-                        $"{barberName} {BarberLeftMarker} - {booking.StartDateTime:MMM d 'at' h:mm tt}. "
+                        $"{barberName} {ReviewMarkers.BarberLeft} - {booking.StartDateTime:MMM d 'at' h:mm tt}. "
                         + "The customer has NOT been told. Reassign it to another barber or cancel it."
                         + (string.IsNullOrWhiteSpace(booking.ContactEmail)
                             ? $" No email on file - reach them on {(string.IsNullOrWhiteSpace(booking.User?.Phone) ? "the number on the booking" : booking.User!.Phone)}."
