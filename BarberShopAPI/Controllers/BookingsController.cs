@@ -60,21 +60,6 @@ namespace BarberShopAPI.Controllers
             }
         }
 
-        private bool IsValidName(string name)
-        {
-            if (string.IsNullOrWhiteSpace(name)) return false;
-            if (name.Trim().Length < 2) return false;//at least 2 chars long
-            if (name.Any(c => char.IsDigit(c))) return false;//no digits
-            // The name is split into first/last and stored in User.Name/User.Surname, each nvarchar(50).
-            // Validate against the same split so an over-long part gets a clean 400 here instead of a
-            // truncation error on save.
-            var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            var firstName = parts.Length > 0 ? parts[0] : "";
-            var lastName = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
-            if (firstName.Length > 50 || lastName.Length > 50) return false;
-            return true;
-        }
-
         [Authorize(Roles = "ADMIN,BARBER")]
         [HttpPost("create-admin-booking")]
         public async Task<IActionResult> CreateAdminBookings([FromBody] AdminCreateBookingCreateViewModel model)
@@ -151,15 +136,16 @@ namespace BarberShopAPI.Controllers
                 // Name is optional for staff bookings (e.g. a walk-in known only by phone). Validate it
                 // only when one was actually provided; a blank name is allowed through.
                 var hasName = !string.IsNullOrWhiteSpace(model.FullName);
-                if (hasName && !IsValidName(model.FullName))
+                /* Ordered so TrySplit ALWAYS runs and assigns the halves, even for a nameless walk-in -
+                 * short-circuiting on hasName first would leave them unassigned for the code below. A blank
+                 * name yields "" for both and is allowed through; only a name that was actually supplied
+                 * and is unusable earns the 400. */
+                if (!PersonName.TrySplit(model.FullName, out var firstName, out var lastName) && hasName)
                     return BadRequest(new { message = "Please enter a valid full name" });
                 if (!IsValidPhoneNumber(model.Phone))
                     return BadRequest(new { message = "Invalid phone number" });
 
                 var user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == model.Phone);
-                var parts = model.FullName?.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries) ?? [];
-                var firstName = parts.Length > 0 ? parts[0] : "";
-                var lastName = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
                 if (user == null)
                 {
                     user = new User
@@ -466,7 +452,7 @@ namespace BarberShopAPI.Controllers
                 var existingPayment = await _context.Payments.FirstOrDefaultAsync(p => p.BookingId == booking.Id);
                 if (existingPayment != null) return BadRequest(new { message = "A payment already exists for this booking" });
 
-                if (!IsValidName(model.FullName))
+                if (!PersonName.TrySplit(model.FullName, out var firstName, out var lastName))
                     return BadRequest(new { message = "Please enter a valid full name" });
                 if (!IsValidPhoneNumber(model.Phone))
                     return BadRequest(new { message = "Invalid phone number" });
@@ -485,10 +471,6 @@ namespace BarberShopAPI.Controllers
                     return BadRequest(new { message = "This booking has no payable services" });
 
                 var user = await _context.Users.FirstOrDefaultAsync(u => u.Phone == model.Phone);
-                var parts = model.FullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                //the above splits by space and ignores extra spaces
-                string firstName = parts.Length > 0 ? parts[0] : "";
-                string lastName = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
                 if (user == null)
                 {
                     user = new User
@@ -671,7 +653,8 @@ namespace BarberShopAPI.Controllers
                 if (booking.Status != BookingStatus.PENDING)
                     return BadRequest(new { message = "This booking can no longer be paid for" });
 
-                if (!IsValidName(request.FullName))
+                // Validation only here - this path doesn't store the name, so the halves are discarded.
+                if (!PersonName.TrySplit(request.FullName, out _, out _))
                     return BadRequest(new { message = "Please enter a valid full name" });
                 if (!IsValidPhoneNumber(request.Phone))
                     return BadRequest(new { message = "Invalid phone number" });
@@ -861,29 +844,18 @@ namespace BarberShopAPI.Controllers
          * barber could read another barber's clients/phone numbers just by editing the id (IDOR).
          * Admins may view any barber; a barber may only view the barberId tied to their own user.
          *
-         * The isActive predicate is defence in depth. A deactivated barber shouldn't be able to reach
-         * these endpoints anyway - Login refuses to issue them a token and DeleteBarber's TokenVersion
-         * bump kills any they still hold - but that leans entirely on login being the only place a token
-         * is minted. This costs nothing (it's one more predicate on a query that already runs) and keeps
-         * the guard honest if a refresh-token or SSO path is ever added. */
-        private async Task<bool> BarberCanAccess(int barberId)
-        {
-            if (User.IsInRole("ADMIN")) return true;
-            var callerUserId = int.Parse(User.FindFirst("id")?.Value ?? "0");
-            return await _context.Barbers.AnyAsync(b => b.Id == barberId && b.UserId == callerUserId && b.isActive);
-        }
+         * Both this and CallerBarberId are now thin wrappers over Common/CallerBarber.cs, which
+         * DatesController and SchedulesController share. They used to be private copies here, hand-synced
+         * with a duplicate in DatesController; see that file for why they were pulled out. The wrappers
+         * stay because every call site below reads better as a plain method call. */
+        private Task<bool> BarberCanAccess(int barberId) => User.CanAccessBarberAsync(_context, barberId);
 
         /* The caller's own Barber.Id when they're a BARBER, or null if they have no barber row - or if
-         * that row is deactivated, same defence-in-depth reasoning as BarberCanAccess above. Returning
-         * null makes the ownership checks in cancel / mark-cash-paid / update-booking fail closed, since
-         * booking.BarberId can never equal null.
+         * that row is deactivated. Returning null makes the ownership checks in cancel / mark-cash-paid /
+         * update-booking fail closed, since booking.BarberId can never equal null.
          * Used by the booking-mutation endpoints below to keep a barber's actions to their own
          * chair; ADMIN callers are checked with User.IsInRole and never rely on this. */
-        private async Task<int?> CallerBarberId()
-        {
-            var callerUserId = int.Parse(User.FindFirst("id")?.Value ?? "0");
-            return await _context.Barbers.Where(b => b.UserId == callerUserId && b.isActive).Select(b => (int?)b.Id).FirstOrDefaultAsync();
-        }
+        private Task<int?> CallerBarberId() => User.CallerBarberIdAsync(_context);
 
         [Authorize(Roles ="ADMIN,BARBER")]
         [HttpGet("barber-fetch/{barberId}")]
