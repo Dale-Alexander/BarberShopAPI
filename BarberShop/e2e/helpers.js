@@ -125,6 +125,20 @@ export async function createClosure(api, { date, barberId = null, reason = "E2E 
 /** The yyyy-MM-dd date part of a slot string, which is what closures are keyed on. */
 export const dateOf = (slot) => slot.split("T")[0];
 
+/* Takes a PENDING booking all the way to COMPLETED the way a customer choosing "pay at the shop"
+   does - no Stripe involved, so specs that only need a CONFIRMED booking don't have to drive a card
+   form. Confirming is what creates the User and the Payment row, which is also what makes the
+   booking visible to admin-fetch. */
+export async function confirmAsCash(request, publicId, {
+    fullName = "Test Customer", phone = "+35679123456", email = "customer@e2e.test",
+} = {}) {
+    const res = await request.post("/api/bookings/confirm-cash", {
+        data: { BookingId: publicId, FullName: fullName, Phone: phone, Email: email },
+    });
+    if (!res.ok()) throw new Error(`confirm-cash failed: ${res.status()} ${await res.text()}`);
+    return await res.json();
+}
+
 /** Staff cancellation. refundAnyway overrides the 24h no-refund policy. */
 export async function cancelBooking(api, bookingId, { refundAnyway = false } = {}) {
     const res = await api.patch(`/api/bookings/cancel/${bookingId}?refundAnyway=${refundAnyway}`);

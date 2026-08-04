@@ -41,9 +41,13 @@ them. What do they actually see?
 
 - [x] A2. A full-day shop closure lands on the slot mid-checkout → customer ends up on the cancelled
       screen with closure wording, not "Booking Confirmed". `checkout-killed.spec.js`
-- [ ] A3. A closure lands **after** the card succeeded (the webhook refund path) → `/summary` must
-      not show "Booking Confirmed"; it should land on the cancelled screen. `Summary.jsx` polls for
-      this - the test needs to allow for that delay rather than assert instantly.
+- [x] A3. A booking cancelled after confirmation never shows as confirmed on the success screen
+      (`/booking/success/:publicId`), allowing for the poll in `Summary.jsx`. `checkout-killed.spec.js`
+      **The premise was wrong and the scenario shrank.** A closure does NOT cancel an already-paid
+      booking — `DatesController` leaves confirmed bookings on their slot with their money and flags
+      them, with a note saying the customer has not been told. The only way a paid booking dies from
+      a closure is the webhook race, which needs Stripe to reach localhost; covered in
+      `WebhookRefundTests`. What's tested here is the success screen's own behaviour.
 - [ ] A4. The barber is deactivated mid-checkout → customer sees the barber-unavailable wording and a
       route back to rebook with someone else.
 - [ ] A5. Someone else takes the same slot first → the second customer gets the "just booked by
@@ -52,6 +56,13 @@ them. What do they actually see?
 - [ ] A7. Customer pays, then hits browser Back to the checkout page → must not be able to pay twice.
 - [ ] A8. Customer has the same checkout open in two tabs and pays in one → the other tab must not
       produce a second charge.
+
+> **Read before writing any more of section A or B.** A closure and a schedule change do NOT cancel
+> a booking that is already confirmed — they FLAG it and leave it standing, money and all, for an
+> admin to reassign, move or cancel by hand. Only PENDING bookings are cancelled outright. Any
+> scenario below phrased as "X cancels the confirmed booking" is wrong about the product; the real
+> outcome is a worklist entry. Barber deactivation is the same story (confirmed bookings survive and
+> are flagged).
 
 ## B. The Needs-Review worklist
 
