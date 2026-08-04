@@ -10,6 +10,7 @@ import LoadingSpinner from "../../Components/LoadingSpinner/LoadingSpinner";
 import { ToastContext } from "../../Context/ToastContext";
 import { BookingDetailsContext } from "../../Context/BookingDetailsContext";
 import { getErrorMessage } from "../../utils/errorMessage.js";
+import { formatEuro } from "../../utils/money.js";
 const AlreadyPaid = () => {
     const { bookingId } = useParams();
     const [bookingDetails, setBookingDetails] = useState(null);
@@ -161,7 +162,7 @@ const AlreadyPaid = () => {
                             {bookingDetails?.paymentMethod && (
                                 <div>
                                     <p className="ap-receipt__footer-label">Amount</p>
-                                    <p className="ap-receipt__footer-amount">&euro;{bookingDetails?.amountPaid}</p>
+                                    <p className="ap-receipt__footer-amount">{formatEuro(bookingDetails?.amountPaid)}</p>
                                 </div>
                             )}
                             <div className={`ap-receipt__footer-badge ${isCancelled ? "ap-receipt__footer-badge--cancelled" : "ap-receipt__footer-badge--paid"}`}>

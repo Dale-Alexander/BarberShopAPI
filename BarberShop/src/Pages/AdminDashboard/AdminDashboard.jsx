@@ -13,6 +13,7 @@ import { ChevronRight } from 'lucide-react';
 import useFetchBookings from "../../Hooks/UseFetchBookings.js";
 import { fetchAdminSummary } from "../../utils/FetchAdminSummary.js";
 import { getErrorMessage } from "../../utils/errorMessage.js";
+import { formatEuro } from "../../utils/money.js";
 import ErrorState from "../../Components/ErrorState/ErrorState.jsx";
 import { ToastContext } from "../../Context/ToastContext.jsx";
 
@@ -159,7 +160,7 @@ const AdminDashboard = () => {
         "July", "August", "September", "October", "November", "December"];
     const chartPeriodLabel = selectedMonth === null ? `${selectedYear}` : `${monthNamesFull[selectedMonth]} ${selectedYear}`;
     const chartTotalText = isRevenue
-        ? `€${chartTotal.toLocaleString()}`
+        ? formatEuro(chartTotal)
         : `${chartTotal} booking${chartTotal === 1 ? "" : "s"}`;
 
 
@@ -175,7 +176,7 @@ const AdminDashboard = () => {
             </div>
             <div className="home-page-sections">
                 <div className="home-page-stats-grid">
-                    <StatCard title={"Revenue"} value={`€${thisMonthRevenue.toLocaleString()}`} increase={`${revenueIncreaseOrDecrease}${revenuePercentage}%`} trend={revenueIncreaseOrDecrease} icon={<EuroIcon />} progress={revenuePercentage} />
+                    <StatCard title={"Revenue"} value={formatEuro(thisMonthRevenue)} increase={`${revenueIncreaseOrDecrease}${revenuePercentage}%`} trend={revenueIncreaseOrDecrease} icon={<EuroIcon />} progress={revenuePercentage} />
                     <StatCard title={"Bookings"} value={thisMonthBookings} increase={`${bookingIncreaseOrDecrease}${bookingPercentage}%`} trend={bookingIncreaseOrDecrease} icon={<BookmarkIcon />} progress={bookingPercentage} />
                 </div>
                 < div className="home-page-middle-grid">

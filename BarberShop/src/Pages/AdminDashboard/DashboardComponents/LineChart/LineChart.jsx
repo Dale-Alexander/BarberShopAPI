@@ -2,6 +2,7 @@ import "./LineChart.css";
 import { Line } from "react-chartjs-2";
 import { Chart as ChartJS } from "chart.js/auto";
 import { ArrowLeft } from "lucide-react";
+import { formatEuro } from "../../../../utils/money.js";
 
 /* The aggregation now happens server-side (admin-summary): `monthly` is a 12-element array of
  * { count, revenue } for the selected year, and `daily` is that month's per-day series once a month is
@@ -62,7 +63,10 @@ const LineChart = ({ showRevenue, selectedYear, selectedMonth, setSelectedMonth,
                         label: function (ctx) {
                             //ctx is the context object representing the data point being hovered
                             if (showRevenue) {
-                                return ` €${ctx.parsed.y.toLocaleString()}`;
+                                // The hovered point is a real revenue figure, so it gets the decimals.
+                                // The y-axis ticks below deliberately stay whole - they're a scale, not
+                                // an amount, and "€1,200.00" on every gridline is just noise.
+                                return ` ${formatEuro(ctx.parsed.y)}`;
                             }
                             else {
                                 return ` ${ctx.parsed.y} bookings`;

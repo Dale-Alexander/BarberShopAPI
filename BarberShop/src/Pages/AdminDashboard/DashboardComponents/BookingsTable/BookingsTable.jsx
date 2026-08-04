@@ -11,6 +11,7 @@ import LoadingSpinner from "../../../../Components/LoadingSpinner/LoadingSpinner
 import ErrorState from "../../../../Components/ErrorState/ErrorState.jsx";
 import { getErrorMessage } from "../../../../utils/errorMessage.js";
 import { formatPhone } from "../../../../utils/phone.js";
+import { formatEuro } from "../../../../utils/money.js";
 import useFetch from "../../../../Hooks/useFetch.js";
 
 const getMaltaNow = () =>
@@ -463,7 +464,10 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                                 <td className="table-data" data-label="Date & Time">{format(new Date(b.startDateTime), "dd-MM-yyyy")} <br />
                                     {format(new Date(b.startDateTime), "HH:mm")}
                                 </td>
-                                <td className="table-data col-amount" data-label="Amount">{b.amount}</td>
+                                {/* Was the bare number - no currency and no decimals, so a €25.50 booking
+                                    read "25.5" in a column headed "Amount". Dash when nothing is on file
+                                    yet, matching the barber's own table and the Payment cell below. */}
+                                <td className="table-data col-amount" data-label="Amount">{formatEuro(b.amount) ?? <span className="no-actions">&mdash;</span>}</td>
                                 <td className="table-data" data-label="Status">
                                     <span className={`booking-status-badge ${isCancelled(b) ? "status-cancelled" : "status-confirmed"}`}>
                                         {isCancelled(b) ? "Cancelled" : "Confirmed"}

@@ -9,6 +9,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useState, useEffect, useContext } from "react";
 import LoadingSpinner from "../../Components/LoadingSpinner/LoadingSpinner";
 import { getErrorMessage } from "../../utils/errorMessage.js";
+import { formatEuro } from "../../utils/money.js";
 import { ToastContext } from "../../Context/ToastContext";
 const AlreadyPaid = () => {
     const { bookingId } = useParams();
@@ -210,7 +211,7 @@ const AlreadyPaid = () => {
 
                             <div className = "ap-receipt__footer">
                                 <p className="ap-receipt__footer-label-2">Total</p>
-                                <p className="ap-receipt__footer-amount">&euro;{bookingDetails?.amountPaid}</p>
+                                <p className="ap-receipt__footer-amount">{formatEuro(bookingDetails?.amountPaid)}</p>
                             </div>
                     </div>
 

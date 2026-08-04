@@ -14,6 +14,7 @@ import useFetchBarberBookings from "../../Hooks/UseFetchBarberBookings.js";
 import { fetchBarberSummary } from "../../utils/FetchBarberSummary.js";
 import Pagination from "../../Components/Pagination/Pagination.jsx";
 import { resolveBarberImage, handleBarberImageError } from "../../utils/barberImage.js";
+import { formatEuro } from "../../utils/money.js";
 import FilterModal from "../AdminDashboard/DashboardComponents/Filter/Filter.jsx";
 import { adminAxios } from "../../Hooks/AxiosInterceptor";
 import useFetch from "../../Hooks/useFetch.js";
@@ -403,7 +404,7 @@ const BarberBookings = () => {
                                             recorded - or an admin's later edit. A dash when none is on file yet
                                             (an admin phone booking not marked paid, or paid without an amount). */}
                                         <td className="barber-bookings-table-data" data-label="Amount">
-                                            {b.amount != null ? `€${b.amount}` : <span className="no-actions">&mdash;</span>}
+                                            {formatEuro(b.amount) ?? <span className="no-actions">&mdash;</span>}
                                         </td>
                                         {/* Labels match the filter's Paid/Unpaid pills - the raw enum used to
                                             read "COMPLETED" for a row the Paid filter had just returned. */}

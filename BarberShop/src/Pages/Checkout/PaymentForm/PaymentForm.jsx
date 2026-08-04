@@ -11,6 +11,7 @@ import usePhone from "../../../Hooks/usePhone";
 import { resolveBarberImage, handleBarberImageError } from "../../../utils/barberImage.js";
 import { validateName, validateNameInline, validateEmail } from "../../../utils/validation.js";
 import { getErrorMessage } from "../../../utils/errorMessage.js";
+import { formatEuro } from "../../../utils/money.js";
 const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, setClientSecret, paymentMethod, setPaymentMethod, phone, setPhone, fullName, setFullName }) => {
     const stripeRef = useRef(null);
     const [loadingPayment, setLoadingPayment] = useState(false);
@@ -347,7 +348,7 @@ In plain terms: they tried to pay by card somewhere else, that payment is alread
                     <div>
                         <div className="checkout-summary__total">
                             <p className="checkout-summary__total-key">Total</p>
-                            <p className="checkout-summary__total-amount">&euro;{bookingDetails?.price}</p>
+                            <p className="checkout-summary__total-amount">{formatEuro(bookingDetails?.price)}</p>
                         </div>
                     </div>
                 </div>
