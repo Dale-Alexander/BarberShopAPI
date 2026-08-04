@@ -2,15 +2,22 @@
 
 The work list for browser tests. **One scenario per spec, tick it off only when it passes.**
 
-Each line is a customer-or-admin-visible outcome. If a line can be proved without a browser, it does
-not belong here — the 188 tests in `BarberShopAPI.Tests` already cover the backend, and duplicating
-them in Playwright buys nothing but a slower, flakier suite.
+Each line is a customer-or-admin-visible outcome.
+
+**Overlapping the C# tests is fine and often the point.** The 188 tests in `BarberShopAPI.Tests`
+prove the backend does the right thing; they say nothing about what appears on screen when it does.
+A scenario already covered there is still worth a spec here whenever there is a screen to look at —
+"the webhook cancels and refunds the booking" is proven, "the customer staring at the checkout page
+finds out" is not.
+
+The only things that don't belong here are the ones with no UI at all: webhook signature
+verification, email retry exhaustion. Those are listed at the bottom.
 
 ## Rules for anything written from this list
 
 - **Assert on what a person sees**, not on internals. "The cancelled screen says their barber is no
-  longer available" is a test. "CancellationReason is BarberUnavailable" is not — that's already
-  covered in C#.
+  longer available" is the test. Reading `CancellationReason` out of the database is not — that's
+  what the C# suite is for, and a browser test that checks it has left the browser out of the point.
 - **Never assert on a spinner or an empty state as proof of success.** A test that passes because the
   page never loaded is worse than no test.
 - Admin specs: `test.use({ storageState: ADMIN_STATE })`. Never log in inside a spec — the login
