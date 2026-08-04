@@ -54,8 +54,11 @@ them. What do they actually see?
       the booking is still PENDING. Confirmed bookings survive and are flagged, same as a closure.
       The spec revives the barber afterwards — there is no reactivate endpoint, you re-POST
       `create-barber` with the same email and it finds the soft-deleted row.
-- [ ] A5. Someone else takes the same slot first → the second customer gets the "just booked by
-      someone else" message and can pick another time.
+- [x] A5. Someone else takes the same slot first → the taken time is not offered in the picker, and
+      booking it anyway is refused with a readable message. `slot-taken.spec.js`
+      Note: a PENDING booking already holds the slot — the roster filters on `Status != CANCELLED`,
+      not "confirmed only" — so a customer mid-checkout blocks everyone else from that time.
+      `openSlotGrid` / `timeChip` in `helpers.js` drive the picker; reuse them for section E.
 - [ ] A6. The barber's hours are narrowed so the slot falls outside them mid-checkout.
 - [ ] A7. Customer pays, then hits browser Back to the checkout page → must not be able to pay twice.
 - [ ] A8. Customer has the same checkout open in two tabs and pays in one → the other tab must not

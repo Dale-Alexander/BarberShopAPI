@@ -168,6 +168,25 @@ export async function cancelBooking(api, bookingId, { refundAnyway = false } = {
     if (!res.ok()) throw new Error(`cancel failed: ${res.status()} ${await res.text()}`);
 }
 
+/* Walks the customer booking page as far as the time grid: pick the barber, pick the day.
+   Only works for a date inside the currently shown month, which every helper here stays within
+   (slotInDays is used with small offsets on purpose). */
+export async function openSlotGrid(page, { barberFirstName, slot }) {
+    await page.goto("/datetime");
+    await page.locator(".bp-barber-card", { hasText: barberFirstName }).click();
+
+    const dayNumber = String(Number(dateOf(slot).split("-")[2])); // "07" -> "7", matching format(day,"d")
+    await page.locator(".bp-cal-day:not([disabled])").filter({ hasText: new RegExp(`^${dayNumber}$`) }).first().click();
+
+    // The grid only renders once a date is chosen; waiting on a chip avoids reading an empty grid
+    // and concluding "no slots", which would let a spec pass for the wrong reason.
+    await page.locator(".bp-time-chip").first().waitFor();
+}
+
+/** A single time chip in the grid, e.g. "11:00". */
+export const timeChip = (page, hhmm) =>
+    page.locator(".bp-time-chip").filter({ hasText: new RegExp(`^${hhmm}$`) });
+
 /** The barber names a customer is currently offered on the booking page. */
 export async function visibleBarberNames(page) {
     await page.goto("/datetime");
