@@ -7,6 +7,7 @@ using System.Text.Encodings.Web;
 using BarberShopAPI.Common;
 using Hangfire;
 using Hangfire.Server;
+using System.Globalization;
 
 namespace BarberShopAPI.Services
 {
@@ -70,14 +71,99 @@ namespace BarberShopAPI.Services
             _resend = resend;
             _context = context;
         }
+        /* The navigations RenderBookingDetails needs. Shared so the confirmation and the update email can't
+         * drift into loading different things and rendering different receipts. */
+        private IQueryable<Models.Booking> BookingsWithDetails() =>
+            _context.Bookings
+                .Include(b => b.User)
+                .Include(b => b.Barber).ThenInclude(br => br.User)
+                .Include(b => b.Services).ThenInclude(bs => bs.Service)
+                .Include(b => b.Payment);
+
+        /* The receipt the customer already sees on the confirmation screen (Summary.jsx), rendered for
+         * email. One helper because the confirmation and the update email have to agree - an update that
+         * restated the appointment differently from the original confirmation would read like a second,
+         * separate booking rather than a correction of the first.
+         *
+         * Same rows, same order, same formats as the screen. Two deliberate differences: the total is
+         * always 2dp (a receipt reading "EUR 25.5" looks broken in a way a web page's live total doesn't)
+         * and the payment method is title-cased, because "CASH" shouting out of a sentence-case email is
+         * not the same as "CASH" sitting in a receipt table.
+         *
+         * Everything is null/empty-guarded rather than assumed. This runs inside a Hangfire job: a booking
+         * that somehow has no Payment row would throw on .Method, the job would fail, and the customer
+         * would get NO confirmation at all - the whole email lost over a line that only prints "Cash". */
+        private static (string Html, string Text) RenderBookingDetails(Models.Booking booking)
+        {
+            var serviceNames = booking.Services?
+                .Select(bs => bs.Service?.Name)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .ToList() ?? new List<string?>();
+
+            var barberName = booking.Barber?.User != null
+                ? $"{booking.Barber.User.Name} {booking.Barber.User.Surname}".Trim()
+                : null;
+
+            // Matches Summary.jsx's AmountPaid: the services' own prices, not Payment.Amount (which is
+            // what was actually collected and can be edited down by staff after a discount).
+            var total = booking.Services?.Sum(bs => bs.Service?.Price ?? 0m) ?? 0m;
+
+            var rows = new (string Label, string? Value)[]
+            {
+                ("Barber", barberName),
+                (serviceNames.Count > 1 ? "Services" : "Service", serviceNames.Count > 0 ? string.Join(", ", serviceNames) : null),
+                ("Date", booking.StartDateTime.ToString("dddd, MMMM d, yyyy")),
+                ("Time", booking.StartDateTime.ToString("h:mm tt")),
+                ("Payment Method", booking.Payment?.Method switch
+                {
+                    PaymentMethod.CASH => "Cash",
+                    PaymentMethod.CARD => "Card",
+                    PaymentMethod.ONLINE => "Online",
+                    _ => null
+                }),
+                ("Booking ID", booking.Id.ToString())
+            };
+
+            // InvariantCulture so the amount is "25.50" wherever the server happens to be running - a
+            // culture that uses a comma decimal separator would email "EUR 25,50".
+            var totalText = "€" + total.ToString("N2", CultureInfo.InvariantCulture);
+
+            var htmlRows = string.Join("", rows.Select(r => $@"
+            <tr>
+                <td style=""padding:6px 16px 6px 0;color:#888;font-size:14px;"">{WebUtility.HtmlEncode(r.Label)}</td>
+                <td style=""padding:6px 0;font-size:14px;""><strong>{WebUtility.HtmlEncode(r.Value ?? "—")}</strong></td>
+            </tr>"));
+
+            var html = $@"
+        <table cellpadding=""0"" cellspacing=""0"" style=""border-collapse:collapse;margin:16px 0;"">{htmlRows}
+            <tr>
+                <td style=""padding:12px 16px 0 0;color:#888;font-size:14px;border-top:1px solid #e5e5e5;"">Total</td>
+                <td style=""padding:12px 0 0 0;font-size:16px;border-top:1px solid #e5e5e5;""><strong>{totalText}</strong></td>
+            </tr>
+        </table>";
+
+            var text = string.Join("\n", rows.Select(r => $"{r.Label}: {r.Value ?? "—"}"))
+                       + $"\nTotal: {totalText}";
+
+            return (html, text);
+        }
+
         public async Task sendBookingConfirmationEmailAsync(int bookingId)
         {
-            var booking = await _context.Bookings.Include(b => b.User).FirstOrDefaultAsync(b => b.Id == bookingId);
+            var booking = await BookingsWithDetails().FirstOrDefaultAsync(b => b.Id == bookingId);
             if (booking == null) return;
             if (booking.Status == BookingStatus.CANCELLED) return;
             if (booking.ConfirmationSentAt != null) return;
+            /* Both callers (the webhook and confirm-cash) set ContactEmail and link a User before enqueuing
+             * this, so neither guard fires today - but this method was the only one of the eight without
+             * them, and the two failure modes are silent rather than harmless: a null ContactEmail throws
+             * inside To.Add and a null User throws on .Name, so the job dies and the customer is left with a
+             * booking they were never told about. Matches the guards every sibling email already has, and
+             * the "there" fallback the password-reset email uses. */
+            if (string.IsNullOrWhiteSpace(booking.ContactEmail)) return;
 
-            var safeName = WebUtility.HtmlEncode(booking.User.Name);
+            var safeName = WebUtility.HtmlEncode(booking.User?.Name ?? "there");
+            var details = RenderBookingDetails(booking);
             var message = new EmailMessage();
             message.From = "Dale's Barbershop <onboarding@resend.dev>";
             message.To.Add(booking.ContactEmail);
@@ -85,10 +171,13 @@ namespace BarberShopAPI.Services
             message.HtmlBody = $@"
                 <h2>Hi {safeName},</h2>
                 <p>Your appointment is booked for
-                <strong>{booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}</strong>.</p>";
+                <strong>{booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}</strong>.</p>
+                {details.Html}
+                <p>See you soon!</p>";
 
-            message.TextBody = $"Hi {booking.User.Name},\n\n" +
+            message.TextBody = $"Hi {booking.User?.Name ?? "there"},\n\n" +
                            $"Your appointment is booked for {booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}.\n\n" +
+                           $"{details.Text}\n\n" +
                            $"See you soon!";
 
             await _resend.EmailSendAsync(message);
