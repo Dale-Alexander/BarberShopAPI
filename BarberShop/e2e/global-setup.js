@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { apiProject, envFile } from "../playwright.config.js";
+import { existsSync, mkdirSync } from "node:fs";
+import path from "node:path";
+import { request as pwRequest } from "@playwright/test";
+import { apiProject, envFile, appBaseUrl, adminEmail, adminPassword, ADMIN_STATE } from "../playwright.config.js";
 
 /* Rebuilds the fixture before every run, so a suite never inherits the bookings, closures or
    deactivated barbers left behind by the last one. The seed itself refuses any database whose name
@@ -8,7 +10,7 @@ import { apiProject, envFile } from "../playwright.config.js";
 
    Runs the API's own --seed-e2e command rather than talking to SQL directly: the fixture is then built
    by the same EF model the application uses, so it can't drift from the real schema. */
-export default function globalSetup() {//this runs once before any test
+export default async function globalSetup() {//this runs once before any test
     if (!existsSync(envFile)) {
         throw new Error(
             `Missing ${envFile}.\n` +
@@ -40,4 +42,27 @@ export default function globalSetup() {//this runs once before any test
 
     const summary = output.split("\n").find((l) => l.includes("E2E fixture seeded"));
     console.log(`[e2e] ${summary?.trim() ?? "seeded"}`);
+
+    /* Sign in ONCE and save the session cookie to disk, for every spec that needs an admin.
+       POST /api/auth/login is rate limited to 10 per minute per IP (see EnableRateLimiting("login")
+       in authController). A suite where each spec logs in for itself would sail past that and start
+       failing with 429s partway through - failures that look like product bugs and aren't. Logging in
+       here happens once per RUN no matter how many specs there are.
+
+       Specs opt in with `test.use({ storageState: ADMIN_STATE })`. Customer-facing specs must NOT,
+       or they'd be testing the shop as a logged-in admin, which is a different application. */
+    mkdirSync(path.dirname(ADMIN_STATE), { recursive: true });
+    const ctx = await pwRequest.newContext({ baseURL: appBaseUrl });
+    const login = await ctx.post("/api/auth/login", {
+        data: { Email: adminEmail, Password: adminPassword },
+    });
+    if (!login.ok()) {
+        throw new Error(
+            `[e2e] admin login failed (${login.status()}). The seed and .env.e2e disagree about ` +
+            `ADMIN_EMAIL/ADMIN_PASSWORD, or the API is pointed at the wrong database.`
+        );
+    }
+    await ctx.storageState({ path: ADMIN_STATE });
+    await ctx.dispose();
+    console.log(`[e2e] admin session saved`);
 }

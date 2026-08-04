@@ -27,3 +27,6 @@ dist-ssr
 playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# Saved admin session cookie for browser tests - a live token, never committed.
+e2e/.auth/

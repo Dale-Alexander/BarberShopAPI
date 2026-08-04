@@ -27,6 +27,11 @@ export const adminPassword = e2eEnv.ADMIN_PASSWORD;
 export const apiBaseUrl = "http://localhost:5205";
 export const appBaseUrl = "http://localhost:5173";
 
+/* Where global-setup parks the signed-in admin's cookie. Specs that need staff rights do
+   `test.use({ storageState: ADMIN_STATE })` instead of logging in themselves - see the rate-limit
+   note in global-setup.js. Gitignored: it holds a live session token. */
+export const ADMIN_STATE = path.resolve(here, "./e2e/.auth/admin.json");
+
 export default defineConfig({
     testDir: "./e2e",//where the tests live
     /* Serial, single worker. Every spec shares one database and one shop calendar, so parallel specs
