@@ -58,7 +58,9 @@ namespace BarberShopAPI.Services
          * shapes where the appointment still stands are a harmless courtesy, so they're left to fail quietly. */
         [AutomaticRetry(Attempts = EmailJobPolicy.RefundNoticeRetries)]
         Task sendPaymentRefundedUnconfirmedEmailAsync(int bookingId, PerformContext? context);
-        Task sendBookingRescheduledEmailAsync(int bookingId, DateTime oldStartDateTime);
+        /* Sent when staff move an existing booking. Either argument may be null, meaning "that didn't
+         * change" - see the implementation for why both live on one email instead of two. */
+        Task sendBookingUpdatedEmailAsync(int bookingId, DateTime? oldStartDateTime, string? oldBarberName);
         Task sendPasswordResetEmailAsync(int userId, string rawToken);
     }
     public class EmailService : IEmailService
@@ -597,34 +599,59 @@ namespace BarberShopAPI.Services
             }
         }
 
-        public async Task sendBookingRescheduledEmailAsync(int bookingId, DateTime oldStartDateTime)
+        /* Was sendBookingRescheduledEmailAsync, which only ever knew about the time. A barber reassignment
+         * changes who the customer is sitting with - the single thing they chose on the booking page - and
+         * used to send them either nothing or, because the admin screen posted the timestamp whether or not
+         * it had changed, a "rescheduled" email listing the same time twice and never mentioning the barber.
+         *
+         * One email covering both, the way Fresha/Square/Booksy do it: say what changed, then restate the
+         * whole appointment so the customer doesn't have to diff it against the original confirmation.
+         *
+         * A null argument means that thing didn't change - the caller compares against the loaded row, so
+         * "unchanged" is the truth about the booking, not about which fields the client happened to send.
+         * oldBarberName is passed as text rather than an id because it's what the booking looked like at the
+         * moment of the edit; resolving it later could pick up a rename.
+         *
+         * No [AutomaticRetry]/NeedsReview, unlike the cancellation emails: the appointment still stands, so
+         * this is a courtesy rather than the customer's only notice that something is gone. */
+        public async Task sendBookingUpdatedEmailAsync(int bookingId, DateTime? oldStartDateTime, string? oldBarberName)
         {
-            var booking = await _context.Bookings.Include(b => b.User).FirstOrDefaultAsync(b => b.Id == bookingId);
+            var booking = await BookingsWithDetails().FirstOrDefaultAsync(b => b.Id == bookingId);
             if (booking == null) return;
             if (string.IsNullOrWhiteSpace(booking.ContactEmail)) return;
+            // Nothing actually moved - don't send a change notice that describes no change.
+            if (oldStartDateTime == null && string.IsNullOrWhiteSpace(oldBarberName)) return;
 
-            var safeName = WebUtility.HtmlEncode(booking.User.Name);
+            var safeName = WebUtility.HtmlEncode(booking.User?.Name ?? "there");
+            var details = RenderBookingDetails(booking);
+            var newBarberName = booking.Barber?.User != null
+                ? $"{booking.Barber.User.Name} {booking.Barber.User.Surname}".Trim()
+                : "your barber";
+
+            var lines = new List<string>();
+            if (oldStartDateTime != null)
+                lines.Add($"Your appointment has been moved from {oldStartDateTime:dddd, MMMM d 'at' h:mm tt}.");
+            if (!string.IsNullOrWhiteSpace(oldBarberName))
+                lines.Add($"It's now with {newBarberName} instead of {oldBarberName}.");
 
             var message = new EmailMessage
             {
                 From = "Dale's Barbershop <onboarding@resend.dev>",
-                Subject = "Your appointment has been rescheduled"
+                Subject = "Your appointment has been updated"
             };
             message.To.Add(booking.ContactEmail);
 
             message.HtmlBody = $@"
         <h2>Hi {safeName},</h2>
-        <p>Your appointment has been rescheduled:</p>
-        <ul>
-            <li>Previous time: <strong>{oldStartDateTime:dddd, MMMM d 'at' h:mm tt}</strong></li>
-            <li>New time: <strong>{booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}</strong></li>
-        </ul>
+        {string.Join("", lines.Select(l => $"<p>{WebUtility.HtmlEncode(l)}</p>"))}
+        <p>Here are your updated booking details:</p>
+        {details.Html}
         <p>See you then!</p>";
 
-            message.TextBody = $"Hi {booking.User.Name},\n\n" +
-                               $"Your appointment has been rescheduled.\n" +
-                               $"Previous time: {oldStartDateTime:dddd, MMMM d 'at' h:mm tt}\n" +
-                               $"New time: {booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}\n\n" +
+            message.TextBody = $"Hi {booking.User?.Name ?? "there"},\n\n" +
+                               string.Join("\n", lines) + "\n\n" +
+                               $"Here are your updated booking details:\n" +
+                               $"{details.Text}\n\n" +
                                $"See you then!";
 
             await _resend.EmailSendAsync(message);

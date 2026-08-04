@@ -568,8 +568,12 @@ const BarberDateAndTime = () => {
             //calls .toJSON() on Date objects which gives a string.You dont have to
             //convert it to DateTime on the backend because C# does that automatically
             //as long as the view model declares the type as DateTime
+            /* Send the timestamp only when it actually moved. It used to go on every save, which the
+               backend read as "this is a reschedule" - so reassigning a booking to another barber emailed
+               the customer a reschedule notice for a time that hadn't changed. The backend now compares
+               against the stored row either way, but there's no reason to post a field we haven't touched. */
             await adminAxios.patch(`/api/bookings/update-booking/${bookingId}`, {
-                StartDateTime: `${newDateFormatted}T${selectedTime}:00`,
+                ...(dateOrTimeChanged && { StartDateTime: `${newDateFormatted}T${selectedTime}:00` }),
                 BarberId: selectedBarberId,
                 // Only ever true when the admin has just clicked through the out-of-hours confirmation.
                 ConfirmOutsideHours: outsideHoursConfirmedNow

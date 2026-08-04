@@ -1418,7 +1418,28 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                 );
                 if (overlap) return BadRequest(new { message = "The chosen slot overlaps with an existing booking" });
 
+                /* What actually changed, decided by comparing against the loaded row rather than by which
+                 * fields the client sent. It used to be `request.StartDateTime.HasValue` - "did the caller
+                 * include a timestamp" - and the admin edit screen posts the timestamp on every save,
+                 * changed or not. So a pure barber reassignment counted as a reschedule: it deleted and
+                 * re-created the reminder job for a time that hadn't moved, and emailed the customer a
+                 * "rescheduled" notice listing the same time twice. */
                 var oldStartDateTime = booking.StartDateTime;
+                var timeChanged = startDateTime != booking.StartDateTime;
+                var barberChanged = barberId != booking.BarberId;
+
+                // Read before the reassignment, and only when it's needed, so the email can name who the
+                // customer was booked with rather than just who they're booked with now.
+                string? oldBarberName = null;
+                if (barberChanged)
+                {
+                    // Falls back rather than staying null: the email treats a null name as "the barber
+                    // didn't change" and would then send nothing at all for a reassignment - the exact
+                    // silence this change exists to remove.
+                    oldBarberName = await _context.Barbers.Where(b => b.Id == booking.BarberId)
+                        .Select(b => b.User.Name + " " + b.User.Surname).FirstOrDefaultAsync()
+                        ?? "your previous barber";
+                }
 
                 booking.StartDateTime = startDateTime;
                 booking.BarberId = barberId;
@@ -1437,7 +1458,8 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                  * fairly expect the same after reviving a barber or deleting a closure, neither of which can
                  * do it. See the note in BookingReview for the full reasoning and what it costs. */
 
-                var timeChanged = request.StartDateTime.HasValue;
+                // Only a moved appointment needs its reminder rebuilt - a reassignment leaves the time, and
+                // so the 2-hours-before job, exactly where it was.
                 if (timeChanged)
                 {
                     //cancel existing reminder if any
@@ -1457,12 +1479,27 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                             var jobId = BackgroundJob.Schedule<IEmailService>(service => service.sendBookingReminderEmailAsync(bookingId), delay);
                             booking.ReminderJobId = jobId;
                         }
-
-                        BackgroundJob.Enqueue<IEmailService>(service => service.sendBookingRescheduledEmailAsync(bookingId, oldStartDateTime));
                     }
-                    
                 }
+
                 await _context.SaveChangesAsync();
+
+                /* One email for either kind of change (see sendBookingUpdatedEmailAsync). Nulls say what
+                 * stayed put. A booking with no contact email is an admin phone booking - there's nobody
+                 * to write to, and the customer gets told over the phone.
+                 *
+                 * Enqueued AFTER the save, unlike the reminder above, which has to go first because the save
+                 * is what persists the job id it produces. Hangfire commits an enqueue immediately, so doing
+                 * this before SaveChanges would mean a save that fails - the unique (BarberId, StartDateTime)
+                 * index can still reject a slot two admins took at once - leaves the customer holding an
+                 * email about a change that was rolled back. Same reasoning as ConfirmCashBooking. */
+                if ((timeChanged || barberChanged) && !string.IsNullOrWhiteSpace(booking.ContactEmail))
+                {
+                    BackgroundJob.Enqueue<IEmailService>(service => service.sendBookingUpdatedEmailAsync(
+                        bookingId,
+                        timeChanged ? oldStartDateTime : null,
+                        barberChanged ? oldBarberName : null));
+                }
                 /* you might be thinking that you have to set the booking record
                  * inside the right barber record so that the original booking will be 
                  cancelled and the new booking is reflected by replacing the barber and adding 

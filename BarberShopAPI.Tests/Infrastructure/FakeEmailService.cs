@@ -40,7 +40,7 @@ namespace BarberShopAPI.Tests.Infrastructure
         public Task sendBookingCancelledDueToClosureEmailAsync(int bookingId, PerformContext? context) => Record(nameof(sendBookingCancelledDueToClosureEmailAsync), bookingId);
         public Task sendBookingCancelledDueToScheduleChangeEmailAsync(int bookingId, PerformContext? context) => Record(nameof(sendBookingCancelledDueToScheduleChangeEmailAsync), bookingId);
         public Task sendPaymentRefundedUnconfirmedEmailAsync(int bookingId, PerformContext? context) => Record(nameof(sendPaymentRefundedUnconfirmedEmailAsync), bookingId);
-        public Task sendBookingRescheduledEmailAsync(int bookingId, DateTime oldStartDateTime) => Record(nameof(sendBookingRescheduledEmailAsync), bookingId);
+        public Task sendBookingUpdatedEmailAsync(int bookingId, DateTime? oldStartDateTime, string? oldBarberName) => Record(nameof(sendBookingUpdatedEmailAsync), bookingId);
         public Task sendPasswordResetEmailAsync(int userId, string rawToken) => Record(nameof(sendPasswordResetEmailAsync), userId);
     }
 }
