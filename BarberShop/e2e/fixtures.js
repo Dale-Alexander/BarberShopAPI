@@ -4,8 +4,8 @@
    firstName is not a convenience: /api/Barbers/barbers-with-bookings projects BarberName from
    User.Name alone, so the customer booking page shows barbers by FIRST NAME only. Assert on the full
    name there and you'll be chasing a failure that isn't a bug. */
-export const BARBER_ONE = { fullName: "Luke Camilleri", firstName: "Luke" };
-export const BARBER_TWO = { fullName: "Mark Bugeja", firstName: "Mark" };
+export const BARBER_ONE = { fullName: "Luke Camilleri", firstName: "Luke", email: "barber1@e2e.test" };
+export const BARBER_TWO = { fullName: "Mark Bugeja", firstName: "Mark", email: "barber2@e2e.test" };
 
 export const SERVICES = [
     { name: "Skin Fade", price: "25.50", durationMin: 30 },

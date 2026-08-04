@@ -48,8 +48,12 @@ them. What do they actually see?
       them, with a note saying the customer has not been told. The only way a paid booking dies from
       a closure is the webhook race, which needs Stripe to reach localhost; covered in
       `WebhookRefundTests`. What's tested here is the success screen's own behaviour.
-- [ ] A4. The barber is deactivated mid-checkout → customer sees the barber-unavailable wording and a
-      route back to rebook with someone else.
+- [x] A4. The barber is deactivated mid-checkout → customer sees the barber-unavailable wording and a
+      route back to rebook with someone else. `barber-deactivated.spec.js`
+      Note: deactivation is the one section-A trigger that really does kill a live checkout, because
+      the booking is still PENDING. Confirmed bookings survive and are flagged, same as a closure.
+      The spec revives the barber afterwards — there is no reactivate endpoint, you re-POST
+      `create-barber` with the same email and it finds the soft-deleted row.
 - [ ] A5. Someone else takes the same slot first → the second customer gets the "just booked by
       someone else" message and can pick another time.
 - [ ] A6. The barber's hours are narrowed so the slot falls outside them mid-checkout.

@@ -139,6 +139,29 @@ export async function confirmAsCash(request, publicId, {
     return await res.json();
 }
 
+/* Deactivates a barber - the "they've left the shop" action, not the notice-period toggle. Soft
+   delete: the row survives so the barber can be revived, but their PENDING bookings are cancelled
+   outright and their CONFIRMED ones are flagged for an admin. confirm=true is the UI's second step,
+   after it has shown the admin what they're about to affect. */
+export async function deactivateBarber(api, barberId) {
+    const res = await api.delete(`/api/barbers/delete/${barberId}?confirm=true`);
+    if (!res.ok()) throw new Error(`deactivate failed: ${res.status()} ${await res.text()}`);
+}
+
+/* Brings a deactivated barber back. There is no dedicated reactivate endpoint - create-barber with
+   the same email finds the soft-deleted row and revives it, restoring AcceptsNewBookings and reusing
+   the schedule that survived. Multipart because the real form carries an optional image file.
+
+   Any spec that deactivates a fixture barber MUST call this afterwards. The seed only runs once per
+   run, so a barber left deactivated silently changes the shop for every spec that follows - and the
+   failure lands somewhere else entirely, which is the worst kind to debug. */
+export async function reviveBarber(api, { fullName, email, password }) {
+    const res = await api.post("/api/barbers/create-barber", {
+        multipart: { FullName: fullName, Email: email, Password: password },
+    });
+    if (!res.ok()) throw new Error(`revive failed: ${res.status()} ${await res.text()}`);
+}
+
 /** Staff cancellation. refundAnyway overrides the 24h no-refund policy. */
 export async function cancelBooking(api, bookingId, { refundAnyway = false } = {}) {
     const res = await api.patch(`/api/bookings/cancel/${bookingId}?refundAnyway=${refundAnyway}`);
