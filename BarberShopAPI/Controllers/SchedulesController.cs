@@ -10,12 +10,19 @@ using System.ComponentModel.DataAnnotations;
 
 namespace BarberShopAPI.Controllers
 {
-    // Admin management of per-barber, effective-dated weekly schedules. The customer picker and the
-    // booking-create paths consume this data via barbers-with-bookings / ScheduleResolver; this
-    // controller is the write side. Admin-only - barbers don't edit their own hours here.
+    /* Admin management of per-barber, effective-dated weekly schedules. The customer picker and the
+     * booking-create paths consume this data via barbers-with-bookings / ScheduleResolver; this
+     * controller is the write side. Every write is admin-only - barbers don't set their own hours - but the
+     * READ is open to a barber for his own schedule, so he can see the shifts he's been given.
+     *
+     * The class attribute is deliberately a bare [Authorize] rather than Roles = "ADMIN": multiple
+     * [Authorize] attributes are AND-ed, so a class-level role requirement would still reject the barber on
+     * the GET below no matter what that action declares. Bare [Authorize] means an action that forgets its
+     * own attribute falls back to "must be logged in" instead of being anonymous, so every action carries
+     * an explicit role. */
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "ADMIN")]
+    [Authorize]
     public class SchedulesController : ControllerBase
     {
         private readonly BarberShopContext _context;
@@ -215,11 +222,19 @@ namespace BarberShopAPI.Controllers
             affected = orphaned.Select(ToOrphanVm).ToList()
         };
 
-        // All of a barber's versions (past, current, future), oldest first, so the editor can show
-        // history plus the current and any upcoming seasonal changes.
+        /* All of a barber's versions (past, current, future), oldest first, so the editor can show
+         * history plus the current and any upcoming seasonal changes.
+         *
+         * The one action a barber may call, and only for himself - the client renders it read-only. Without
+         * the ownership check any logged-in barber could read a colleague's hours by editing the id in the
+         * URL, the same IDOR the closure read and the bookings endpoints already guard against. */
+        [Authorize(Roles = "ADMIN,BARBER")]
         [HttpGet("barber/{barberId}")]
         public async Task<IActionResult> GetBarberSchedule(int barberId)
         {
+            if (!await User.CanAccessBarberAsync(_context, barberId))
+                return StatusCode(403, new { message = "You can only view your own schedule" });
+
             if (!await _context.Barbers.AnyAsync(b => b.Id == barberId))
                 return NotFound(new { message = "Barber not found" });
 
@@ -245,6 +260,7 @@ namespace BarberShopAPI.Controllers
         }
 
         // Replace a version's shifts. Past versions (already ended) are read-only history.
+        [Authorize(Roles = "ADMIN")]
         [HttpPut("version/{scheduleId}")]
         public async Task<IActionResult> UpdateVersionShifts(int scheduleId, [FromBody] SaveScheduleShiftsViewModel model)
         {
@@ -300,6 +316,7 @@ namespace BarberShopAPI.Controllers
 
         // Start a new seasonal version from a date. Chaining: the current open-ended version is closed the
         // day before, so versions stay contiguous and non-overlapping with exactly one open-ended row.
+        [Authorize(Roles = "ADMIN")]
         [HttpPost("barber/{barberId}")]
         public async Task<IActionResult> CreateVersion(int barberId, [FromBody] CreateScheduleVersionViewModel model)
         {
@@ -381,6 +398,7 @@ namespace BarberShopAPI.Controllers
         // Remove the current (open-ended) version and reopen the one before it, e.g. to undo a seasonal
         // change. Only the latest version can be removed, and never the barber's only one (that would leave
         // them with no schedule = unbookable).
+        [Authorize(Roles = "ADMIN")]
         [HttpDelete("version/{scheduleId}")]
         public async Task<IActionResult> DeleteVersion(int scheduleId, [FromQuery] bool confirmOrphaned = false)
         {

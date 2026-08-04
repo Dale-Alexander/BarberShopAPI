@@ -4,6 +4,7 @@ import { Plus, Trash2, Save, CalendarPlus } from "lucide-react";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
 import useFetch from "../../../Hooks/useFetch";
 import { ToastContext } from "../../../Context/ToastContext";
+import { AuthContext } from "../../../Context/AuthContext";
 import LoadingSpinner from "../../../Components/LoadingSpinner/LoadingSpinner";
 import ErrorState from "../../../Components/ErrorState/ErrorState";
 import { getErrorMessage } from "../../../utils/errorMessage.js";
@@ -45,7 +46,15 @@ const versionLabel = (v) => {
 };
 
 const Schedules = () => {
-    const { data: barbersData, loading: barbersLoading, error: barbersError } = useFetch("/api/Barbers/admin", true);
+    const { user } = useContext(AuthContext);
+    /* Barbers reach this page to READ the shifts they've been given - setting them is the admin's. The
+     * flag turns off every control below (see isReadOnly) and, just as importantly, keeps them off
+     * /api/Barbers/admin: that roster is ADMIN-only, so fetching it as a barber would 403 and strand the
+     * page on its error state before it ever rendered their hours. They don't need it either - there's no
+     * barber to pick when the only schedule they may read is their own. */
+    const isBarber = user?.role === "BARBER";
+    const { data: barbersData, loading: barbersLoading, error: barbersError } =
+        useFetch(isBarber ? null : "/api/Barbers/admin", true);
     const { showToast } = useContext(ToastContext);
     const [searchParams, setSearchParams] = useSearchParams();
 
@@ -65,8 +74,12 @@ const Schedules = () => {
 
     const activeBarbers = (barbersData ?? []).filter((b) => b.isActive);
     const selectedVersion = (versions ?? []).find((v) => v.id === selectedVersionId) ?? null;
-    const isReadOnly = selectedVersion ? versionState(selectedVersion) === "ended" : true;
-    const canDelete = selectedVersion && selectedVersion.effectiveTo == null && (versions ?? []).length > 1;
+    /* Two reasons a version can't be edited, and they carry different messages: it has already ended (true
+     * for the admin too - past hours are history), or the viewer is a barber, for whom every version is
+     * read-only. One flag drives the whole grid: disabled time inputs, and the hidden Add shift / Remove
+     * shift / Save / Remove-schedule controls. */
+    const isReadOnly = isBarber || (selectedVersion ? versionState(selectedVersion) === "ended" : true);
+    const canDelete = !isBarber && selectedVersion && selectedVersion.effectiveTo == null && (versions ?? []).length > 1;
 
     const loadVersions = useCallback(async (id, preferVersionId = null) => {
         setVersionsLoading(true);
@@ -96,13 +109,21 @@ const Schedules = () => {
         if (bookings?.length) setBackInside(bookings);
     };
 
-    // Preselect a barber from ?barberId (the create-barber handoff) once the roster is in.
+    /* Preselect a barber from ?barberId (the create-barber handoff) once the roster is in. A barber has no
+       roster and no choice to make - they're pinned to their own id, and the ?barberId param is ignored
+       rather than honoured, so editing it in the URL can't even attempt someone else's schedule (the
+       backend 403s that too). */
     useEffect(() => {
-        if (barberId != null || activeBarbers.length === 0) return;
+        if (barberId != null) return;
+        if (isBarber) {
+            if (user?.barberId != null) setBarberId(user.barberId);
+            return;
+        }
+        if (activeBarbers.length === 0) return;
         const fromQuery = Number(searchParams.get("barberId"));
         const initial = activeBarbers.some((b) => b.id === fromQuery) ? fromQuery : activeBarbers[0].id;
         setBarberId(initial);
-    }, [activeBarbers, barberId, searchParams]);
+    }, [activeBarbers, barberId, searchParams, isBarber, user?.barberId]);
 
     useEffect(() => {
         if (barberId != null) loadVersions(barberId);
@@ -167,7 +188,9 @@ const Schedules = () => {
     };
 
     const handleCreateVersion = async (confirmOrphaned = false) => {
-        if (creating) return;
+        // isBarber, like the isReadOnly/canDelete guards on save and delete: the button is hidden either
+        // way, this just keeps all three write paths refusing on the same terms.
+        if (creating || isBarber) return;
         setCreating(true);
         try {
             // Seed the new season from whatever's currently in the editor, so the admin refines from the
@@ -215,28 +238,37 @@ const Schedules = () => {
         }
     };
 
-    if (barbersLoading) return <LoadingSpinner message="Loading schedules" color="#e0e0e0" />;
-    if (barbersError) return <ErrorState title="Couldn't load barbers" message="Please retry." />;
+    // Roster states only apply to the admin - a barber never requests it, so these would otherwise be
+    // permanently falsy for them and are gated for clarity rather than necessity.
+    if (!isBarber && barbersLoading) return <LoadingSpinner message="Loading schedules" color="#e0e0e0" />;
+    if (!isBarber && barbersError) return <ErrorState title="Couldn't load barbers" message="Please retry." />;
 
     return (
         <>
             <div className="page-header">
                 <div className="page-header-text">
-                    <h1 className="page-title">Schedules</h1>
-                    <p className="page-subtitle">Set each barber's working hours, split shifts and seasonal changes</p>
+                    <h1 className="page-title">{isBarber ? "My Schedule" : "Schedules"}</h1>
+                    <p className="page-subtitle">
+                        {isBarber
+                            ? "The hours and shifts you're rostered for. Your manager sets these — ask them if something needs changing."
+                            : "Set each barber's working hours, split shifts and seasonal changes"}
+                    </p>
                 </div>
             </div>
 
             <div className="sched-content">
                 <div className="sched-toolbar">
-                    <label className="sched-field">
-                        <span>Barber</span>
-                        <select value={barberId ?? ""} onChange={(e) => onPickBarber(Number(e.target.value))}>
-                            {activeBarbers.map((b) => (
-                                <option key={b.id} value={b.id}>{b.firstName} {b.lastName}</option>
-                            ))}
-                        </select>
-                    </label>
+                    {/* Nothing to pick when the only schedule you may read is your own. */}
+                    {!isBarber && (
+                        <label className="sched-field">
+                            <span>Barber</span>
+                            <select value={barberId ?? ""} onChange={(e) => onPickBarber(Number(e.target.value))}>
+                                {activeBarbers.map((b) => (
+                                    <option key={b.id} value={b.id}>{b.firstName} {b.lastName}</option>
+                                ))}
+                            </select>
+                        </label>
+                    )}
 
                     {versions && versions.length > 0 && (
                         <div className="sched-versions">
@@ -257,8 +289,15 @@ const Schedules = () => {
                     <LoadingSpinner message="Loading schedule" color="#e0e0e0" inline />
                 ) : selectedVersion ? (
                     <>
+                        {/* "Ended" is the admin's reason and the wrong words for a barber looking at the
+                            hours he's working right now, so the message follows whichever reason applies.
+                            A barber viewing a genuinely ended version gets that told to them too. */}
                         {isReadOnly && (
-                            <p className="sched-readonly-note">This schedule has ended — it's shown for reference and can't be edited.</p>
+                            <p className="sched-readonly-note">
+                                {versionState(selectedVersion) === "ended"
+                                    ? "This schedule has ended — it's shown for reference and can't be edited."
+                                    : "Your working hours are set by your manager — this is a read-only view."}
+                            </p>
                         )}
 
                         <div className="sched-week">
@@ -313,6 +352,10 @@ const Schedules = () => {
                             </div>
                         )}
 
+                        {/* Sits OUTSIDE the !isReadOnly block above on purpose - an admin can start a new
+                            season from an ended version as easily as from the current one. But it is still
+                            a write, so a barber must not see it. */}
+                        {!isBarber && (
                         <div className="sched-new">
                             <h3><CalendarPlus size={18} /> Schedule a seasonal change</h3>
                             <p>Create a new set of hours that takes over from a future date. It starts as a copy of the hours above — edit and save it after it's created. The current schedule automatically ends the day before.</p>
@@ -327,6 +370,7 @@ const Schedules = () => {
                                 </button>
                             </div>
                         </div>
+                        )}
                     </>
                 ) : null}
             </div>

@@ -54,15 +54,18 @@ function App() {
                         <Route path="/admin" element={<AdminDashboard />} />
                         <Route path="/admin/team" element={<TeamMembers />} />
                         <Route path="/admin/services" element={<Services />} />
-                        <Route path="/admin/schedules" element={<Schedules />} />
                         <Route path="/admin/settings" element={<Settings />} />
                     </Route>
                 </Route>
                 <Route element={<RequireRole Roles={["ADMIN", "BARBER"]} />}>
                     <Route element={<AdminLayout />}>
-                        {/* Calendar is open to barbers too: they manage their OWN closures here
-                            (the backend scopes reads/creates/deletes to their barber id). */}
+                        {/* Both of these are open to barbers as READ-ONLY views of their own working life:
+                            the Calendar shows the closures that affect them (their own time off plus
+                            shop-wide ones) and Schedules shows the shifts they've been given. Creating,
+                            editing and removing either is the admin's, so the pages render without those
+                            controls for a barber and the backend refuses the writes regardless. */}
                         <Route path="/admin/calendar" element={<AdminCalendar />} />
+                        <Route path="/admin/schedules" element={<Schedules />} />
                         <Route element={<RequireOwnBarber />}>
                             <Route path="/admin/team/:id" element={<BarberBookings/> }/>
                         </Route>

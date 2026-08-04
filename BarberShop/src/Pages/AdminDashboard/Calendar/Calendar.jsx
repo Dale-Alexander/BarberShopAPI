@@ -16,9 +16,20 @@ import { adminAxios } from "../../../Hooks/AxiosInterceptor";
 import { getErrorMessage } from "../../../utils/errorMessage.js";
 import { formatPhone } from "../../../utils/phone.js";
 
+/* Shop-wide closures show up on a barber's calendar alongside his own time off, and the two mean very
+ * different things to him - "you're off" vs "the shop is shut around you" - so they don't share a colour.
+ * The admin's own view keeps a single colour: it already prefixes every event with the barber's name, and
+ * shop-wide ones are the ones with no name. */
+const OWN_CLOSURE_COLOUR = "#3788d8";
+const SHOP_WIDE_COLOUR = "#b06a1f";
+
 const AdminCalendar = () => {
     const { user } = useContext(AuthContext);
     const { showToast } = useContext(ToastContext);
+    /* Creating and removing closures is the manager's job. A barber sees the calendar to know when he
+     * isn't working and nothing more, so every mutating control below is gated on this and the backend
+     * refuses the writes outright (ADMIN-only on POST /api/dates and PATCH /api/dates/delete). */
+    const canManageClosures = user?.role === "ADMIN";
     const closuresUrl = user?.role === 'BARBER'
         ? `/api/dates/barber/${user?.barberId}/closures`
         : '/api/dates/admin/closures';
@@ -58,9 +69,21 @@ const AdminCalendar = () => {
     };
     useEffect(() => {
         if (!data) return;
-        setEvents(data.map(closure => ({      
+        setEvents(data.map(closure => {
+            /* Only the barber's view separates the two. The admin already tells them apart by the
+               "Name - reason" prefix (shop-wide ones are the ones with no name) and gets one colour, so
+               this is gated on the role rather than on closure.isShopWide alone - the admin endpoint
+               happens not to populate that flag today, and this shouldn't quietly start recolouring the
+               admin's calendar if it ever does. */
+            const shopWide = user?.role !== "ADMIN" && closure.isShopWide;
+            return {
             id: closure.id,
-            title: user?.role === "ADMIN" && closure.barberName ? `${closure.barberName} - ${closure.reason}` : closure.reason,
+            /* A barber's list mixes his own time off with shop-wide closures, so those get a "Shop closed"
+               prefix as well as their own colour - the Events sidebar renders titles only, and without the
+               prefix a public holiday would read there as though it were his personal day off. */
+            title: user?.role === "ADMIN"
+                ? (closure.barberName ? `${closure.barberName} - ${closure.reason}` : closure.reason)
+                : (shopWide ? `Shop closed - ${closure.reason}` : closure.reason),
             start: closure.isFullDay
                 ? closure.startDate
                 : `${closure.startDate}T${closure.startTime}`,
@@ -69,9 +92,11 @@ const AdminCalendar = () => {
                     ? addDays(closure.endDate, 1)  // multi-day: make end exclusive
                     : closure.startDate             // single day: just use startDate, FullCalendar handles it
                 : `${closure.endDate ?? closure.startDate}T${closure.endTime}`,
-            allDay: closure.isFullDay
-        })));
-        console.log(data);
+            allDay: closure.isFullDay,
+            backgroundColor: shopWide ? SHOP_WIDE_COLOUR : OWN_CLOSURE_COLOUR,
+            borderColor: shopWide ? SHOP_WIDE_COLOUR : OWN_CLOSURE_COLOUR,
+            };
+        }));
     }, [data]);
 
     /* A failed load leaves the calendar showing no closures - which looks identical to "there are none".
@@ -157,8 +182,9 @@ const AdminCalendar = () => {
   const handleDateClick = (selected) => {
     // Don't let the admin create a closure while the existing ones haven't loaded (or failed to) - they'd
     // be acting blind and could overlap a closure they can't see. `selectable` already blocks the drag in
-    // these states; this is the safety net.
-    if (loading || loadFailed) return;
+    // these states; this is the safety net. Barbers can't create closures at all, and `selectable` blocks
+    // their drag too - same belt-and-braces.
+    if (!canManageClosures || loading || loadFailed) return;
     setPendingSelection(selected);
     setClosureReason("");
     setSelectedBarberId(""); // default every new closure to shop-wide
@@ -224,7 +250,13 @@ const AdminCalendar = () => {
                     ? addDays(data.endDate, 1)  // multi-day: make end exclusive
                     : data.startDate             // single day: just use startDate, FullCalendar handles it
                 : `${data.endDate ?? data.startDate}T${data.endTime}`,
-            allDay: data.isFullDay
+            allDay: data.isFullDay,
+            /* Must be set here as well as in the load mapping above: the Events list draws its background
+               from the event, so a just-created closure would otherwise sit there uncoloured until the next
+               reload repopulated it. Only an admin reaches this path, and the admin's calendar is one
+               colour, so it isn't conditional. */
+            backgroundColor: OWN_CLOSURE_COLOUR,
+            borderColor: OWN_CLOSURE_COLOUR,
         }, ...prev]);
     }
 
@@ -303,7 +335,11 @@ const AdminCalendar = () => {
             <div className="page-header">
                 <div className="page-header-text">
                     <h1 className="page-title">Calendar</h1>
-                    <p className="page-subtitle">Interactive Calendar Page</p>
+                    <p className="page-subtitle">
+                        {canManageClosures
+                            ? "Interactive Calendar Page"
+                            : "Your time off and the days the shop is closed. Your manager sets these — ask them to add or remove one."}
+                    </p>
                 </div>
             </div>
 
@@ -313,8 +349,11 @@ const AdminCalendar = () => {
                 <div className="calendar-error-banner">
                     <span className="calendar-error-banner__text">
                         <AlertTriangle size={16} />
-                        Couldn't load your closures. Creating new closures is disabled until this loads, so
-                        you don't add one that overlaps an existing closure you can't currently see.
+                        {canManageClosures
+                            ? `Couldn't load your closures. Creating new closures is disabled until this loads,
+                               so you don't add one that overlaps an existing closure you can't currently see.`
+                            : `Couldn't load your time off. The calendar below may be missing days you're not
+                               working, so check with your manager before relying on it.`}
                     </span>
                     <button type="button" className="calendar-error-banner__retry" onClick={reFetch}>
                         <RotateCw size={14} /> Retry
@@ -357,13 +396,15 @@ const AdminCalendar = () => {
                             <ListItem
                                 key={event.id}
                                 onClick={() => goToEventOnCalendar(event)}
+                                // Driven off the event so a shop-wide closure reads the same here as it
+                                // does on the grid; brightness() gives it a hover without a second colour.
                                 sx={{
-                                    backgroundColor: "#3788d8",
+                                    backgroundColor: event.backgroundColor,
                                     color: "#fff",
                                     margin: "10px 0",
                                     borderRadius: "2px",
                                     cursor: "pointer",
-                                    "&:hover": { backgroundColor: "#2c6cb0" },
+                                    "&:hover": { filter: "brightness(0.85)" },
                                 }}
                             >
                                 <ListItemText
@@ -389,12 +430,17 @@ const AdminCalendar = () => {
                             right: "dayGridMonth,timeGridWeek,timeGridDay,listMonth",
                         }}
                         initialView="dayGridMonth"
-                        editable={true}
-                        selectable={!loading && !loadFailed}
+                        /* All three are the admin's tools for changing closures: dragging an event,
+                           dragging out a new range, and clicking one to delete it. For a barber the
+                           calendar is a read-out, so they're off - the event's title and dates are already
+                           spelled out in the Events list beside the grid, which is why clicking one simply
+                           does nothing rather than opening a detail popup that would just repeat it. */
+                        editable={canManageClosures}
+                        selectable={canManageClosures && !loading && !loadFailed}
                         selectMirror={true}
                         dayMaxEvents={true}
-                        select={handleDateClick}
-                        eventClick={(selected) => setDeleteSelectedEvent(selected.event)}
+                        select={canManageClosures ? handleDateClick : undefined}
+                        eventClick={canManageClosures ? (selected) => setDeleteSelectedEvent(selected.event) : undefined}
                         events={events}
                         selectConstraint={{
                             start: currentView === "dayGridMonth" ? startOfDay(now) : now,
@@ -472,13 +518,15 @@ const AdminCalendar = () => {
                                         <ListItem
                                             key={event.id}
                                             onClick={() => goToEventOnCalendar(event)}
+                                            // Same as the desktop list above: colour comes from the event
+                                            // so shop-wide closures stay distinguishable in the drawer too.
                                             sx={{
-                                                backgroundColor: "#3788d8",
+                                                backgroundColor: event.backgroundColor,
                                                 color: "#fff",
                                                 margin: "10px 0",
                                                 borderRadius: "2px",
                                                 cursor: "pointer",
-                                                "&:hover": { backgroundColor: "#2c6cb0" },
+                                                "&:hover": { filter: "brightness(0.85)" },
                                             }}
                                         >
                                             <ListItemText

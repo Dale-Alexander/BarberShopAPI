@@ -9,7 +9,6 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
-using System.Security.Claims;
 using BarberShopAPI.Common;
 using Stripe;
 namespace BarberShopAPI.Controllers
@@ -24,39 +23,21 @@ namespace BarberShopAPI.Controllers
             _context = context;
         }
 
-        /* The caller's own Barber.Id when they're a BARBER, or null if they have no barber row - or if
-         * that row is deactivated. Kept in step with the identically-named helper in BookingsController;
-         * see the defence-in-depth note there. Returning null fails these guards closed, since a real
-         * barberId can never equal null.
-         * Keeps a barber's closure reads/deletes scoped to their own; ADMIN callers are handled
-         * with User.IsInRole and never rely on this. */
-        private async Task<int?> CallerBarberId()
-        {
-            var callerUserId = int.Parse(User.FindFirstValue("id") ?? "0");
-            return await _context.Barbers.Where(b => b.UserId == callerUserId && b.isActive).Select(b => (int?)b.Id).FirstOrDefaultAsync();
-        }
-        [Authorize(Roles = "ADMIN,BARBER")]
+        /* Closures are the manager's to set: only an ADMIN creates or removes them, for any barber or for
+         * the whole shop. A barber reads the ones that affect him (his own, plus shop-wide) on the calendar
+         * and does nothing else with them, so the single read below is the only ownership question left in
+         * this controller. The private CallerBarberId helper that used to sit here moved to
+         * Common/CallerBarber.cs - see that file for why. */
+        [Authorize(Roles = "ADMIN")]
         [HttpPost]
         public async Task<IActionResult> AddClosureAsync([FromBody] ShopClosureViewModel newClosure)
         {
             try
             {
-                var role = User.FindFirstValue(ClaimTypes.Role);
-                if(role == "BARBER")
-                {
-                    var userId = int.Parse(User.FindFirstValue("id"));
-                    // isActive keeps this in step with CallerBarberId above and BookingsController's
-                    // guards: a deactivated barber can't book time off either. Returning early also
-                    // matters here - leaving BarberId unset would make this a SHOP-WIDE closure.
-                    var barber = await _context.Barbers.FirstOrDefaultAsync(b => b.UserId == userId && b.isActive);
-                    if (barber == null) return NotFound(new { message = "Barber profile not found" });
-                    newClosure.BarberId = barber.Id;
-                }
                 // An admin may scope a closure to a specific barber (BarberId set) or leave it shop-wide
-                // (null). The barber path above force-sets its own id, so this only guards the admin case:
-                // an unvalidated id would otherwise create an orphan closure pointing at no real barber.
+                // (null). An unvalidated id would create an orphan closure pointing at no real barber.
                 // Active-only, matching the customer-facing roster - a deactivated barber takes no bookings.
-                else if (newClosure.BarberId != null)
+                if (newClosure.BarberId != null)
                 {
                     var barberExists = await _context.Barbers
                         .AnyAsync(b => b.Id == newClosure.BarberId && b.isActive);
@@ -188,6 +169,7 @@ namespace BarberShopAPI.Controllers
                     Reason = closure.Reason,
                     IsFullDay = closure.IsFullDay,
                     BarberName = barberName,
+                    IsShopWide = closure.BarberId == null,
                 });
             }
             catch(ValidationException ex)
@@ -301,17 +283,28 @@ namespace BarberShopAPI.Controllers
             }
         }
 
+        /* The barber's read-only view of the time he isn't working. Now that he can't create or delete
+         * closures, this list stopped being "the closures you can manage" and became "the days you're off"
+         * - so it has to include SHOP-WIDE closures (BarberId == null) as well as his own. Leaving them out
+         * was defensible while the list was actionable (he could never have deleted a shop-wide closure
+         * anyway), but as a straight answer to "am I working that day" it was wrong: a public holiday shut
+         * the whole shop and his calendar showed an ordinary working day.
+         *
+         * IsShopWide tells the two apart on the client, which renders them distinctly - the barber should
+         * be able to see at a glance whether it's his own time off or the shop being closed around him. */
         [Authorize(Roles = "ADMIN,BARBER")]
         [HttpGet("barber/{barberId}/closures")]
         public async Task<IActionResult> GetBarberClosures(int barberId)
         {
             // A barber may only view their own closures; an admin may view any barber's.
-            if (!User.IsInRole("ADMIN") && barberId != await CallerBarberId())
+            if (!await User.CanAccessBarberAsync(_context, barberId))
                 return StatusCode(403, new { message = "You can only view your own closures" });
             var todayDate = ShopClock.Today;
             try
             {
-                var shopClosures = await _context.ShopClosures.Where(c => c.IsActive == true && c.StartDate >= todayDate && c.BarberId == barberId)
+                var shopClosures = await _context.ShopClosures
+                    .Where(c => c.IsActive == true && c.StartDate >= todayDate
+                                && (c.BarberId == barberId || c.BarberId == null))
                     .Select(c => new GetBarberShopClosuresViewModel
                     {
                         Id = c.Id,
@@ -320,7 +313,8 @@ namespace BarberShopAPI.Controllers
                         StartTime = c.StartTime,
                         EndTime = c.EndTime,
                         Reason = c.Reason,
-                        IsFullDay = c.IsFullDay
+                        IsFullDay = c.IsFullDay,
+                        IsShopWide = c.BarberId == null
                     }).ToListAsync();
                 return Ok(shopClosures);
             }
@@ -331,7 +325,7 @@ namespace BarberShopAPI.Controllers
             }
         }
 
-        [Authorize(Roles = "ADMIN,BARBER")]
+        [Authorize(Roles = "ADMIN")]
         [HttpPatch("delete/{closureId}")]
         public async Task<IActionResult> DeleteClosure(int closureId)
         {
@@ -339,14 +333,6 @@ namespace BarberShopAPI.Controllers
             {
                 var shopClosure = await _context.ShopClosures.FirstOrDefaultAsync(c => c.IsActive == true && c.Id == closureId);
                 if (shopClosure == null) return NotFound(new { message = "This shop closure was not found" });
-                // Barbers may only delete their OWN barber-scoped closures; shop-wide (BarberId == null)
-                // and other barbers' closures are admin-only.
-                if (!User.IsInRole("ADMIN"))
-                {
-                    var callerBarberId = await CallerBarberId();
-                    if (shopClosure.BarberId == null || shopClosure.BarberId != callerBarberId)
-                        return StatusCode(403, new { message = "You can only delete your own closures" });
-                }
                 /* Bookings this closure flagged and left live. Gathered BEFORE it's switched off, so the
                  * overlap test still has the closure's own dates to work from. */
                 var closureStart = shopClosure.IsFullDay
