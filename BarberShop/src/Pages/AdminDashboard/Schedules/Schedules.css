@@ -248,3 +248,7 @@
 @media (max-width: 600px) {
     .sched-day { grid-template-columns: 1fr; gap: 0.5rem; }
 }
+
+/* Shown on a "these fit again" row when something OTHER than the hours still shuts the slot, so the admin
+   doesn't have to work out whether the booking is actually clear. */
+.sched-orphan-blocked { font-size: 0.78rem; color: #b45309; margin-top: 2px; }

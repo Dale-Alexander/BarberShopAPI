@@ -392,6 +392,11 @@ const Schedules = () => {
                                     <span className="sched-orphan-who">
                                         {b.customer || "Customer"}{b.phone ? ` · ${formatPhone(b.phone)}` : b.email ? ` · ${b.email}` : ""}
                                     </span>
+                                    {/* Saves the admin working out for themselves whether the slot is actually
+                                        clear now. Silent when it is — only the exceptions are worth a line. */}
+                                    {b.stillBlockedBy && (
+                                        <span className="sched-orphan-blocked">Still blocked: {b.stillBlockedBy}</span>
+                                    )}
                                 </li>
                             ))}
                         </ul>

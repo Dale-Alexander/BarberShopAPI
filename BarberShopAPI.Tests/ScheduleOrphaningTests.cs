@@ -101,10 +101,65 @@ namespace BarberShopAPI.Tests
             Assert.Equal(bookingId, listed[0].GetProperty("id").GetInt32());
             Assert.False(string.IsNullOrWhiteSpace(listed[0].GetProperty("date").GetString()));
             Assert.False(string.IsNullOrWhiteSpace(listed[0].GetProperty("time").GetString()));
+            // Nothing else about the slot is in the way, so the admin can act on this straight away.
+            Assert.Equal(System.Text.Json.JsonValueKind.Null, listed[0].GetProperty("stillBlockedBy").ValueKind);
 
             using var db = NewDb();
-            // Still flagged: the admin reads the note and clears it, exactly as before.
-            Assert.True((await db.Bookings.SingleAsync(b => b.Id == bookingId)).NeedsReview);
+            var booking = await db.Bookings.SingleAsync(b => b.Id == bookingId);
+            /* Announced, but nothing is withdrawn - not the flag and not the note, even though the app could
+             * prove this particular note false. Notes go on automatically and come off only when a human
+             * marks the booking reviewed, for every reason alike. A single reason that tidied up after
+             * itself would set an expectation the other two can't meet. */
+            Assert.True(booking.NeedsReview);
+            Assert.Contains("falls outside their", booking.ReviewReason);
+        }
+
+        /* This list answers one question - "do these fit your hours again?" - and a closure elsewhere doesn't
+         * change the answer. The booking carries the closure's own note, which the admin reads before
+         * clearing anything; suppressing it here would hide that the HOURS problem really is resolved, the
+         * same mistake as hiding a booking because it also has a stuck refund. Each list vouches for its own
+         * dimension, and none of them clears a flag. */
+        [Fact]
+        public async Task A_booking_a_closure_also_covers_is_listed_but_keeps_its_closure_note()
+        {
+            var (barberId, scheduleId, bookingId) = await ArrangeBarberWithLateBooking();
+
+            await Client.PutAsync($"/api/schedules/version/{scheduleId}",
+                Body(new { shifts = AllDays(9, 0, 15, 0), confirmOrphaned = true }));
+
+            // The shop shuts that day too. Created through the API, so it flags the booking exactly as it
+            // would in real use - this booking now carries TWO notes.
+            var closure = await Client.PostAsync("/api/dates", Body(new
+            {
+                barberId,
+                startDate = ShopClock.Today.AddDays(14),
+                endDate = (DateOnly?)null,
+                isFullDay = true,
+                startTime = (TimeOnly?)null,
+                endTime = (TimeOnly?)null,
+                reason = "Test closure",
+                confirmCancelBookings = true
+            }));
+            Assert.Equal(HttpStatusCode.OK, closure.StatusCode);
+
+            var widened = await Client.PutAsync($"/api/schedules/version/{scheduleId}",
+                Body(new { shifts = AllDays(9, 0, 17, 30), confirmOrphaned = false }));
+
+            Assert.Equal(HttpStatusCode.OK, widened.StatusCode);
+            var listed = (await ReadJson(widened)).GetProperty("backInsideHours").EnumerateArray().ToList();
+            // Listed: the hours problem really is resolved, and hiding it would mean the admin never hears so.
+            Assert.Single(listed);
+            Assert.Equal(bookingId, listed[0].GetProperty("id").GetInt32());
+            // But told, on the row, that it isn't clear yet - no guessing required.
+            Assert.Contains("closure", listed[0].GetProperty("stillBlockedBy").GetString());
+
+            using var db2 = NewDb();
+            var booking = await db2.Bookings.SingleAsync(b => b.Id == bookingId);
+            // Both notes stay: nothing is ever withdrawn automatically. StillBlockedBy above is how the
+            // admin learns where this booking actually stands without re-deriving it from the notes.
+            Assert.Contains("falls outside their", booking.ReviewReason);
+            Assert.Contains("shop is closed", booking.ReviewReason);
+            Assert.True(booking.NeedsReview);
         }
 
         /* Only bookings flagged BY THE SCHEDULE PATH are listed. One flagged over money that happens to sit
@@ -198,13 +253,18 @@ namespace BarberShopAPI.Tests
         }
 
         [Fact]
-        public async Task A_pending_booking_outside_the_new_hours_is_neither_warned_about_nor_flagged()
+        public async Task A_pending_booking_outside_the_new_hours_is_cancelled_without_a_prompt()
         {
             var (_, scheduleId, bookingId) = await ArrangeBarberWithLateBooking(BookingStatus.PENDING);
 
-            // Deliberate exclusion: PENDING bookings self-resolve. Either the customer confirms and
-            // ConfirmCashBooking / the webhook re-checks the schedule and cancels them properly, or they
-            // expire. So they must not even raise the confirmation prompt.
+            /* A checkout on a slot the new hours remove is cancelled outright, the same treatment a closure
+             * gives it - but WITHOUT raising the confirmation prompt, which is only for confirmed bookings
+             * the admin has to decide about. Blocking the edit on someone's half-finished checkout would be
+             * the wrong trade, and there is nothing for the admin to weigh up here anyway.
+             *
+             * The confirmation-time checks still exist and still matter (a card already going through can't
+             * be voided, so it lands there instead) - this just spares the common case a charge followed by
+             * a refund minutes later. */
             var response = await Client.PutAsync($"/api/schedules/version/{scheduleId}",
                 Body(new { shifts = AllDays(9, 0, 15, 0), confirmOrphaned = false }));
 
@@ -212,8 +272,11 @@ namespace BarberShopAPI.Tests
 
             using var db = NewDb();
             var booking = await db.Bookings.SingleAsync(b => b.Id == bookingId);
-            Assert.Equal(BookingStatus.PENDING, booking.Status);
+            Assert.Equal(BookingStatus.CANCELLED, booking.Status);
+            Assert.Equal(CancellationReason.ScheduleChange, booking.CancellationReason);
+            // Never confirmed, so there is nothing to walk back: no flag for staff and no email.
             Assert.False(booking.NeedsReview);
+            Assert.Empty(Factory.EnqueuedEmailJobs());
         }
 
         [Fact]
@@ -379,6 +442,35 @@ namespace BarberShopAPI.Tests
             Assert.Single(await db.BarberSchedules.Where(s => s.BarberId == barberId).ToListAsync());
             Assert.Null((await db.BarberSchedules.SingleAsync(s => s.BarberId == barberId)).EffectiveTo);
             Assert.False((await db.Bookings.SingleAsync(b => b.Id == bookingId)).NeedsReview);
+        }
+
+        [Fact]
+        public async Task A_pending_booking_stranded_by_a_new_version_is_cancelled_without_a_prompt()
+        {
+            // The third way hours can move (edit / delete / start a new version) and so the third place a
+            // checkout can be left on a slot that no longer exists. Same answer as the other two.
+            var (barberId, _, bookingId) = await ArrangeBarberWithLateBooking(BookingStatus.PENDING, daysAhead: 20);
+
+            var response = await Client.PostAsync($"/api/schedules/barber/{barberId}",
+                Body(new
+                {
+                    effectiveFrom = ShopClock.Today.AddDays(10),
+                    shifts = AllDays(9, 0, 15, 0),
+                    confirmOrphaned = false
+                }));
+
+            // No prompt: the new version is created on the first request, not held back for confirmation.
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            using var db = NewDb();
+            var booking = await db.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.Equal(BookingStatus.CANCELLED, booking.Status);
+            Assert.Equal(CancellationReason.ScheduleChange, booking.CancellationReason);
+            Assert.False(booking.NeedsReview);
+            Assert.Empty(Factory.EnqueuedEmailJobs());
+
+            // The cancellation must not have rolled back the version swap it followed.
+            Assert.Equal(2, await db.BarberSchedules.CountAsync(s => s.BarberId == barberId));
         }
 
         [Fact]
@@ -552,11 +644,11 @@ namespace BarberShopAPI.Tests
         }
 
         [Fact]
-        public async Task A_pending_booking_stranded_by_a_delete_is_neither_warned_about_nor_flagged()
+        public async Task A_pending_booking_stranded_by_a_delete_is_cancelled_without_a_prompt()
         {
-            /* Same exclusion as the edit path: a PENDING booking self-resolves. Either the customer finishes
-             * paying and the webhook / ConfirmCashBooking re-check the live schedule and cancel it properly,
-             * or it expires. Warning about one would block the undo on a half-finished checkout. */
+            /* Same treatment as the edit path: restoring the prior (narrower) hours cancels a checkout they
+             * strand, without warning about it - the prompt is for confirmed bookings the admin must decide
+             * about, and blocking an undo on a half-finished checkout would be the wrong trade. */
             int adminId, currentScheduleId, bookingId;
             using (var db = NewDb())
             {
@@ -578,8 +670,10 @@ namespace BarberShopAPI.Tests
 
             using var assertDb = NewDb();
             var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
-            Assert.Equal(BookingStatus.PENDING, booking.Status);
+            Assert.Equal(BookingStatus.CANCELLED, booking.Status);
+            Assert.Equal(CancellationReason.ScheduleChange, booking.CancellationReason);
             Assert.False(booking.NeedsReview);
+            Assert.Empty(Factory.EnqueuedEmailJobs());
         }
 
         [Fact]
