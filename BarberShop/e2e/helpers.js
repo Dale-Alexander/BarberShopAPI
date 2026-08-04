@@ -48,6 +48,89 @@ export async function setAcceptingBookings(api, barberId, accepting) {
     if (!res.ok()) throw new Error(`Toggle failed: ${res.status()} ${await res.text()}`);
 }
 
+/* A service's database id, looked up by the name the fixture created.
+   Deliberately the ADMIN catalogue: the public /api/services projection leaves the Id out on purpose,
+   so it cannot be used here - pass an adminApi client, not the plain request fixture. */
+export async function findServiceId(api, name) {
+    const res = await api.get("/api/services/admin");
+    if (!res.ok()) throw new Error(`Could not load services: ${res.status()}`);
+    const services = await res.json();
+    const match = services.find((s) => s.name === name);
+    if (!match) throw new Error(`No service called "${name}". Got: ${services.map((s) => s.name).join(", ")}`);
+    return match.id;
+}
+
+/* A bookable wall-clock slot, N days out at the given hour.
+   Deliberately several days ahead and mid-morning: the customer path enforces a lead-time buffer
+   (MinAdvanceBookingMinutes) and a 60-day horizon, and the fixture barbers work 09:00-17:30. A slot
+   at either edge would make a spec fail for a reason that has nothing to do with what it tests.
+   Formatted as a naive local string, exactly what the booking page posts - no timezone suffix, so
+   the API reads it as Malta wall-clock like every other booking. */
+export function slotInDays(days, hour = 11, minute = 0) {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(hour)}:${p(minute)}:00`;
+}
+
+/* Creates a booking the way a CUSTOMER does - unauthenticated, through the real endpoint, leaving it
+   PENDING and awaiting payment. Use the plain `request` fixture, never the admin one: the staff path
+   skips the lead-time buffer and would let a spec arrange a booking a customer could never make. */
+export async function createPendingBooking(request, { barberId, serviceIds, startDateTime }) {
+    const res = await request.post("/api/bookings/create-pending", {
+        data: { ServicesIds: serviceIds, StartDateTime: startDateTime, BarberId: barberId },
+    });
+    if (!res.ok()) throw new Error(`create-pending failed: ${res.status()} ${await res.text()}`);
+    return await res.json(); // { publicId, startDateTime, status, barberId, barberName, durationMin }
+}
+
+/* The internal integer id, which the staff endpoints use and the customer-facing responses never
+   expose (PublicId is deliberately the only id in a customer's URL). Matched on the exact slot the
+   spec just booked rather than "the newest", so a spec can't pick up another spec's booking. */
+export async function findBookingIdByStart(api, startDateTime) {
+    const res = await api.get("/api/bookings/admin-fetch?pageSize=200");
+    if (!res.ok()) throw new Error(`admin-fetch failed: ${res.status()}`);
+    const body = await res.json();
+    const rows = body.bookings ?? body.items ?? body;
+    const wanted = new Date(startDateTime).getTime();
+    const match = (Array.isArray(rows) ? rows : []).find(
+        (b) => new Date(b.startDateTime).getTime() === wanted
+    );
+    if (!match) {
+        throw new Error(
+            `No booking at ${startDateTime} in the admin list. Saw ${rows.length} row(s): ` +
+            JSON.stringify((Array.isArray(rows) ? rows : []).map((b) => ({ id: b.id, start: b.startDateTime })))
+        );
+    }
+    return match.id;
+}
+
+/* Closes the shop (or one barber) for a day. ConfirmCancelBookings is the "yes, I know this kills
+   live bookings" flag the admin UI collects from the conflict modal - without it the endpoint
+   refuses with a 409 listing what it would have cancelled. */
+export async function createClosure(api, { date, barberId = null, reason = "E2E closure", confirm = true }) {
+    const res = await api.post("/api/Dates", {
+        data: {
+            BarberId: barberId,
+            StartDate: date,
+            EndDate: null,
+            IsFullDay: true,
+            Reason: reason,
+            ConfirmCancelBookings: confirm,
+        },
+    });
+    return res; // caller decides - a 409 is a legitimate outcome worth asserting on
+}
+
+/** The yyyy-MM-dd date part of a slot string, which is what closures are keyed on. */
+export const dateOf = (slot) => slot.split("T")[0];
+
+/** Staff cancellation. refundAnyway overrides the 24h no-refund policy. */
+export async function cancelBooking(api, bookingId, { refundAnyway = false } = {}) {
+    const res = await api.patch(`/api/bookings/cancel/${bookingId}?refundAnyway=${refundAnyway}`);
+    if (!res.ok()) throw new Error(`cancel failed: ${res.status()} ${await res.text()}`);
+}
+
 /** The barber names a customer is currently offered on the booking page. */
 export async function visibleBarberNames(page) {
     await page.goto("/datetime");

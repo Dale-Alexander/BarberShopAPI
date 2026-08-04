@@ -15,7 +15,19 @@
       "Bash(git log*)",
       "Bash(git show*)",
       "Bash(git branch*)",
-      "Bash(netstat*)"
+      "Bash(git checkout*)",
+      "Bash(git restore*)",
+      "Bash(netstat*)",
+      "Bash(grep*)",
+      "Bash(sed*)",
+      "Bash(cat*)",
+      "Bash(ls*)",
+      "Bash(find*)",
+      "Bash(head*)",
+      "Bash(tail*)",
+      "Bash(echo*)",
+      "Bash(node -e*)",
+      "Bash(cd*)"
     ],
     "deny": [
       "Bash(git push*)",

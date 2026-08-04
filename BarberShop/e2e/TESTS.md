@@ -39,10 +39,8 @@ verification, email retry exhaustion. Those are listed at the bottom.
 The customer is on `/checkout/:publicId` or has just paid. Something removes the slot underneath
 them. What do they actually see?
 
-- [ ] A1. Admin cancels the booking while the customer sits on the checkout page. Customer submits →
-      sees a clear refusal, not a silent failure or an infinite spinner.
-- [ ] A2. A full-day shop closure lands on the slot mid-checkout → customer ends up on the cancelled
-      screen with closure wording, not "Booking Confirmed".
+- [x] A2. A full-day shop closure lands on the slot mid-checkout → customer ends up on the cancelled
+      screen with closure wording, not "Booking Confirmed". `checkout-killed.spec.js`
 - [ ] A3. A closure lands **after** the card succeeded (the webhook refund path) → `/summary` must
       not show "Booking Confirmed"; it should land on the cancelled screen. `Summary.jsx` polls for
       this - the test needs to allow for that delay rather than assert instantly.
@@ -128,3 +126,7 @@ Add to this list rather than fighting a scenario that can't be driven. Each entr
 
 - Stripe webhook signature failures — no browser involvement; covered in `WebhookRefundTests`.
 - Email send failures and their retry-exhaustion flags — no UI; covered in `EmailFailureReviewTests`.
+- **A1, "admin cancels a booking mid-checkout" — not a real flow.** `admin-fetch` filters to
+  `Payment != null` and defaults to COMPLETED, so a PENDING booking never appears in the admin list.
+  An admin cannot see a checkout in progress, so cannot cancel one. What actually kills a live
+  checkout is a closure (A2), a deactivated barber (A4), losing the slot (A5), or the expiry job.
