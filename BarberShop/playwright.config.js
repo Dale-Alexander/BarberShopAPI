@@ -27,6 +27,16 @@ export const adminPassword = e2eEnv.ADMIN_PASSWORD;
 export const apiBaseUrl = "http://localhost:5205";
 export const appBaseUrl = "http://localhost:5173";
 
+/* The harness's own little server: it stands in for Resend so specs can read the email the customer was
+   sent, and it gates Stripe's webhook so a spec can hold a delivery while it changes the shop underneath
+   the customer. See e2e/sink-server.js for why both of those are needed. */
+export const sinkPort = 5299;
+export const sinkBaseUrl = `http://localhost:${sinkPort}`;
+
+/* Read here, not inside the sink, so the mismatch check runs against the very file the API is about to
+   load - the two can never drift apart and leave a run failing on signatures for no visible reason. */
+const stripeWebhookSecret = e2eEnv.STRIPE_WEBHOOK_SECRET ?? "";
+
 /* Where global-setup parks the signed-in admin's cookie. Specs that need staff rights do
    `test.use({ storageState: ADMIN_STATE })` instead of logging in themselves - see the rate-limit
    note in global-setup.js. Gitignored: it holds a live session token. */
@@ -79,6 +89,23 @@ export default defineConfig({
        `npm run e2e` builds once up front; letting three separate dotnet invocations each try to build
        the same project races on the output files. */
     webServer: [
+        /* Started as a webServer rather than from global-setup so Playwright owns its lifetime: it comes
+           up before the first spec and is killed when the run ends, taking `stripe listen` with it. Its
+           health endpoint stays down until the Stripe forwarder has either reported Ready! or given up,
+           so no card spec can start against a webhook that isn't being delivered yet. */
+        {
+            command: "node e2e/sink-server.js",
+            url: `${sinkBaseUrl}/_control/health`,
+            env: {
+                E2E_SINK_PORT: String(sinkPort),
+                E2E_API_WEBHOOK_URL: `${apiBaseUrl}/api/webhook`,
+                E2E_STRIPE_WEBHOOK_SECRET: stripeWebhookSecret,
+            },
+            reuseExistingServer: false,
+            timeout: 60_000,
+            stdout: "pipe",
+            stderr: "pipe",
+        },
         {
             command: `dotnet run --no-build --project "${apiProject}"`,//no build because npm run e2e already bulds once. 
             url: `${apiBaseUrl}/api/Barbers/barbers-with-bookings`,

@@ -17,13 +17,41 @@ npm run e2e:ui       # pick and step through tests
 npm run e2e:report   # open the last HTML report
 ```
 
-Stop your development API first. Port 5205 must be free — see below.
+Stop your development API first. Ports 5205 and 5299 must be free — see below.
 
 ## First-time setup
 
 1. Create the database once: `CREATE DATABASE [BarberShop_E2E]`
 2. `cp ../BarberShopAPI/.env.e2e.example ../BarberShopAPI/.env.e2e` and fill it in. It is gitignored.
 3. `npx playwright install chromium`
+4. For the card specs only: install the [Stripe CLI](https://stripe.com/docs/stripe-cli), run
+   `stripe login` once, then put its signing secret in `.env.e2e`:
+
+   ```bash
+   stripe listen --print-secret     # -> whsec_...
+   ```
+
+   That value goes in `STRIPE_WEBHOOK_SECRET`. It is **not** the secret from the Dashboard — the CLI
+   signs with its own — and it is stable per account and machine, so this is a one-time step. Skip it
+   and the card specs skip themselves with the reason printed; everything else runs as normal.
+
+## The sink server
+
+`e2e/sink-server.js` runs on 5299 alongside the API and does two jobs no browser can do for itself.
+
+**It stands in for Resend.** `RESEND_API_URL` in `.env.e2e` points the API at it, so every email the
+shop sends lands in memory and a spec can assert on what the customer was actually told. Nothing can
+reach the real Resend from a test run, which is also why `RESEND_API_KEY` there is a dummy.
+
+**It gates the webhook.** `stripe listen` forwards here rather than straight to the API, and a spec can
+HOLD a delivery, change the shop while the customer sits on "Finalising your booking...", then RELEASE
+it. That gap is the only way into the webhook's refund-and-cancel branches — in real life it is under a
+second wide. The body and `Stripe-Signature` are forwarded byte for byte, so the controller's real
+verification runs; only the timing is under test control.
+
+It also supervises `stripe listen`, so one process owns both and Playwright killing the server takes
+the forwarder with it. Its health endpoint stays down until the forwarder has either reported ready or
+definitively failed — so no card spec can start against a webhook that isn't being delivered yet.
 
 ## How it hangs together
 
