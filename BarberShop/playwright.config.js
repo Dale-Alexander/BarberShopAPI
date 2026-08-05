@@ -32,6 +32,16 @@ export const appBaseUrl = "http://localhost:5173";
    note in global-setup.js. Gitignored: it holds a live session token. */
 export const ADMIN_STATE = path.resolve(here, "./e2e/.auth/admin.json");
 
+/* The same trick for the two fixture barbers - staff specs that must NOT have admin rights (a barber
+   may only reach his own bookings and his own schedule) need a session that is genuinely a barber's.
+   Saved by global-setup for the same rate-limit reason as the admin one.
+
+   TWO of them, not one, because C9 destroys the session it uses: deactivating a barber bumps
+   TokenVersion and the middleware then rejects that cookie for the rest of the run. Reviving them does
+   not put TokenVersion back. So the spec that kills a session gets its own barber. */
+export const BARBER_ONE_STATE = path.resolve(here, "./e2e/.auth/barber1.json");
+export const BARBER_TWO_STATE = path.resolve(here, "./e2e/.auth/barber2.json");
+
 export default defineConfig({
     testDir: "./e2e",//where the tests live
     /* Serial, single worker. Every spec shares one database and one shop calendar, so parallel specs

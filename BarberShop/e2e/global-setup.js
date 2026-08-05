@@ -2,7 +2,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { request as pwRequest } from "@playwright/test";
-import { apiProject, envFile, appBaseUrl, adminEmail, adminPassword, ADMIN_STATE } from "../playwright.config.js";
+import {
+    apiProject, envFile, appBaseUrl, adminEmail, adminPassword,
+    ADMIN_STATE, BARBER_ONE_STATE, BARBER_TWO_STATE,
+} from "../playwright.config.js";
+import { BARBER_ONE, BARBER_TWO } from "./fixtures.js";
 
 /* Rebuilds the fixture before every run, so a suite never inherits the bookings, closures or
    deactivated barbers left behind by the last one. The seed itself refuses any database whose name
@@ -65,4 +69,29 @@ export default async function globalSetup() {//this runs once before any test
     await ctx.storageState({ path: ADMIN_STATE });
     await ctx.dispose();
     console.log(`[e2e] admin session saved`);
+
+    /* And a session for each fixture barber, for the specs that must NOT have admin rights - a barber
+       may only reach his own bookings and his own schedule, and an admin cookie would prove nothing
+       about that. The seed gives barbers the same password as the admin, so there's no extra secret.
+
+       Three logins per run against a 10/min limit, still comfortably inside it - and the reason this
+       lives here rather than in the specs that need it. */
+    for (const [barber, statePath] of [
+        [BARBER_ONE, BARBER_ONE_STATE],
+        [BARBER_TWO, BARBER_TWO_STATE],
+    ]) {
+        const barberCtx = await pwRequest.newContext({ baseURL: appBaseUrl });
+        const barberLogin = await barberCtx.post("/api/auth/login", {
+            data: { Email: barber.email, Password: adminPassword },
+        });
+        if (!barberLogin.ok()) {
+            throw new Error(
+                `[e2e] ${barber.email} login failed (${barberLogin.status()}). The seed creates barbers with ` +
+                `the admin password - check SeedE2E and .env.e2e agree.`
+            );
+        }
+        await barberCtx.storageState({ path: statePath });
+        await barberCtx.dispose();
+    }
+    console.log(`[e2e] barber sessions saved`);
 }
