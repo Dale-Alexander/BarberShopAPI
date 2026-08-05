@@ -1,3 +1,9 @@
+/* This page sits inside the dark admin shell (.admin-app, --primary-500). It was originally styled for
+   a light background - white cards, #333 labels, a near-black "selected" chip - so several controls were
+   dark-on-dark and effectively invisible. Colours below follow the same tokens as the other admin pages:
+   card = #1f2a40, input = hsl(220,25%,18%), border = hsl(220,20%,20%), text = hsl(210,20%,90%),
+   muted = --muted-fg, accent = --green-500 with hsl(220,25%,10%) text (see TeamMembers.css/index.css). */
+
 .sched-content {
     max-width: 900px;
     margin: 0 auto;
@@ -12,23 +18,39 @@
     margin-bottom: 1.5rem;
 }
 
+/* Matches .form-label on the other admin pages (uppercase, muted) instead of the old #333, which was
+   the unreadable "Barber" / "Starts from" caption. */
 .sched-field {
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
-    font-size: 0.85rem;
-    font-weight: 500;
-    color: #333;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted-fg);
 }
 
 .sched-field select,
 .sched-field input[type="date"] {
     padding: 0.55rem 0.75rem;
-    border: 1px solid #ddd;
-    border-radius: 8px;
+    border: 1px solid hsl(220, 20%, 20%);
+    border-radius: 0.5rem;
     font-size: 0.9rem;
-    background: #fff;
+    font-family: inherit;
+    text-transform: none;
+    letter-spacing: normal;
+    background: hsl(220, 25%, 18%);
+    color: hsl(210, 20%, 90%);
     min-width: 200px;
+    transition: border-color 0.2s;
+    /* Without this Chrome paints the native date-picker icon and the select's dropdown list in their
+       light-theme colours, which puts dark glyphs on the dark field. */
+    color-scheme: dark;
+}
+
+.sched-field select:focus,
+.sched-field input[type="date"]:focus {
+    border-color: var(--green-500);
 }
 
 .sched-versions {
@@ -39,27 +61,43 @@
 
 .sched-version-chip {
     padding: 0.45rem 0.85rem;
-    border: 1px solid #ddd;
+    border: 1px solid hsl(220, 20%, 20%);
     border-radius: 999px;
-    background: #fff;
+    background: hsl(220, 25%, 18%);
+    color: hsl(210, 20%, 90%);
     font-size: 0.8rem;
+    font-family: inherit;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
     white-space: nowrap;
 }
 
-.sched-version-chip:hover { border-color: #a0855b; }
-.sched-version-chip.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+.sched-version-chip:hover { border-color: var(--green-500); }
+.sched-version-chip:focus-visible { outline: 2px solid var(--green-500); outline-offset: 2px; }
+
+/* Was #1a1a1a on the #141b2d page - the selected version read as an empty gap. Green fill with dark
+   text is the same "this one is selected" language as .btn-primary and .team-tab--selected. */
+.sched-version-chip.active {
+    background: var(--green-500);
+    color: hsl(220, 25%, 10%);
+    border-color: var(--green-500);
+    font-weight: 600;
+}
+
 .sched-version-chip.state-upcoming { border-style: dashed; }
-.sched-version-chip.state-ended { opacity: 0.7; }
+
+/* :not(.active) so selecting an ended version doesn't have this dim the green chip's label - both
+   selectors carry the same specificity, so without it whichever came last would win. */
+.sched-version-chip.state-ended:not(.active) { color: var(--muted-fg); }
 
 .sched-readonly-note {
-    background: #f6f6f6;
-    border: 1px solid #eee;
+    background: hsla(170, 70%, 45%, 0.08);
+    border: 1px solid hsl(220, 20%, 20%);
+    border-left: 2px solid var(--green-500);
     border-radius: 8px;
     padding: 0.75rem 1rem;
     font-size: 0.85rem;
-    color: #666;
+    color: var(--muted-fg);
     margin-bottom: 1rem;
 }
 
@@ -75,15 +113,15 @@
     gap: 1rem;
     align-items: start;
     padding: 0.75rem 1rem;
-    border: 1px solid #eee;
+    border: 1px solid hsl(220, 20%, 20%);
     border-radius: 10px;
-    background: #fff;
+    background: var(--card-bg, #1f2a40);
 }
 
 .sched-day-name {
     font-weight: 600;
     font-size: 0.9rem;
-    color: #1a1a1a;
+    color: var(--grey-100);
     padding-top: 0.4rem;
 }
 
@@ -96,7 +134,7 @@
 
 .sched-dayoff {
     font-size: 0.85rem;
-    color: #999;
+    color: var(--muted-fg);
     font-style: italic;
     padding-top: 0.4rem;
 }
@@ -105,21 +143,32 @@
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    background: #f8f8f8;
-    border: 1px solid #eee;
+    background: hsl(220, 25%, 18%);
+    border: 1px solid hsl(220, 20%, 20%);
     border-radius: 8px;
     padding: 0.3rem 0.5rem;
+    color: hsl(210, 20%, 90%);
 }
 
 .sched-shift input[type="time"] {
-    border: 1px solid #ddd;
+    border: 1px solid hsl(220, 20%, 20%);
     border-radius: 6px;
     padding: 0.3rem 0.4rem;
     font-size: 0.85rem;
-    background: #fff;
+    font-family: inherit;
+    background: hsl(220, 25%, 14%);
+    color: hsl(210, 20%, 90%);
+    transition: border-color 0.2s;
+    /* Same reason as the date field above - this is what darkens the clock icon and the time spinner. */
+    color-scheme: dark;
 }
 
-.sched-shift input[type="time"]:disabled { background: #f0f0f0; color: #888; }
+.sched-shift input[type="time"]:focus { border-color: var(--green-500); }
+
+.sched-shift input[type="time"]:disabled {
+    background: hsl(220, 20%, 16%);
+    color: var(--muted-fg);
+}
 
 .sched-icon-btn {
     display: inline-flex;
@@ -127,29 +176,32 @@
     justify-content: center;
     border: none;
     background: transparent;
-    color: #b04a4a;
+    color: #e74c3c;
     cursor: pointer;
     padding: 0.2rem;
     border-radius: 6px;
+    transition: background 0.15s;
 }
-.sched-icon-btn:hover { background: #fbeaea; }
+.sched-icon-btn:hover { background: hsla(6, 78%, 57%, 0.15); }
 
 .sched-add-shift {
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
-    border: 1px dashed #ccc;
-    background: #fff;
-    color: #555;
+    border: 1px dashed hsl(220, 20%, 28%);
+    background: transparent;
+    color: var(--muted-fg);
     border-radius: 8px;
     padding: 0.35rem 0.6rem;
     font-size: 0.8rem;
+    font-family: inherit;
     cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
 }
-.sched-add-shift:hover { border-color: #a0855b; color: #a0855b; }
+.sched-add-shift:hover { border-color: var(--green-500); color: var(--green-500); }
 
 .sched-error {
-    color: #e53e3e;
+    color: #e74c3c;
     font-size: 0.85rem;
     margin-top: 0.75rem;
 }
@@ -168,14 +220,15 @@
     gap: 0.4rem;
 }
 
-.sched-delete { color: #b04a4a; }
+/* .btn-secondary already supplies the dark surface and light text; only the destructive tint is ours. */
+.sched-delete { color: #e74c3c; }
 
 .sched-new {
     margin-top: 2rem;
     padding: 1.25rem;
-    border: 1px solid #eee;
+    border: 1px solid hsl(220, 20%, 20%);
     border-radius: 12px;
-    background: #fafafa;
+    background: var(--card-bg, #1f2a40);
 }
 
 .sched-new h3 {
@@ -184,13 +237,26 @@
     gap: 0.4rem;
     font-size: 1rem;
     margin: 0 0 0.5rem;
+    color: var(--grey-100);
 }
 
 .sched-new p {
     font-size: 0.85rem;
-    color: #666;
+    color: var(--muted-fg);
     margin: 0 0 1rem;
     line-height: 1.5;
+}
+
+/* Says which already-scheduled version is setting the floor on the date picker below. */
+.sched-new-floor {
+    margin: 0 0 1rem;
+    padding: 0.6rem 0.75rem;
+    background: hsla(38, 92%, 62%, 0.08);
+    border-left: 2px solid hsl(38, 92%, 62%);
+    border-radius: 0.25rem;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    color: var(--muted-fg);
 }
 
 .sched-new-row {
@@ -200,8 +266,9 @@
     gap: 1rem;
 }
 
+/* Same surface as the shared .modal-content, so this modal and the ones on Team/Services match. */
 .sched-orphan-modal {
-    background: #fff;
+    background: hsl(220, 25%, 14%);
     border-radius: 12px;
     padding: 1.75rem;
     width: 100%;
@@ -211,8 +278,9 @@
     gap: 1rem;
 }
 
-.sched-orphan-modal h2 { font-size: 1.15rem; margin: 0; color: #1a1a1a; }
-.sched-orphan-modal p { margin: 0; font-size: 0.9rem; color: #555; line-height: 1.5; }
+.sched-orphan-modal h2 { font-size: 1.15rem; margin: 0; color: hsl(210, 20%, 90%); }
+.sched-orphan-modal p { margin: 0; font-size: 0.9rem; color: var(--muted-fg); line-height: 1.5; }
+.sched-orphan-modal strong { color: hsl(210, 20%, 90%); }
 
 .sched-orphan-list {
     list-style: none;
@@ -230,13 +298,13 @@
     flex-direction: column;
     gap: 2px;
     padding: 0.6rem 0.8rem;
-    border: 1px solid #eee;
+    border: 1px solid hsl(220, 20%, 20%);
     border-radius: 8px;
-    background: #fafafa;
+    background: hsl(220, 25%, 18%);
 }
 
-.sched-orphan-when { font-weight: 600; font-size: 0.88rem; color: #1a1a1a; }
-.sched-orphan-who { font-size: 0.8rem; color: #777; }
+.sched-orphan-when { font-weight: 600; font-size: 0.88rem; color: hsl(210, 20%, 90%); }
+.sched-orphan-who { font-size: 0.8rem; color: var(--muted-fg); }
 
 .sched-orphan-actions {
     display: flex;
@@ -250,5 +318,6 @@
 }
 
 /* Shown on a "these fit again" row when something OTHER than the hours still shuts the slot, so the admin
-   doesn't have to work out whether the booking is actually clear. */
-.sched-orphan-blocked { font-size: 0.78rem; color: #b45309; margin-top: 2px; }
+   doesn't have to work out whether the booking is actually clear. Amber, lightened from the original
+   #b45309 which was unreadable against the dark row behind it. */
+.sched-orphan-blocked { font-size: 0.78rem; color: hsl(38, 92%, 62%); margin-top: 2px; }

@@ -709,17 +709,17 @@ stored i the browser's memory which the backend cant access*/
 
                             <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8, maxHeight: 260, overflowY: "auto" }}>
                                 {deactivateConflict.conflicts.map((c) => (
-                                    <li key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "8px 12px", border: "1px solid var(--border, #e5e5e5)", borderRadius: 6 }}>
+                                    <li key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "8px 12px", border: "1px solid hsl(220, 20%, 20%)", borderRadius: 6 }}>
                                         <div style={{ display: "flex", flexDirection: "column" }}>
                                             <span style={{ fontWeight: 600 }}>{c.date} · {c.time}</span>
                                             {c.customer && <span style={{ color: "var(--muted-fg)", fontSize: 13 }}>{c.customer}</span>}
                                         </div>
                                         {c.willBeCancelled ? (
-                                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "#c9770a", fontSize: 13, whiteSpace: "nowrap" }}>
+                                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "hsl(38, 92%, 62%)", fontSize: 13, whiteSpace: "nowrap" }}>
                                                 <X size={14} /> Unconfirmed · will be cancelled
                                             </span>
                                         ) : (
-                                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "#2e7d32", fontSize: 13, whiteSpace: "nowrap" }}>
+                                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--green-500)", fontSize: 13, whiteSpace: "nowrap" }}>
                                                 <AlertTriangle size={14} /> {c.email ? "Kept · flagged for review" : c.phone ? `Kept · flagged, call ${formatPhone(c.phone)}` : "Kept · flagged for review"}
                                             </span>
                                         )}
@@ -782,7 +782,7 @@ stored i the browser's memory which the backend cant access*/
                             </p>
                             <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8, maxHeight: 260, overflowY: "auto" }}>
                                 {backOnDuty.bookings.map((b) => (
-                                    <li key={b.id} style={{ display: "flex", flexDirection: "column", padding: "8px 12px", border: "1px solid var(--border, #e5e5e5)", borderRadius: 6 }}>
+                                    <li key={b.id} style={{ display: "flex", flexDirection: "column", padding: "8px 12px", border: "1px solid hsl(220, 20%, 20%)", borderRadius: 6 }}>
                                         <span style={{ fontWeight: 600 }}>#{b.id} · {b.date} · {b.time}</span>
                                         <span style={{ color: "var(--muted-fg)", fontSize: 13 }}>
                                             {b.customer || "Customer"}{b.phone ? ` · ${formatPhone(b.phone)}` : b.email ? ` · ${b.email}` : ""}
@@ -791,7 +791,7 @@ stored i the browser's memory which the backend cant access*/
                                             closure may have landed on it while they were away. Only shown when
                                             something is actually in the way. */}
                                         {b.stillBlockedBy && (
-                                            <span style={{ color: "#b45309", fontSize: 12, marginTop: 2 }}>
+                                            <span style={{ color: "hsl(38, 92%, 62%)", fontSize: 12, marginTop: 2 }}>
                                                 Still blocked: {b.stillBlockedBy}
                                             </span>
                                         )}

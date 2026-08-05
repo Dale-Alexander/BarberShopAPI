@@ -1,5 +1,4 @@
 import {useState, useEffect, useRef} from "react";
-import "./Toast.css";
 
 // Severity -> accent colour + icon path. `error` keeps the original red look so untyped toasts are
 // unchanged; success/info give the user the standard "this worked" / "heads up" signal instead of

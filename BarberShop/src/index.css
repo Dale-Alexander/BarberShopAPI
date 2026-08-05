@@ -247,6 +247,11 @@ body{
     max-height: 85vh;
     overflow-y: auto;
     background: hsl(220, 25%, 14%);
+    /* The surface was dark but the text colour was never set, so anything inside that didn't name its
+       own colour inherited the document default - black on this near-black panel. That's what made the
+       date/time lines in the deactivate and reactivate modals unreadable. Set here rather than on each
+       span so every modal using this class inherits a sane default. */
+    color: hsl(210, 20%, 90%);
 }
 
 .modal-content--wide {
