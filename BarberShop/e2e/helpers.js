@@ -1,4 +1,4 @@
-import { ADMIN_STATE, appBaseUrl } from "../playwright.config.js";
+import { ADMIN_STATE, appBaseUrl, sinkBaseUrl } from "../playwright.config.js";
 
 /* An API client already signed in as the admin.
  *
@@ -270,6 +270,17 @@ export async function deactivateBarber(api, barberId) {
    run, so a barber left deactivated silently changes the shop for every spec that follows - and the
    failure lands somewhere else entirely, which is the worst kind to debug. */
 export async function reviveBarber(api, { fullName, email, password }) {
+    /* A no-op when they are already active. create-barber only revives a SOFT-DELETED row; called on a
+       live barber it answers 409 "already exists". That matters because the safe place to put this is
+       an afterEach - the line at the end of a spec is exactly the one a failure skips - and an afterEach
+       runs for the specs that never deactivated anybody too. */
+    const roster = await api.get("/api/Barbers/barbers-with-bookings?includeUnbookable=true");
+    if (roster.ok()) {
+        const { barbers } = await roster.json();
+        const firstName = fullName.split(" ")[0];
+        if (barbers.some((b) => b.barberName === firstName)) return;
+    }
+
     const res = await api.post("/api/barbers/create-barber", {
         multipart: { FullName: fullName, Email: email, Password: password },
     });
@@ -367,6 +378,169 @@ export async function openSlotGrid(page, { barberFirstName, slot }) {
 /** A single time chip in the grid, e.g. "11:00". */
 export const timeChip = (page, hhmm) =>
     page.locator(".bp-time-chip").filter({ hasText: new RegExp(`^${hhmm}$`) });
+
+/* ===========================================================================================
+   Paying by card, the webhook gate, and the mail sink.
+
+   All three lean on e2e/sink-server.js, which Playwright starts alongside the API. Read the header
+   there first - especially the reason the webhook has to be held rather than raced.
+   =========================================================================================== */
+
+/* Stripe's own test cards. Numbers, not PaymentMethod tokens, because the customer types a number into
+   the Payment Element and that is the thing under test.
+
+   There is deliberately no "refund fails" card here. Stripe's 4000000000005126 fails ASYNCHRONOUSLY -
+   the refund is returned as succeeded and flips to failed later - so it never reaches the webhook's
+   failed-refund branch, which reads the immediate response. See the B8 note in TESTS.md. */
+export const TEST_CARDS = {
+    success: "4242424242424242",
+    declined: "4000000000000002",
+};
+
+const sink = async (path, options = {}) => {
+    const res = await fetch(`${sinkBaseUrl}${path}`, options);
+    if (!res.ok) throw new Error(`sink ${path} failed: ${res.status} ${await res.text()}`);
+    return await res.json();
+};
+
+/* Whether card specs can run: is `stripe listen` actually forwarding? Comes back with a reason when it
+   isn't, so a skipped spec says WHY - "no webhook forwarder" and "this feature is broken" must never
+   look the same from the report. */
+export const sinkStatus = () => sink("/_control/status");
+
+/** Park the next webhook delivery instead of forwarding it. Always release it before the spec ends. */
+export const holdWebhook = () => sink("/_control/webhook/hold", { method: "POST" });
+
+/** Let the parked deliveries through, in arrival order, and wait for the API to answer them. */
+export const releaseWebhook = () => sink("/_control/webhook/release", { method: "POST" });
+
+/** Every email the shop has sent since the last clear, optionally filtered. */
+export const capturedEmails = async ({ to = null, subject = null } = {}) => {
+    const query = new URLSearchParams();
+    if (to) query.set("to", to);
+    if (subject) query.set("subject", subject);
+    return (await sink(`/_control/emails?${query}`)).emails;
+};
+
+/* Emails arrive through Hangfire, so they are never instant. Poll rather than assert once - and fail
+   with what DID arrive, because "no email" and "the wrong email" need different fixes. */
+export async function waitForEmail({ to, subject = null, timeout = 25_000 }) {
+    const deadline = Date.now() + timeout;
+    for (;;) {
+        const matches = await capturedEmails({ to, subject });
+        if (matches.length > 0) return matches[matches.length - 1];
+        if (Date.now() > deadline) {
+            const all = await capturedEmails();
+            throw new Error(
+                `No email to ${to}${subject ? ` about "${subject}"` : ""} within ${timeout}ms. ` +
+                `Sent so far: ${all.map((e) => `${e.to.join("/")}: ${e.subject}`).join(" | ") || "(nothing)"}`
+            );
+        }
+        await new Promise((r) => setTimeout(r, 500));
+    }
+}
+
+/* Proving an email was NOT sent needs a wait, not an immediate read - checking straight away would pass
+   before the job had a chance to run. Give it a real window, then assert on the silence. */
+export async function expectNoEmail({ to, subject = null, settleFor = 6_000 }) {
+    await new Promise((r) => setTimeout(r, settleFor));
+    const matches = await capturedEmails({ to, subject });
+    if (matches.length > 0) {
+        throw new Error(`Expected no email to ${to}, but got: ${matches.map((e) => e.subject).join(", ")}`);
+    }
+}
+
+/** Wipes the mailbox. Specs that assert on "the email" should start from an empty one. */
+export const clearEmails = () => sink("/_control/emails", { method: "DELETE" });
+
+/* Fills the contact fields and switches the checkout to the card form - everything up to, but not
+   including, typing a card number. Separate from the payment itself because the interesting specs need
+   to do something (hold the webhook, close the shop) between the two. */
+export async function startCardCheckout(page, publicId, {
+    fullName = "Card Customer", phone = "79123456", email = "card.customer@e2e.test",
+} = {}) {
+    await page.goto(`/checkout/${publicId}`);
+    await page.locator('input[name="customerName"]').fill(fullName);
+    await page.getByPlaceholder("john@example.com").fill(email);
+    await page.locator("input[type='tel']").fill(phone);
+
+    /* Pay Online is what calls payment-intent and creates the real PaymentIntent. The card fields live
+       in a Stripe iframe that renders only once the clientSecret comes back, so waiting for a usable
+       number field is also proof the intent was created - a spec that typed into nothing would
+       otherwise fail later and somewhere less obvious. */
+    await page.getByRole("button", { name: "Pay Online" }).click();
+    await openCardForm(page);
+}
+
+/* The Payment Element's iframe. Scoped to the checkout's card panel rather than picking the first
+   iframe on the page - Stripe mounts several hidden ones for its own bookkeeping. */
+const cardFrame = (page) => page.frameLocator(".checkout-card-fields iframe").first();
+
+/* Gets the card number field on screen and ready to type into.
+
+   This account has Revolut Pay enabled as well as cards, so the Payment Element renders as a COLLAPSED
+   ACCORDION - "Card" and "Revolut Pay" as two closed rows, with no card fields in the DOM at all until
+   one is opened. Matched on data-value rather than the visible label so it doesn't depend on the
+   element's language, and skipped entirely when the account offers cards only (no accordion, fields
+   rendered straight away) - both shapes are real, depending on the Dashboard. */
+async function openCardForm(page) {
+    const frame = cardFrame(page);
+    const cardRow = frame.locator('[role="button"][data-value="card"]');
+    await cardRow.or(frame.locator("#payment-numberInput")).first().waitFor({ timeout: 45_000 });
+    /* Only when it is actually closed. The accordion row TOGGLES, so calling this twice - which every
+       spec does, once to open the form and once on the way to paying - would shut it again and leave
+       the card fields unreachable. */
+    if (await cardRow.count() && (await cardRow.getAttribute("aria-expanded")) !== "true") {
+        await cardRow.click();
+    }
+    await frame.locator("#payment-numberInput").waitFor({ timeout: 30_000 });
+}
+
+/* Types a card in and submits. Postal code only appears for some account/country settings, so it is
+   filled when present rather than assumed either way. */
+export async function payWithCard(page, cardNumber = TEST_CARDS.success) {
+    const frame = cardFrame(page);
+    await openCardForm(page); // no-op when startCardCheckout already opened it
+
+    await frame.locator("#payment-numberInput").fill(cardNumber);
+    await frame.locator("#payment-expiryInput").fill("12 / 34");
+    await frame.locator("#payment-cvcInput").fill("123");
+    const postal = frame.locator("#payment-postalCodeInput");
+    if (await postal.count()) await postal.fill("12345");
+
+    await submitCheckout(page);
+}
+
+/* Clicks Confirm Booking and makes sure the click actually did something.
+
+   Roughly one submit in five is swallowed: the button is enabled, the click lands, and nothing at all
+   happens - no request to Stripe, no toast, no navigation. handleCardConfirm has two SILENT early
+   returns (`!isConfirmValid()` and `!isContactValid()`), so the customer gets no feedback whatsoever
+   when one of them fires; that is a real wrinkle in the checkout form, written up under section F in
+   TESTS.md, and it is not this helper's job to hide it.
+
+   What this does is make the harness's own arrangement reliable without touching any assertion. A
+   swallowed click is retried ONCE, and only when the page has neither moved nor said anything - if the
+   app answered with a toast (a declined card, say) that is a real outcome and we leave it alone. */
+async function submitCheckout(page) {
+    const confirm = page.getByRole("button", { name: "Confirm Booking" });
+    const startedAt = page.url();
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        /* "The app acted on the click" means it went to Stripe - watched as a REQUEST rather than as a
+           toast, because the toast component renders with inline styles and no class or role to hold
+           on to. A decline is an answer too, so this returns for it and lets the spec assert on it. */
+        const askedStripe = page.waitForRequest(
+            (r) => /api\.stripe\.com\/v1\/payment_intents\/.+\/confirm/.test(r.url()), { timeout: 8_000 },
+        ).then(() => true).catch(() => false);
+        const movedOn = page.waitForURL((url) => url.toString() !== startedAt, { timeout: 8_000 })
+            .then(() => true).catch(() => false);
+
+        await confirm.click();
+        if (await Promise.race([askedStripe, movedOn])) return;
+        if (attempt === 1) console.log("[e2e] Confirm Booking was swallowed - clicking once more");
+    }
+}
 
 /** The barber names a customer is currently offered on the booking page. */
 export async function visibleBarberNames(page) {
