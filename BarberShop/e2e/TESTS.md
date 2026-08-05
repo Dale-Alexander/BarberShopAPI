@@ -86,7 +86,10 @@ them. What do they actually see?
 
 > **Read before writing any more of section A or B.** A closure and a schedule change do NOT cancel
 > a booking that is already confirmed — they FLAG it and leave it standing, money and all, for an
-> admin to reassign, move or cancel by hand. Only PENDING bookings are cancelled outright. Any
+> admin to deal with by hand. What the note offers depends on scope: a barber-only closure (or a
+> schedule change) says reassign / move / cancel, while a shop-wide closure says only move or cancel,
+> because every chair is shut and reassigning achieves nothing. Only PENDING bookings are cancelled
+> outright. Any
 > scenario below phrased as "X cancels the confirmed booking" is wrong about the product; the real
 > outcome is a worklist entry. Barber deactivation is the same story (confirmed bookings survive and
 > are flagged).

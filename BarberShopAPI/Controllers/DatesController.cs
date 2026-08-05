@@ -97,10 +97,15 @@ namespace BarberShopAPI.Controllers
                         WillBeEmailed = false
                     }).ToList();
 
+                    // Same reasoning as the review note below: reassigning is only an option when the
+                    // closure is one barber's. A shop-wide closure shuts every chair.
+                    var confirmedOptions = newClosure.BarberId == null
+                        ? "move or cancel"
+                        : "reassign, move or cancel";
                     var message = $"This closure overlaps {conflictDetails.Count} existing booking(s). "
                         + (confirmedConflicts.Count > 0
                             ? $"{confirmedConflicts.Count} confirmed booking(s) will NOT be cancelled - they stay live "
-                              + "and are flagged in Needs Review for you to reassign, move or cancel. The customer "
+                              + $"and are flagged in Needs Review for you to {confirmedOptions}. The customer "
                               + "has not been told. "
                             : "")
                         + (pendingConflicts.Count > 0
@@ -138,26 +143,38 @@ namespace BarberShopAPI.Controllers
                  * The note has to say the customer hasn't been told: unlike most NeedsReview entries nothing
                  * has happened to this booking yet - it is still on, and stays on until the admin acts. The
                  * phone number rides along because a walk-in booked by staff may have no email at all. */
-                foreach (var booking in confirmedConflicts)
-                {
-                    booking.FlagForReview(
-                        $"{ReviewMarkers.ShopClosed} - {booking.StartDateTime:MMM d 'at' h:mm tt}. "
-                        + "The customer has NOT been told. Reassign it, move it, or cancel it."
-                        + (string.IsNullOrWhiteSpace(booking.ContactEmail)
-                            ? $" No email on file - reach them on {(string.IsNullOrWhiteSpace(booking.User?.Phone) ? "the number on the booking" : booking.User!.Phone)}."
-                            : ""));
-                }
-                if (confirmedConflicts.Count > 0) await _context.SaveChangesAsync();
-
                 // Only barber-scoped closures carry a name; shop-wide (BarberId == null) stays null so the
                 // admin calendar renders just the reason. Lets the client show "Name - reason" immediately
-                // instead of falling back to the reason until the next reload.
+                // instead of falling back to the reason until the next reload. Resolved before the loop
+                // below because the review note names the barber when the closure is only theirs.
                 var barberName = closure.BarberId == null
                     ? null
                     : await _context.Barbers
                         .Where(b => b.Id == closure.BarberId)
                         .Select(b => b.User.Name)
                         .FirstOrDefaultAsync();
+
+                /* Shop-wide and barber-only closures get different notes. A barber's day off doesn't close
+                 * the shop, and a shop-wide closure can't be solved by reassigning - every chair is shut,
+                 * so the only real options are moving the booking or cancelling it. */
+                var closureIsShopWide = closure.BarberId == null;
+                foreach (var booking in confirmedConflicts)
+                {
+                    var what = closureIsShopWide
+                        ? ReviewMarkers.ShopClosed
+                        : $"{barberName ?? "This barber"} {ReviewMarkers.BarberClosed}";
+                    var options = closureIsShopWide
+                        ? "Move it or cancel it."
+                        : "Reassign it to another barber, move it, or cancel it.";
+
+                    booking.FlagForReview(
+                        $"{what} - {booking.StartDateTime:MMM d 'at' h:mm tt}. "
+                        + $"The customer has NOT been told. {options}"
+                        + (string.IsNullOrWhiteSpace(booking.ContactEmail)
+                            ? $" No email on file - reach them on {(string.IsNullOrWhiteSpace(booking.User?.Phone) ? "the number on the booking" : booking.User!.Phone)}."
+                            : ""));
+                }
+                if (confirmedConflicts.Count > 0) await _context.SaveChangesAsync();
 
                 return Ok(new GetBarberShopClosuresViewModel
                 {
@@ -348,7 +365,11 @@ namespace BarberShopAPI.Controllers
                     .Where(b => b.Status == BookingStatus.COMPLETED
                                 && b.StartDateTime > now
                                 && b.NeedsReview
-                                && b.ReviewReason != null && b.ReviewReason.Contains(ReviewMarkers.ShopClosed)
+                                // Both variants: a shop-wide closure and a barber's own time off write
+                                // different sentences, and either can be the note this closure left.
+                                && b.ReviewReason != null
+                                && (b.ReviewReason.Contains(ReviewMarkers.ShopClosed)
+                                    || b.ReviewReason.Contains(ReviewMarkers.BarberClosed))
                                 && (shopClosure.BarberId == null || b.BarberId == shopClosure.BarberId)
                                 && b.StartDateTime < closureEnd
                                 && b.StartDateTime.AddMinutes(b.DurationMin) > closureStart)

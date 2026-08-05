@@ -158,7 +158,12 @@ namespace BarberShopAPI.Tests
             // Both notes stay: nothing is ever withdrawn automatically. StillBlockedBy above is how the
             // admin learns where this booking actually stands without re-deriving it from the notes.
             Assert.Contains("falls outside their", booking.ReviewReason);
-            Assert.Contains("shop is closed", booking.ReviewReason);
+            /* This closure is scoped to the one barber (it posts a barberId), so the note says the BARBER
+               is off, not that the shop is shut - the shop is open and the booking could go to another
+               chair. Asserting the marker rather than prose keeps this pinned to the one author of that
+               sentence (see ReviewMarkers). */
+            Assert.Contains(ReviewMarkers.BarberClosed, booking.ReviewReason);
+            Assert.DoesNotContain(ReviewMarkers.ShopClosed, booking.ReviewReason);
             Assert.True(booking.NeedsReview);
         }
 

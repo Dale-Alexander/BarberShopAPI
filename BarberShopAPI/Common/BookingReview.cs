@@ -29,7 +29,16 @@ namespace BarberShopAPI.Common
 
         public const string BarberLeft = "has left the shop, and this booking is still live";
 
+        /* A closure is either shop-wide (ShopClosure.BarberId == null) or one barber's own time off, and
+         * the two need different notes: saying "the shop is closed" for a barber's day off is simply
+         * false, and telling the admin to reassign a shop-wide closure is useless advice - every barber
+         * is shut, so moving it to a colleague changes nothing.
+         *
+         * Two constants rather than one because the sentences share no useful wording. Anything matching
+         * a closure note has to test BOTH - see DeleteClosure, the only reader. */
         public const string ShopClosed = "The shop is closed for this booking's slot";
+
+        public const string BarberClosed = "is off for this booking's slot";
     }
 
     public static class BookingReview

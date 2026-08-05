@@ -386,6 +386,24 @@ namespace BarberShopAPI.Services
                 ? "A full refund has been issued to your original payment method and should appear within a few business days.\n\n"
                 : "";
 
+            /* CancellationReason.ShopClosure covers BOTH a shop-wide closure and one barber's own time off -
+             * IsSlotClosedAsync matches `BarberId == null || BarberId == booking.BarberId`. This email used
+             * to say "we've had to close the shop" for both, which is plainly false for a barber's day off
+             * and sends the customer away when the shop is open and another chair may be free that same day.
+             * Same shop-wide/barber-only conflation the Needs Review note used to have. */
+            /* Note the asymmetry: the barber wording needs a barber-scoped closure to be POSITIVELY found,
+             * it is not just "no shop-wide closure". By the time this job runs the closure may have been
+             * deleted, and the fixtures cancel bookings without one at all - in either case we know only
+             * that the slot went, so we keep the original shop wording rather than inventing a reason. */
+            var shopWide = await BookingSlotGuard.IsSlotClosedShopWideAsync(_context, booking);
+            var barberOnly = !shopWide && await BookingSlotGuard.IsSlotClosedAsync(_context, booking);
+            var reasonHtml = barberOnly
+                ? "your barber isn't available on"
+                : "we've had to close the shop on";
+            var recovery = barberOnly
+                ? "Please visit our website to book another time, or another barber for the same day."
+                : "Please visit our website to book another time.";
+
             var message = new EmailMessage
             {
                 From = "Dale's Barbershop <onboarding@resend.dev>",
@@ -394,17 +412,17 @@ namespace BarberShopAPI.Services
             message.To.Add(booking.ContactEmail);
             message.HtmlBody = $@"
             <h2>Hi {safeName},</h2>
-            <p>We're sorry, but we've had to close the shop on
+            <p>We're sorry, but {reasonHtml}
             <strong>{booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}</strong>,
             so your appointment for that time has been cancelled.</p>
             {refundHtml}
-            <p>We apologise for the inconvenience. Please visit our website to book another time.</p>";
+            <p>We apologise for the inconvenience. {recovery}</p>";
 
             message.TextBody = $"Hi {booking.User.Name},\n\n" +
-                       $"We're sorry, but we've had to close the shop on {booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}, " +
+                       $"We're sorry, but {reasonHtml} {booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}, " +
                        $"so your appointment for that time has been cancelled.\n\n" +
                        refundText +
-                       $"We apologise for the inconvenience. Please visit our website to book another time.";
+                       $"We apologise for the inconvenience. {recovery}";
 
             try
             {
@@ -422,7 +440,8 @@ namespace BarberShopAPI.Services
 
                 booking.FlagForReview(
                     $"Cancellation email to {booking.ContactEmail} failed after {EmailJobPolicy.ClosureCancelRetries + 1} attempts ({ex.Message}). "
-                    + $"Call the customer to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled by the shop closure."
+                    + $"Call the customer to tell them their {booking.StartDateTime:MMM d 'at' h:mm tt} appointment was cancelled "
+                    + (barberOnly ? "because their barber was unavailable that day." : "by the shop closure.")
                     + RefundNoteForWorklist(booking.Payment));
                 await _context.SaveChangesAsync();
             }

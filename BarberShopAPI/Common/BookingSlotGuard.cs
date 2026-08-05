@@ -102,13 +102,31 @@ namespace BarberShopAPI.Common
         /// leaves the booking just as shut, so it must not be announced as reopened.
         /// </summary>
         public static async Task<bool> IsSlotClosedAsync(BarberShopContext context, Booking booking)
+            => await ClosuresCoveringSlot(context, booking)
+                .AnyAsync(s => s.BarberId == null || s.BarberId == booking.BarberId);
+
+        /// <summary>
+        /// Whether a SHOP-WIDE closure covers this booking's slot, as opposed to only the barber's own
+        /// time off. Both are "closed" as far as IsSlotClosedAsync is concerned, but they are not the same
+        /// thing to tell a customer: if the shop is shut their only option is another time, whereas if it
+        /// was their barber's day off the shop is open and another chair may be free the same day. The
+        /// cancellation email branches on this so it stops saying "we've had to close the shop" for what
+        /// was really one barber being off.
+        /// </summary>
+        public static async Task<bool> IsSlotClosedShopWideAsync(BarberShopContext context, Booking booking)
+            => await ClosuresCoveringSlot(context, booking).AnyAsync(s => s.BarberId == null);
+
+        /* The date/time overlap test both questions above share. Kept in one place deliberately: they
+         * differ ONLY in which barber's closures count, and two hand-copied overlap predicates would
+         * eventually drift and start disagreeing about whether a slot is shut. */
+        private static IQueryable<ShopClosure> ClosuresCoveringSlot(BarberShopContext context, Booking booking)
         {
             var appointmentDate = DateOnly.FromDateTime(booking.StartDateTime);
             var appointmentTime = TimeOnly.FromDateTime(booking.StartDateTime);
             var endTime = TimeOnly.FromDateTime(booking.StartDateTime.AddMinutes(booking.DurationMin));
 
-            return await context.ShopClosures.AnyAsync(s =>
-                s.IsActive == true && (s.BarberId == null || s.BarberId == booking.BarberId) &&
+            return context.ShopClosures.Where(s =>
+                s.IsActive == true &&
                 ((s.EndDate == null && s.StartDate == appointmentDate) ||
                  (s.EndDate != null && s.StartDate <= appointmentDate && s.EndDate >= appointmentDate)) &&
                 (s.IsFullDay || (s.StartTime < endTime && s.EndTime > appointmentTime)));
