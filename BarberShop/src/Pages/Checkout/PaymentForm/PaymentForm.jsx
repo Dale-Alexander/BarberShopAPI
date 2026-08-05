@@ -14,6 +14,12 @@ import { getErrorMessage } from "../../../utils/errorMessage.js";
 import { formatEuro } from "../../../utils/money.js";
 const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, setClientSecret, paymentMethod, setPaymentMethod, phone, setPhone, fullName, setFullName }) => {
     const stripeRef = useRef(null);
+    /* For moving focus to whichever contact field blocked the submit (see focusFirstInvalid). The phone
+       one is on a wrapper rather than the input: FancyPhoneInput is shared and doesn't forward a ref, and
+       giving it one just for this would change a component other pages render too. */
+    const nameRef = useRef(null);
+    const emailRef = useRef(null);
+    const phoneFieldRef = useRef(null);
     const [loadingPayment, setLoadingPayment] = useState(false);
     // Set when the backend says a card payment for this booking is already in flight (from another tab /
     // session) that we can't render a form for. We keep the customer on CARD and show a wait message.
@@ -51,8 +57,10 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
         //We only want the to redirect for the "gone" ones. For an invalid email, the user should stay on the page and fix it. 
     };
 
-    // Gates the Confirm button. Uses the inline name check (not the min-length one) so a too-short
-    // name doesn't lock the button - that case is caught by a toast when they actually submit.
+    // Gates the Confirm button. Uses the inline name check (not the min-length one) so a half-typed name
+    // doesn't lock the button. That means a blank or one-character name leaves Confirm ENABLED and the
+    // submit is stopped later, by the isContactValid check in the two handlers - which is why those have
+    // to put focus on the field rather than just return.
     const isUserDetailsValid = () => {
         if (validateNameInline(fullName)) return false;
         if (validateEmail(email)) return false;
@@ -71,6 +79,26 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
     // All three contact fields fully valid (name incl. the 2-char minimum). Gates submit after the
     // inline errors have been revealed via setAttempted.
     const isContactValid = () => !validateName(fullName) && !validateEmail(email) && isPhoneValid();
+
+    /* Both Confirm handlers used to just flip `attempted` and return when a contact field was wrong. That
+       does reveal the inline error - but it renders next to the field, at the top of the form, while the
+       Confirm button is at the bottom: several hundred pixels away with the card form open, more than a
+       screen apart on a phone. The submit looked like it did nothing at all, and a screen reader was told
+       nothing whatsoever.
+       In practice only the name can get this far (the button's own gate has already proved the email and
+       phone valid using the same functions), but this walks all three in field order so it stays correct
+       if either gate changes. Scroll first, then focus with preventScroll, so the field isn't yanked into
+       view twice. */
+    const focusFirstInvalid = () => {
+        const target =
+            validateName(fullName) ? nameRef.current
+            : !isPhoneValid() ? phoneFieldRef.current?.querySelector(".fpi-number-input")
+            : validateEmail(email) ? emailRef.current
+            : null;
+        if (!target) return;
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        target.focus({ preventScroll: true });
+    };
 
 
     const isConfirmValid = () => {
@@ -127,7 +155,7 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
     const handleCashConfirm = async () => {
         if (hasClickedConfirm || !isConfirmValid()) return;
         setAttempted(true);
-        if (!isContactValid()) return;
+        if (!isContactValid()) return focusFirstInvalid();
         setHasClickedConfirm(true);
         try {
             // No amount is sent: the server records the booking's own service total (see above).
@@ -153,7 +181,7 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
     const handleCardConfirm = async () => {
         if (hasClickedConfirm || !isConfirmValid()) return;
         setAttempted(true);
-        if (!isContactValid()) return;
+        if (!isContactValid()) return focusFirstInvalid();
         if (!stripeRef.current?.isReady()){
             showToast("Stripe not ready", "Payment Provider isn't ready yet");
             return;
@@ -203,25 +231,37 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
                     <div className="checkout-field-group">
                         <div className="checkout-field">
                             <label className="checkout-field__label">Name</label>
-                            <input value={fullName} onChange={(e) => setFullName(e.target.value)} className={`checkout-field__input ${nameError ? "checkout-field__input--invalid" : ""}`} type="text" name="customerName" placeholder="John Smith" />
-                            {nameError && <p className="checkout-field__error">{nameError}</p>}
+                            {/* aria-invalid + aria-describedby tie the red line below to this box. Nothing
+                                changes on screen; without them a screen reader announces "Name, edit text"
+                                and never reads the error, because the two elements are only related by
+                                sitting near each other. describedBy is left off when there's no error so
+                                it can't point at an id that isn't rendered. */}
+                            <input ref={nameRef} value={fullName} onChange={(e) => setFullName(e.target.value)} className={`checkout-field__input ${nameError ? "checkout-field__input--invalid" : ""}`} type="text" name="customerName" placeholder="John Smith"
+                                aria-invalid={!!nameError || undefined}
+                                aria-describedby={nameError ? "checkout-name-error" : undefined} />
+                            {nameError && <p id="checkout-name-error" className="checkout-field__error">{nameError}</p>}
                         </div>
-                        <div className="checkout-field">
+                        <div className="checkout-field" ref={phoneFieldRef}>
                             <label className="checkout-field__label">Phone Number</label>
-                            <FancyPhoneInput value={phone} onChange={(val, iso2) => handlePhoneChange(val, iso2, setPhone)}/>
-                            {phoneError && <p className="checkout-field__error">{phoneError}</p>}
+                            <FancyPhoneInput value={phone} onChange={(val, iso2) => handlePhoneChange(val, iso2, setPhone)}
+                                invalid={!!phoneError}
+                                describedBy={phoneError ? "checkout-phone-error" : undefined}/>
+                            {phoneError && <p id="checkout-phone-error" className="checkout-field__error">{phoneError}</p>}
                         </div>
                         <div className="checkout-field">
                             <label className="checkout-field__label">Email</label>
                             <input
+                                ref={emailRef}
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
                                 className={`checkout-field__input ${emailError ? "checkout-field__input--invalid" : ""}`}
                                 type="email"
                                 name="customerEmail"
-                                placeholder="john@example.com" />
+                                placeholder="john@example.com"
+                                aria-invalid={!!emailError || undefined}
+                                aria-describedby={emailError ? "checkout-email-error" : undefined} />
                             {emailError && (
-                                <p className = "checkout-field__error">{emailError}</p>
+                                <p id="checkout-email-error" className = "checkout-field__error">{emailError}</p>
                             ) }
                         </div>
                     </div>

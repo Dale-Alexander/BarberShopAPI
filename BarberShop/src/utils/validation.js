@@ -10,7 +10,8 @@
 
 // The "obvious" problems, surfaced inline as the user types. Deliberately does NOT include the
 // min-length rule: a half-typed name ("J") shouldn't flash an error while someone is still
-// typing - that one is only enforced by a toast on submit (see validateName).
+// typing - that one is only enforced on submit (see validateName). Note an EMPTY string passes
+// every rule here, so callers using this to enable a submit button will enable it on a blank name.
 export const validateNameInline = (name) => {
     const trimmed = (name ?? "").trim();
     if (/\d/.test(trimmed)) return "Name cannot contain numbers";
@@ -20,8 +21,8 @@ export const validateNameInline = (name) => {
     return null;
 };
 
-// Full check used on submit. Everything validateNameInline flags, plus the 2-character minimum
-// (the part that stays a toast rather than an inline error).
+// Full check used on submit. Everything validateNameInline flags, plus the 2-character minimum -
+// the one rule that only ever surfaces once the user has actually tried to submit.
 export const validateName = (name) => {
     const inline = validateNameInline(name);
     if (inline) return inline;
