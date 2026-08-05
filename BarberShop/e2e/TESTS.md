@@ -75,8 +75,12 @@ them. What do they actually see?
       NOT guard those headers. Playwright's `goBack` re-runs the SPA fetch either way. The status
       guard behind the redirect is covered; the caching fix is not, and would need a different
       approach (bfcache, or asserting on response headers directly).
-- [ ] A8. Customer has the same checkout open in two tabs and pays in one → the other tab must not
-      produce a second charge.
+- [x] A8. Customer has the same checkout open in two tabs and pays in one → the other tab's submit is
+      refused and lands on the completed screen. `two-tabs.spec.js`
+      Two real tabs in one context, and the second tab drives the actual form rather than posting to
+      the API. Note the limit written into the spec: it proves no second BOOKING was created, not no
+      second PAYMENT — nothing in the admin API exposes payment rows to count, and the unique index
+      on `Payment.BookingId` is what guards that (C#-covered).
 
 > **Read before writing any more of section A or B.** A closure and a schedule change do NOT cancel
 > a booking that is already confirmed — they FLAG it and leave it standing, money and all, for an
