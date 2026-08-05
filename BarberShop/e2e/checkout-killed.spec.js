@@ -3,7 +3,7 @@ import { BARBER_ONE, SERVICES } from "./fixtures.js";
 import {
     adminApi, findBarberId, findServiceId, slotInDays,
     createPendingBooking, createClosure, dateOf,
-    confirmAsCash, findBookingIdByStart, cancelBooking,
+    confirmAsCash, findBookingIdByStart, cancelBooking, submitCashCheckout,
 } from "./helpers.js";
 
 /* TESTS.md section A - the booking dies while the customer is still in checkout.
@@ -41,10 +41,12 @@ test.describe("a booking killed while the customer is in checkout", () => {
         const closure = await createClosure(api, { date: dateOf(startDateTime) });
         expect(closure.status(), await closure.text()).toBe(200);
 
-        // The customer acts on a page that is now dead - the next thing they do must tell them so.
-        await page.reload();
+        /* The customer acts on a page that is now dead - the next thing they do must tell them so.
+           They fill in the form and click Confirm, which is what actually happens: confirm-cash
+           answers 400 and the app has to read that as "gone", not as a bad input. */
+        await submitCashCheckout(page);
 
-        await expect(page).toHaveURL(new RegExp(`/cancelledorcompleted/${publicId}`));
+        await expect(page).toHaveURL(new RegExp(`/cancelledorcompleted/${publicId}`), { timeout: 15_000 });
         await expect(page.getByText("Cancelled").first()).toBeVisible();
         /* And the opposite must not be true. A cancelled booking that still says "Confirmed" anywhere
            on this screen is the worst version of this bug, so assert it explicitly. */

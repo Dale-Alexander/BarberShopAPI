@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { BARBER_TWO, SERVICES } from "./fixtures.js";
 import {
     adminApi, findBarberId, findServiceId, slotInDays,
-    createPendingBooking, confirmAsCash,
+    createPendingBooking, confirmAsCash, submitCashCheckout,
 } from "./helpers.js";
 
 /* TESTS.md A8 - the same checkout open twice.
@@ -44,11 +44,7 @@ test.describe("the same checkout open in two tabs", () => {
         await confirmAsCash(request, publicId);
 
         // Now they fill in and submit the second tab, which still looks perfectly live to them.
-        await tabTwo.locator('input[name="customerName"]').fill("Test Customer");
-        await tabTwo.getByPlaceholder("john@example.com").fill("customer@e2e.test");
-        await tabTwo.locator("input[type='tel']").fill("79123456");
-        await tabTwo.getByRole("button", { name: "Pay at Store" }).click();
-        await tabTwo.getByRole("button", { name: "Confirm Booking" }).click();
+        await submitCashCheckout(tabTwo);
 
         /* They must end up looking at the booking they already have, not at a second one and not at
            a form that silently did nothing. */

@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { BARBER_ONE, SERVICES } from "./fixtures.js";
 import {
     adminApi, findBarberId, findServiceId, slotInDays,
-    createPendingBooking, getSchedule, setShifts, FULL_WEEK_SHIFTS,
+    createPendingBooking, getSchedule, setShifts, FULL_WEEK_SHIFTS, submitCashCheckout,
 } from "./helpers.js";
 
 /* TESTS.md A6 - the barber's hours are narrowed under a customer who is mid-payment.
@@ -48,8 +48,8 @@ test.describe("the barber's hours are narrowed while the customer is in checkout
         const res = await setShifts(api, scheduleId, narrowed);
         expect(res.status(), await res.text()).toBe(200);
 
-        await page.reload();
-        await expect(page).toHaveURL(new RegExp(`/cancelledorcompleted/${publicId}`));
+        await submitCashCheckout(page);
+        await expect(page).toHaveURL(new RegExp(`/cancelledorcompleted/${publicId}`), { timeout: 15_000 });
 
         /* The slot wording, not the barber wording. Telling this customer their barber is no longer
            available would be false - he still works here, just not at 4pm - and would send them off

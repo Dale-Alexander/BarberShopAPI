@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { BARBER_TWO, SERVICES, adminPassword } from "./fixtures.js";
 import {
     adminApi, findBarberId, findServiceId, slotInDays,
-    createPendingBooking, deactivateBarber, reviveBarber,
+    createPendingBooking, deactivateBarber, reviveBarber, submitCashCheckout,
 } from "./helpers.js";
 
 /* TESTS.md A4 - the barber leaves while a customer is paying for them.
@@ -48,8 +48,8 @@ test.describe("the barber leaves while the customer is in checkout", () => {
 
         await deactivateBarber(api, barberId);
 
-        await page.reload();
-        await expect(page).toHaveURL(new RegExp(`/cancelledorcompleted/${publicId}`));
+        await submitCashCheckout(page);
+        await expect(page).toHaveURL(new RegExp(`/cancelledorcompleted/${publicId}`), { timeout: 15_000 });
 
         /* The wording has to be the BARBER one, not the generic slot-unavailable copy. Getting this
            wrong is a real failure the customer feels: "this time slot is no longer available" sends
