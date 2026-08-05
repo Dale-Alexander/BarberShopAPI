@@ -50,11 +50,19 @@ StripeConfiguration.ApiKey = stripeKey;
 
 var resendKey = Environment.GetEnvironmentVariable("RESEND_API_KEY");
 
+/* Where the Resend client posts. Unset everywhere except the browser-test env file, where it points at
+ * the harness's local mail sink (BarberShop/e2e/sink-server.js) so a run can assert on what the customer
+ * was actually sent - subject, wording, the reset link - without a Resend account and with no chance of
+ * mailing a real person. Deliberately opt-in and absent by default: with no value the client keeps its
+ * own https://api.resend.com default, so production and development are untouched by this. */
+var resendApiUrl = Environment.GetEnvironmentVariable("RESEND_API_URL");
+
 builder.Services.AddOptions();
 builder.Services.AddHttpClient<ResendClient>();
 builder.Services.Configure<ResendClientOptions>(o =>
 {
     o.ApiToken = resendKey!;
+    if (!string.IsNullOrWhiteSpace(resendApiUrl)) o.ApiUrl = resendApiUrl;
 });
 builder.Services.AddTransient<IResend, ResendClient>();
 builder.Services.AddScoped<IEmailService, EmailService>();
