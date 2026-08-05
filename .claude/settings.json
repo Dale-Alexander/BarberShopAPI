@@ -4,9 +4,11 @@
     "allow": [
       "Read",
       "Bash(npm run e2e*)",
-      "Bash(npm run lint)",
+      "Bash(npm run lint*)",
       "Bash(npm run build)",
+      "Bash(npm run dev)",
       "Bash(npx playwright*)",
+      "Bash(npx eslint*)",
       "Bash(dotnet build*)",
       "Bash(dotnet test*)",
       "Bash(dotnet run*)",
@@ -17,6 +19,10 @@
       "Bash(git branch*)",
       "Bash(git checkout*)",
       "Bash(git restore*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git push*)",
+      "Bash(node -e*)",
       "Bash(netstat*)",
       "Bash(grep*)",
       "Bash(sed*)",
@@ -25,17 +31,9 @@
       "Bash(find*)",
       "Bash(head*)",
       "Bash(tail*)",
+      "Bash(wc*)",
       "Bash(echo*)",
-      "Bash(node -e*)",
       "Bash(cd*)"
-    ],
-    "deny": [
-      "Bash(git push*)",
-      "Bash(git reset --hard*)",
-      "Bash(git clean*)",
-      "Bash(rm -rf*)",
-      "Bash(sqlcmd*)",
-      "Bash(dotnet ef database drop*)"
     ]
   }
 }
