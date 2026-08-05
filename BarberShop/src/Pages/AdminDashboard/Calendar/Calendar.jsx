@@ -9,7 +9,7 @@ import "./Calendar.css";
 import useFetch from "../../../Hooks/useFetch.js";
 import { Box, List, ListItem, ListItemText, Typography } from "@mui/material";
 import { startOfDay, addDays } from "date-fns";
-import { Trash2, X, Menu, Mail, Phone, AlertTriangle, RotateCw } from "lucide-react";
+import { Trash2, X, Menu, Phone, AlertTriangle, RotateCw } from "lucide-react";
 import { AuthContext } from "../../../Context/AuthContext.jsx";
 import { ToastContext } from "../../../Context/ToastContext.jsx";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
@@ -276,6 +276,10 @@ const AdminCalendar = () => {
                    of wrong: they'd stop looking. Only the checkouts are actually gone. */
                 const confirmedCount = conflictData.conflicts.filter(c => c.status !== "PENDING").length;
                 const pendingCount = conflictData.conflicts.length - confirmedCount;
+                /* "info", not the default. showToast falls back to the error type when none is given, so
+                   this success - the closure WAS created - was painting red, reading as a failure. Blue
+                   rather than green because it isn't purely good news: there's a worklist to go and clear.
+                   Matches the deactivate-with-conflicts toast in TeamMembers, which is the same situation. */
                 showToast(
                     "Closure created",
                     [
@@ -283,7 +287,8 @@ const AdminCalendar = () => {
                             ? `${confirmedCount} confirmed booking(s) are still on and flagged in Needs Review — reassign, move or cancel them.`
                             : null,
                         pendingCount > 0 ? `${pendingCount} booking(s) still at checkout were cancelled.` : null,
-                    ].filter(Boolean).join(" ")
+                    ].filter(Boolean).join(" "),
+                    "info"
                 );
             }
             setConflictData(null);
@@ -577,30 +582,34 @@ const AdminCalendar = () => {
                                                 <span className="closure-conflict-name">{c.customer}</span>
                                             )}
                                         </div>
-                                        {c.willBeEmailed ? (
-                                            <span className="closure-conflict-badge emailed">
-                                                <Mail size={14} />
-                                                Will be emailed{c.email ? ` · ${c.email}` : ""}
-                                            </span>
-                                        ) : (
-                                            <span className="closure-conflict-badge call">
-                                                <Phone size={14} />
-                                                {c.phone
-                                                    ? `Flagged for review · call ${formatPhone(c.phone)}`
-                                                    : c.email
-                                                        ? `No phone on file — email ${c.email}`
-                                                        : "No contact on file"}
-                                            </span>
-                                        )}
+                                        {/* The "will be emailed" branch this used to have was unreachable: the
+                                            backend hardcodes WillBeEmailed = false (DatesController), because
+                                            nothing is sent on confirm any more. It only ever promised an email
+                                            that was never coming, so it's gone. What's left is how to REACH
+                                            this customer when the admin gets to them. */}
+                                        <span className="closure-conflict-badge call">
+                                            <Phone size={14} />
+                                            {c.phone
+                                                ? `Flagged for review · call ${formatPhone(c.phone)}`
+                                                : c.email
+                                                    ? `No phone on file — email ${c.email}`
+                                                    : "No contact on file"}
+                                        </span>
                                     </li>
                                 ))}
                             </ul>
 
+                            {/* Rewritten: this described the OLD behaviour, where confirming cancelled and
+                                refunded the confirmed bookings and emailed the customers. It doesn't any
+                                more - they stay live and go to the worklist, and nobody is emailed. Saying
+                                customers had been notified while their appointments were still on was the
+                                worst way to be wrong: the admin would stop chasing them. */}
                             <p className="closure-conflict-note">
-                                Confirming cancels and refunds these bookings. Customers with an email are
-                                notified automatically. Anyone with no email on file — and anyone whose email
-                                fails to send — appears in your <strong>Needs Review</strong> list with their
-                                phone number, so you can call them by hand.
+                                Confirming creates the closure. Confirmed bookings are <strong>not</strong> cancelled
+                                and <strong>nobody is emailed</strong> — they stay live and appear in your{" "}
+                                <strong>Needs Review</strong> list, with a phone number where there's no email on
+                                file, so you can reassign, move or cancel each one by hand. The customer is told
+                                nothing until you act. Only bookings still at checkout are cancelled automatically.
                             </p>
                         </div>
                         <div className="modal-footer">

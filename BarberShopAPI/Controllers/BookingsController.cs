@@ -1306,6 +1306,14 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                     reason: blockingReason ?? CancellationReason.AdminCancelled,
                     // Shop-initiated: full refund regardless of the customer-only 24h penalty.
                     shopInitiated: blockingReason != null);
+                /* The no-refund window is the shop's RefundCutoffHours setting (BookingCanceller reads it,
+                 * and the Settings page lets it be anything from 0 to 168), so the message can't keep
+                 * asserting "24 hours" - it was silently wrong for every shop that had changed it. Only
+                 * read when that's actually the outcome being reported. */
+                var cutoffHours = outcome == BookingCanceller.Outcome.CancelledNoRefund
+                    ? await _context.ShopSettings.Select(s => s.RefundCutoffHours).FirstAsync()
+                    : 0;
+
                 // A flagged booking stays flagged through a cancellation - see the note in UpdateBooking.
                 return outcome switch
                 {
@@ -1313,7 +1321,11 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                     BookingCanceller.Outcome.AlreadyCancelled => BadRequest(new { message = "Booking is already cancelled" }),
                     BookingCanceller.Outcome.Pending => BadRequest(new { message = "Cannot cancel a pending booking" }),
                     BookingCanceller.Outcome.RefundFailed => StatusCode(502, new { message = "Could not process the refund with Stripe. The booking was not cancelled - please try again." }),
-                    BookingCanceller.Outcome.CancelledNoRefund => Ok(new { message = "Booking cancelled. No refund was issued as it is within 24 hours of the appointment." }),
+                    BookingCanceller.Outcome.CancelledNoRefund => Ok(new
+                    {
+                        message = $"Booking cancelled. No refund was issued as it is within {cutoffHours} "
+                                  + $"hour{(cutoffHours == 1 ? "" : "s")} of the appointment."
+                    }),
                     _ => Ok(new { message = "Booking cancelled successfully." })
                 };
             }

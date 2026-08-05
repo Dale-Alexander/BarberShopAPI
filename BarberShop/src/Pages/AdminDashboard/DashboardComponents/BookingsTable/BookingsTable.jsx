@@ -633,9 +633,14 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                         {reviewTarget.reviewReason && (
                             <p className="cancel-confirm-text review-reason-text">{reviewTarget.reviewReason}</p>
                         )}
+                        {/* Deliberately generic. A booking lands in this worklist for several different
+                            reasons (hours changed, barber left, shop closed, an email never sent, a refund
+                            that failed), and only some involve money - this used to tell the admin to
+                            refund/reconcile in Stripe for every one of them, which is untrue for a booking
+                            that's still live and only needs a decision. The specific instruction is already
+                            on screen in .review-reason-text directly above, so this line just points at it. */}
                         <p className="cancel-confirm-text">
-                            This only clears the review flag. Make sure you've already refunded / reconciled
-                            this booking in Stripe first &mdash; marking it reviewed does <strong>not</strong> move any money.
+                            This only clears the review flag &mdash; do whatever the note above asks first.
                         </p>
                         <div className="cancel-confirm-actions">
                             <button className="cancel-confirm-keep" onClick={() => setReviewTarget(null)}>Cancel</button>
