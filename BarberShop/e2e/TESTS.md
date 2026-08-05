@@ -50,8 +50,10 @@ them. What do they actually see?
       **The premise was wrong and the scenario shrank.** A closure does NOT cancel an already-paid
       booking — `DatesController` leaves confirmed bookings on their slot with their money and flags
       them, with a note saying the customer has not been told. The only way a paid booking dies from
-      a closure is the webhook race, which needs Stripe to reach localhost; covered in
-      `WebhookRefundTests`. What's tested here is the success screen's own behaviour.
+      a closure is the webhook race, which needs Stripe to reach localhost. What's tested here is the
+      success screen's own behaviour.
+      **The webhook race is now covered too** — `stripe listen` plus the harness's webhook gate made it
+      drivable. See F2 in section F.
 - [x] A4. The barber is deactivated mid-checkout → customer sees the barber-unavailable wording and a
       route back to rebook with someone else. `barber-deactivated.spec.js`
       Note: deactivation is the one section-A trigger that really does kill a live checkout, because
@@ -206,10 +208,11 @@ E3–E4 are in `customer-picker.spec.js`, E5–E6 in `admin-edits.spec.js`, E7�
 CUSTOMER's own record, and a page holding staff rights would not be that.
 
 - [ ] E1. The whole happy path … pay with test card `4242 4242 4242 4242`.
-      **Blocked, twice over.** The card path is webhook-bound — `Summary.jsx` polls 5× at 2s and then
-      sends the customer back to `/checkout` to pay again — so it needs Stripe reaching localhost (see
-      the not-reachable note on B8; the Stripe CLI is the route in). It is ALSO blocked by everything
-      under E2 below, since it starts from the same customer flow.
+      **Half of this is now done, the other half is still blocked.** The card leg is covered by F1: the
+      Stripe CLI plus the harness's gate made it drivable, and a real card now confirms a real booking.
+      What remains blocked is the FRONT of the journey — picking services — for the reason under E2.
+      F1 arranges the booking through the API and starts at `/checkout`; a spec that starts where the
+      customer starts still cannot be written.
 - [ ] E2. Cash booking end to end.
       **Blocked on the unbuilt Services page.** Nothing outside the "Book again" rebook path in
       `AlreadyPaid` ever calls `setChosenServiceIds`, so a fresh customer cannot choose services and
@@ -246,6 +249,90 @@ CUSTOMER's own record, and a page holding staff rights would not be that.
       installed via `addInitScript` records whether an admin-only node was EVER attached, and the
       assertion reads that record after the redirect.
 
+## F. Paying by card, and the emails
+
+Everything above pays cash, because until `stripe listen` was wired in nothing could deliver a webhook
+to localhost and a card booking never got past "Finalising your booking...". These need the harness's
+sink server (`sink-server.js`) — a stand-in for Resend, and a **gate in front of the webhook** that a
+spec can hold open. See the README for the one-time `stripe listen --print-secret` setup; without it
+the card specs skip with the reason attached instead of failing.
+
+**Why the gate exists.** The webhook's refund-and-cancel branches only fire in the window between
+Stripe taking the money and the webhook landing — measured at **under a second** on this machine. Kill
+the slot before that and `BookingConflictCanceller` voids the still-voidable PaymentIntent, so the
+customer never pays and the branch is never reached; kill it after and the booking is already COMPLETED
+and merely gets flagged. Holding the delivery is the only way in. The event stays genuinely Stripe's,
+signed and verified as normal — only its arrival time is ours.
+
+F1–F4 are in `card-payment.spec.js`, F5–F8 in `webhook-races.spec.js`, F9–F12 in `emails.spec.js`,
+F13 in `password-reset.spec.js`.
+
+- [x] F1. A customer pays with `4242 4242 4242 4242` → the confirmed screen, with the barber, service,
+      CARD and €25.50 read row by row off the receipt. `card-payment.spec.js`
+- [x] F2. A declined card (`4000 0000 0000 0002`) → Stripe's own wording on screen, still on checkout,
+      Confirm live again, and no confirmation email. `card-payment.spec.js`
+- [x] F3. Cancelling a card booking promises the refund — the counterpart to F11's cash booking, which
+      must not. `card-payment.spec.js`
+- [x] F4. `redirect_status=failed` (an abandoned Revolut Pay payment) sends them back to checkout rather
+      than spinning for ten seconds. `card-payment.spec.js` — needs no forwarder, it's pure frontend.
+- [x] F5. **A closure lands between the card succeeding and the webhook** → refunded, cancelled, and the
+      customer sees the slot wording, never "Booking Confirmed". `webhook-races.spec.js`
+      This is A3's webhook race, which used to be unreachable.
+- [x] F6. The barber is deactivated in that window → the barber wording and "Choose Another Barber",
+      not the slot wording. `webhook-races.spec.js`
+- [x] F7. The hours are narrowed in that window → the slot wording, and an email that says the hours
+      changed and specifically NOT that the shop closed. `webhook-races.spec.js`
+- [x] F8. The customer settles in cash while the card payment is still in flight → the late charge is
+      refunded, the appointment stands as CASH, and the email says "settle up at the shop" without
+      calling it a duplicate. `webhook-races.spec.js`
+- [x] F9. The confirmation email's receipt matches the screen line for line, including the 2dp total.
+      `emails.spec.js`
+- [x] F10. Moving a booking emails what changed — the new time AND the new barber — then restates the
+      whole appointment. `emails.spec.js`
+- [x] F11. A cash cancellation must NOT promise a refund. `emails.spec.js`
+- [x] F12. An edit that changes nothing sends no email at all. `emails.spec.js`
+- [x] F13. Password reset end to end: request it, open the link **out of the real email**, set a new
+      password, sign in with it. `password-reset.spec.js`
+      E7 covers what the screen does with a bad token; this covers the only thing a locked-out user
+      cares about — that the link they were sent works. The raw token exists nowhere but that email
+      (only its SHA-256 hash is stored), so a broken link locks the user out for good and no
+      server-side test would see it.
+
+### What section F deliberately leaves out
+
+The pass over the webhook and the emails was meant to be exhaustive, so here is everything it does NOT
+cover and why — none of it is an oversight.
+
+**Webhook branches with no browser path.** Missing or corrupt metadata, an unknown booking id, a
+redelivered event for a payment already recorded, and an event carrying something other than a
+PaymentIntent. Stripe cannot be made to send any of these from a real payment — producing them means
+forging an event, which is exactly what `WebhookRefundTests` already does through the front door with a
+genuine signature. A browser adds nothing.
+
+**Emails with no browser path.** The 2-hour reminder (Hangfire schedules it for two hours before the
+appointment); every retry-exhaustion flag (six attempts, minutes of backoff between them); and the
+refund notice's "duplicate card payment" shape, which needs two PaymentIntents to succeed against one
+booking — the checkout voids the previous intent before creating another, so a browser cannot arrange
+it. All three are covered in `EmailFailureReviewTests` / `WebhookRefundTests`.
+
+### Found while writing section F
+
+- **The Confirm Booking button has two silent early returns.** Roughly one card submit in five does
+  nothing at all: no request to Stripe, no toast, no navigation. `handleCardConfirm` returns silently
+  on `!isConfirmValid()` and on `!isContactValid()`, so a customer who hits one gets no feedback and no
+  way to know what to fix. The harness retries a swallowed click once (`submitCheckout` in
+  `helpers.js`) — arrangement only, no assertion is weakened — but the product wrinkle is real and
+  unfixed.
+- **The success screen gives the webhook ten seconds.** `Summary.jsx` polls 5× at 2s and then sends the
+  customer back to `/checkout` to pay again. Delivery measured under a second locally, so this passes
+  here; against Stripe's live delivery it is a thin margin, and the failure mode is showing a payment
+  form to someone who has already paid.
+- **A barber-unavailable email is not sent when a barber is deactivated.** `BarbersController` hands
+  only PENDING bookings to `BookingConflictCanceller` and flags the confirmed ones, and a pending
+  booking never gets an email — so that flow notifies nobody. The email is only reachable through the
+  webhook race (F6) or a staff cancel of an already-flagged booking. Worth a product decision, not a
+  test.
+
 ---
 
 ## Not reachable from a browser — do not attempt
@@ -253,14 +340,24 @@ CUSTOMER's own record, and a page holding staff rights would not be that.
 Add to this list rather than fighting a scenario that can't be driven. Each entry should say why.
 
 - Stripe webhook signature failures — no browser involvement; covered in `WebhookRefundTests`.
-- Email send failures and their retry-exhaustion flags — no UI; covered in `EmailFailureReviewTests`.
-- **B8, "flagged for a failed refund" — the branch cannot be reached from here.** The note comes from
-  `BookingConflictCanceller`'s default case, which only runs on `BookingCanceller.Outcome.RefundFailed`.
-  That needs `hadRefundablePayment` — a COMPLETED payment **with a StripePaymentIntentId** — and then
-  Stripe's refund call to fail. Every booking this harness can make is confirmed as cash and has no
-  PaymentIntent, so the branch is dead here for the same reason A3 shrank: it needs Stripe to reach
-  localhost. Covered from the other side in the C# suite. If a card path ever becomes drivable locally
-  (a Stripe CLI webhook forward), this is worth revisiting — it is the note that costs real money.
+- Email send failures and their retry-exhaustion flags — the flag IS visible (it lands in the
+  Needs-Review worklist), but reaching it means six failed Hangfire attempts and the backoff between
+  them is measured in MINUTES, which no browser spec can sit through. The sink can be switched to
+  failing (`POST /_control/email-mode`) if this is ever worth revisiting. Covered in
+  `EmailFailureReviewTests`.
+- The 2-hour reminder email — scheduled by Hangfire for two hours before the appointment, so driving it
+  means either waiting or reaching into Hangfire's storage. Neither belongs in a browser spec.
+- **B8, "flagged for a failed refund" — still not reachable, for a new reason.** The old note said this
+  needed a card path that could reach localhost. That now exists (section F), so it was retried — and
+  it still can't be driven, because **Stripe test mode has no synchronous refund failure**. The one
+  refund-failure test card, `4000 0000 0000 5126`, fails ASYNCHRONOUSLY: the refund comes back
+  `succeeded` and flips to `failed` later, in a `charge.refund.updated` event. Every failed-refund
+  branch in this codebase reads the immediate response from `StripeRefunds.RefundIdempotentlyAsync`, so
+  none of them ever sees it. Covered from the other side in `WebhookRefundTests` and
+  `RefundFailureReviewTests`.
+  **This also surfaced a real gap, which is not a testing problem:** nothing in the application handles
+  the async refund-failure event at all. A refund that Stripe accepts and then fails hours later leaves
+  the booking cancelled, the customer told their money is coming, and nobody notified. Worth a decision.
 - **A1, "admin cancels a booking mid-checkout" — not a real flow.** `admin-fetch` filters to
   `Payment != null` and defaults to COMPLETED, so a PENDING booking never appears in the admin list.
   An admin cannot see a checkout in progress, so cannot cancel one. What actually kills a live
