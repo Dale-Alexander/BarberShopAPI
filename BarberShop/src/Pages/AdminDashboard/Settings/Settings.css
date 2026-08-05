@@ -1,23 +1,93 @@
+/* The form primitives (form-group / form-label / form-input / form-error) live in TeamMembers.css and
+   the page header + btn-primary in index.css, both always bundled. Only what's unique to the settings
+   page lives here. Side padding comes from the shared .admin-page wrapper - don't add it again. */
+
 .settings-content-area {
-    padding: 0 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding-bottom: 24px;
 }
 
-.settings-card {
-    max-width: 480px;
+/* One card per group of rules. Full width of .admin-page (which is already capped and centred), so
+   the page uses the whole screen instead of a narrow column pinned to the left. */
+.settings-section {
     background: var(--card-bg, #1f2a40);
     border-radius: 10px;
-    padding: 24px;
+    padding: 20px 16px;
+}
+
+@media (min-width: 640px) {
+    .settings-section {
+        padding: 24px;
+    }
+}
+
+.settings-section-head {
+    margin-bottom: 20px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid hsl(220, 20%, 20%);
+}
+
+.settings-section-title {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--grey-100);
+}
+
+.settings-section-desc {
+    margin: 4px 0 0 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--muted-fg, #a0a0a0);
+}
+
+/* Single column on phones; from 640px up, as many ~280px columns as fit - two on tablet, three or
+   four on a wide desktop. auto-fill (not auto-fit) keeps the empty tracks, so the lone field in the
+   refunds section stays the same width as the fields above it instead of stretching across the page. */
+.settings-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 20px 24px;
+}
+
+@media (min-width: 640px) {
+    .settings-grid {
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    }
+}
+
+/* The hints are different lengths, which would leave the inputs in a row at different heights. Making
+   each cell a flex column and letting the hint absorb the slack bottom-aligns the inputs across the row. */
+.settings-grid .form-group {
+    margin-bottom: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 .settings-hint {
+    flex: 1;
     margin: 4px 0 12px 0;
     font-size: 0.85rem;
     line-height: 1.5;
     color: var(--muted-fg, #a0a0a0);
 }
 
+/* These are one-to-four digit numbers - a full-width input in a wide grid cell reads as a text field. */
+.settings-grid .form-input {
+    max-width: 220px;
+}
+
 .settings-actions {
-    margin-top: 20px;
     display: flex;
     justify-content: flex-end;
+}
+
+/* Below 480px a right-aligned button next to nothing looks stranded; give it the full row instead. */
+@media (max-width: 479px) {
+    .settings-actions .btn-primary {
+        width: 100%;
+        justify-content: center;
+    }
 }
