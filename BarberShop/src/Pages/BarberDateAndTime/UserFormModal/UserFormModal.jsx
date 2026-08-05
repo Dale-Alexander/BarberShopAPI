@@ -41,19 +41,24 @@ const UserFormModal = ({ onConfirm, onCancel }) => {
 
                 <div className="user-form-modal-field">
                     <label>Full Name <span className="user-form-optional">(optional)</span></label>
+                    {/* Same wiring as the checkout fields: purely for assistive tech, no visual change. */}
                     <input
                         type="text"
                         placeholder="e.g. John Doe"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
+                        aria-invalid={!!nameError || undefined}
+                        aria-describedby={nameError ? "user-form-name-error" : undefined}
                     />
-                    {nameError && <span className="user-form-error">{nameError}</span>}
+                    {nameError && <span id="user-form-name-error" className="user-form-error">{nameError}</span>}
                 </div>
 
                 <div className="user-form-modal-field">
                     <label>Phone Number <span className="user-form-required">*</span></label>
-                    <FancyPhoneInput value={phone} onChange={(val, iso2) => handlePhoneChange(val, iso2, setPhone)}/>
-                    {phoneError && <span className="user-form-error">{phoneError}</span>}
+                    <FancyPhoneInput value={phone} onChange={(val, iso2) => handlePhoneChange(val, iso2, setPhone)}
+                        invalid={!!phoneError}
+                        describedBy={phoneError ? "user-form-phone-error" : undefined}/>
+                    {phoneError && <span id="user-form-phone-error" className="user-form-error">{phoneError}</span>}
                 </div>
 
                 <div className="user-form-modal-actions">

@@ -2,7 +2,11 @@ import { useState, useRef, useEffect } from "react";
 import { parseCountry, defaultCountries } from "react-international-phone";
 import "./FancyPhoneInput.css";
 
-const FancyPhoneInput = ({ value, onChange }) => {
+/* `invalid` / `describedBy` are optional and exist so a caller can wire its own error message to the
+   number input for assistive tech: the error text lives in the caller's markup, so without them a screen
+   reader reaches this field, reads "Enter phone number", and never mentions what's wrong with it. Both
+   default to undefined, which renders no attribute at all. */
+const FancyPhoneInput = ({ value, onChange, invalid = false, describedBy }) => {
     const [open, setOpen] = useState(false);
     const [search, setSearch] = useState("");
     const inputRef = useRef(null);
@@ -95,6 +99,8 @@ const FancyPhoneInput = ({ value, onChange }) => {
                     onChange={handleNumber}
                     name="phone"
                     required
+                    aria-invalid={invalid || undefined}
+                    aria-describedby={describedBy}
                 />
             </div>
 
