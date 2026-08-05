@@ -135,6 +135,12 @@ const Schedules = () => {
     }, [selectedVersionId, versions]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const onPickBarber = (id) => {
+        /* Picking the barber already shown is not just wasted work, it used to break the page. The two
+           clears below empty the editor immediately, but refilling it is the barberId effect's job -
+           and setBarberId to the value it already holds is a no-op, so that effect never re-ran. The
+           result was a blank week with no spinner and no error, until the admin reloaded. The first
+           barber in the roster is preselected on load, so choosing them in the dropdown was enough. */
+        if (id === barberId) return;
         setBarberId(id);
         setVersions(null);
         setSelectedVersionId(null);
