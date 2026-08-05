@@ -45,6 +45,18 @@ const toMin = (hhmm) => {
 const toHHMM = (min) =>
     `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
 
+/* A "yyyy-MM-dd" from the API as LOCAL midnight.
+ *
+ * Not `new Date(str)`: the spec parses a date-only string as UTC, so east of Greenwich it lands on the
+ * right date at the wrong hour - 02:00 local in Malta. Every date the calendar builds is local
+ * midnight, so comparing the two made a full-day closure fail to match its own first day, and a
+ * single-day closure never matched at all: the shop was shut and the customer could still pick it.
+ * Correct in UTC, wrong in the shop's own timezone, which is why it survived so long. */
+const parseLocalDay = (s) => {
+    const [y, m, d] = String(s).split("-").map(Number);
+    return new Date(y, m - 1, d);
+};
+
 /* Mirrors the backend ScheduleResolver (VersionForDate + ShiftsForDate): pick the effective-dated
  * schedule version governing `date` (effectiveTo null = current/open-ended, latest effectiveFrom
  * wins), then return that version's shifts for the date's weekday as {startMin,endMin}, sorted.
@@ -329,8 +341,8 @@ const BarberDateAndTime = () => {
         if (!day) return false;
         if (!selectedBarberId) return false;
         const isWithinClosure = (c) => {
-            const start = new Date(c.startDate);
-            const end = c.endDate ? new Date(c.endDate) : start;
+            const start = parseLocalDay(c.startDate);
+            const end = c.endDate ? parseLocalDay(c.endDate) : start;
             return c.isFullDay && day >= start && day <= end;
         }
         const shopWide = shopWideClosures.some(isWithinClosure);
@@ -632,10 +644,15 @@ const BarberDateAndTime = () => {
         const newDateFormatted = format(selectedDate, "yyyy-MM-dd");
         setBookingLoading(true);
         try {
-            const booking = await axios.post('/api/booking/create-pending', {
+            // api/Bookings, plural - the controller's route. The singular spelling here 404'd, so every
+            // customer booking failed with a generic "Booking Failed" toast.
+            const booking = await axios.post('/api/bookings/create-pending', {
                 BarberId: selectedBarberId,
                 StartDateTime: `${newDateFormatted}T${selectedTime}:00`,
-                ServiceIds: chosenServiceIds,
+                // ServicesIds, not ServiceIds - the name PendingBookingCreateViewModel binds. The
+                // singular spelling bound to nothing, so the request failed model validation with
+                // "The ServicesIds field is required" however many services were actually chosen.
+                ServicesIds: chosenServiceIds,
             });
             navigate(`/checkout/${booking.data.publicId}`);
             
