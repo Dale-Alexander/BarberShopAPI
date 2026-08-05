@@ -17,6 +17,12 @@ const todayStr = () => {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 const fmtDate = (iso) => new Date(iso + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+// Local-midnight arithmetic, matching todayStr's format. Date handles month/year rollover for us.
+const addDays = (iso, n) => {
+    const d = new Date(iso + "T00:00:00");
+    d.setDate(d.getDate() + n);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 // version.shifts (flat [{dayOfWeek,startTime,endTime}]) -> 7 arrays of {start,end} "HH:mm" ranges.
 const versionToDays = (version) => {
@@ -38,11 +44,15 @@ const versionState = (v) => {
     if (v.effectiveTo < t) return "ended";
     return v.effectiveFrom > t ? "upcoming" : "active";
 };
+/* Every label leads with "Hours" on purpose. These chips sit right under a barber's name, and the old
+   "Active now" read as a statement about the BARBER (as in, currently employed / on shift) rather than
+   about which set of working hours is in force. Naming the thing removes the ambiguity, and keeping the
+   three labels parallel makes the row scan as one timeline. */
 const versionLabel = (v) => {
     const s = versionState(v);
-    if (s === "active") return "Active now";
-    if (s === "upcoming") return `Upcoming — from ${fmtDate(v.effectiveFrom)}`;
-    return `Ended — until ${fmtDate(v.effectiveTo)}`;
+    if (s === "active") return "Hours in effect now";
+    if (s === "upcoming") return `Hours from ${fmtDate(v.effectiveFrom)}`;
+    return `Hours until ${fmtDate(v.effectiveTo)}`;
 };
 
 const Schedules = () => {
@@ -80,6 +90,21 @@ const Schedules = () => {
      * shift / Save / Remove-schedule controls. */
     const isReadOnly = isBarber || (selectedVersion ? versionState(selectedVersion) === "ended" : true);
     const canDelete = !isBarber && selectedVersion && selectedVersion.effectiveTo == null && (versions ?? []).length > 1;
+
+    /* Earliest date a new seasonal change may start, mirroring CreateVersion's two guards exactly:
+     *   - nothing may start in the past (EffectiveFrom < ShopClock.Today), and
+     *   - it must start AFTER the open-ended version began (EffectiveFrom <= current.EffectiveFrom).
+     * The open-ended version (effectiveTo == null) is the one the backend calls `current`, and chaining
+     * guarantees it's the one with the latest effectiveFrom - so when a change is already scheduled for
+     * September, that September date is the floor, not today's. The picker used to allow anything from
+     * today, which let the admin choose a date the backend would then reject.
+     *
+     * Derived, not clamped into state: newFromValue is what the field shows and what gets posted, so an
+     * already-typed date that's too early corrects itself instead of sitting there waiting to 400. */
+    const openEndedVersion = (versions ?? []).find((v) => v.effectiveTo == null) ?? null;
+    const dayAfterLatest = openEndedVersion ? addDays(openEndedVersion.effectiveFrom, 1) : null;
+    const earliestNewFrom = dayAfterLatest && dayAfterLatest > todayStr() ? dayAfterLatest : todayStr();
+    const newFromValue = newFrom < earliestNewFrom ? earliestNewFrom : newFrom;
 
     const loadVersions = useCallback(async (id, preferVersionId = null) => {
         setVersionsLoading(true);
@@ -202,12 +227,15 @@ const Schedules = () => {
             // Seed the new season from whatever's currently in the editor, so the admin refines from the
             // existing hours rather than a blank week.
             const res = await adminAxios.post(`/api/Schedules/barber/${barberId}`, {
-                effectiveFrom: newFrom,
+                effectiveFrom: newFromValue,
                 shifts: daysToShifts(days),
                 confirmOrphaned,
             });
             setOrphanConflict(null);
-            showToast("Schedule change created", `New hours take effect from ${fmtDate(newFrom)}.`, "success");
+            showToast(
+                "Schedule change created",
+                `New hours take effect from ${fmtDate(newFromValue)}. The previous schedule ends the day before.`,
+                "success");
             announceBackInsideHours(res.data?.backInsideHours);
             await loadVersions(barberId, res.data.id);
         } catch (err) {
@@ -364,14 +392,24 @@ const Schedules = () => {
                         {!isBarber && (
                         <div className="sched-new">
                             <h3><CalendarPlus size={18} /> Schedule a seasonal change</h3>
-                            <p>Create a new set of hours that takes over from a future date. It starts as a copy of the hours above — edit and save it after it's created. The current schedule automatically ends the day before.</p>
+                            <p>Create a new set of hours that takes over from a future date. It starts as a copy of the hours above — edit and save it after it's created. The latest schedule automatically ends the day before.</p>
+                            {/* Only worth saying when it isn't just "not in the past" - i.e. when a change is
+                                already queued and IT is what sets the floor. Wording deliberately echoes the
+                                backend's rejection message so the two can't appear to disagree. */}
+                            {openEndedVersion && dayAfterLatest > todayStr() && (
+                                <p className="sched-new-floor">
+                                    The latest scheduled version begins on {fmtDate(openEndedVersion.effectiveFrom)},
+                                    so a new change can only start from {fmtDate(earliestNewFrom)}.
+                                </p>
+                            )}
                             <div className="sched-new-row">
                                 <label className="sched-field">
                                     <span>Starts from</span>
-                                    <input type="date" min={todayStr()} value={newFrom} onChange={(e) => setNewFrom(e.target.value)} />
+                                    <input type="date" min={earliestNewFrom} value={newFromValue}
+                                        onChange={(e) => setNewFrom(e.target.value)} />
                                 </label>
                                 {/* Same reason as the save button above - confirmOrphaned must not be the click event. */}
-                                <button className="btn-primary" onClick={() => handleCreateVersion()} disabled={creating || !!shiftError || !newFrom}>
+                                <button className="btn-primary" onClick={() => handleCreateVersion()} disabled={creating || !!shiftError || !newFromValue}>
                                     {creating ? "Creating…" : "Create change"}
                                 </button>
                             </div>

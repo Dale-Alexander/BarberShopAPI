@@ -335,8 +335,17 @@ namespace BarberShopAPI.Controllers
                     .FirstOrDefaultAsync(s => s.BarberId == barberId && s.EffectiveTo == null);
                 if (current == null)
                     return BadRequest(new { message = "This barber has no active schedule to supersede" });
+                /* `current` is the open-ended version, which - because every create closes the previous one
+                   the day before - is always the one with the LATEST EffectiveFrom, not necessarily the one
+                   in force today. Those differ whenever a future change has already been scheduled, and the
+                   old wording ("the current one") pointed the admin at the wrong version in exactly that
+                   case. Name the blocking date instead so it's obvious what has to be cleared. */
                 if (model.EffectiveFrom <= current.EffectiveFrom)
-                    return BadRequest(new { message = "The new schedule must start after the current one began" });
+                    return BadRequest(new
+                    {
+                        message = $"A new schedule must start after {current.EffectiveFrom:d MMMM yyyy}, " +
+                                  "when the latest scheduled version begins."
+                    });
 
                 // The new version reigns from EffectiveFrom onward - confirmed future bookings on or after that
                 // date the new hours would strand. Warn once; admin confirms to proceed. Grandfathered and
