@@ -99,38 +99,97 @@ Flag sites, from `FlagForReview` call sites — `BookingCanceller`, `BookingConf
 narrowed), `WebHookController` (x2 — orphaned charge, closure-during-payment), `EmailService` (x4 —
 each cancellation email that exhausted its retries).
 
-- [ ] B1. Barber deactivated with live bookings → each flagged row appears in the admin worklist with
-      a reason the admin can actually read and act on.
-- [ ] B2. Closure created over live bookings → same.
-- [ ] B3. Hours narrowed so bookings fall outside → same, with the outside-hours wording.
-- [ ] B4. The worklist count badge matches the number of flagged rows.
-- [ ] B5. Mark-reviewed clears the row, and the count drops.
-- [ ] B6. **Two problems on one booking** — flag it for hours, then for a closure. Both notes must be
+All of B1–B7 live in `needs-review.spec.js`. They are **admin specs**, so `test.use({ storageState:
+ADMIN_STATE })` — which applies to the `request` fixture too, not just the page. That is why the
+customer half of every arrangement goes through `guestApi()`: the plain fixture is not anonymous in
+this file, and `createPendingBooking` on it would silently take the staff path (no lead-time buffer).
+
+Only a **confirmed** booking reaches the worklist. A pending one is cancelled outright and never
+flagged, so every spec here pays with `confirmAsCash` first.
+
+Counts are asserted as a **delta** against the count before, never an absolute. The suite shares one
+database and a booking can be flagged with no spec asking — a cancellation email that exhausts its
+Hangfire retries flags its own. `afterEach` clears flags, closures and hours so each spec starts from
+a known floor.
+
+- [x] B1. Barber deactivated with live bookings → each flagged row appears in the admin worklist with
+      a reason the admin can actually read and act on. `needs-review.spec.js`
+- [x] B2. Closure created over live bookings → same. `needs-review.spec.js`
+- [x] B3. Hours narrowed so bookings fall outside → same, with the outside-hours wording.
+      `needs-review.spec.js`
+- [x] B4. The worklist count badge matches the number of flagged rows. `needs-review.spec.js`
+      Note: the badge only renders while the count is above zero, so `openNeedsReviewList` waiting on
+      it doubles as proof the flag landed — and fails readably when it didn't.
+- [x] B5. Mark-reviewed clears the row, and the count drops. `needs-review.spec.js`
+      Two bookings on purpose: clearing the only one takes the badge to zero and unmounts it, so the
+      count could not be read afterwards.
+- [x] B6. **Two problems on one booking** — flag it for hours, then for a closure. Both notes must be
       readable; the second must not erase the first. (This is the specific bug `BookingReview` was
-      written to prevent, so it's worth a browser test.)
-- [ ] B7. Editing a flagged booking does NOT clear the flag, and the row is still marked when the
-      admin lands back on the table.
-- [ ] B8. A booking flagged for a *failed refund* tells the admin the money is still with the shop —
-      that's the note that costs real money if it's unreadable.
+      written to prevent, so it's worth a browser test.) `needs-review.spec.js`
+      **Mutation-tested.** Made `FlagForReview` overwrite instead of append: the spec went red on the
+      missing hours sentence, leaving only the closure note — the exact regression. Fix restored.
+- [x] B7. Editing a flagged booking does NOT clear the flag, and the row is still marked when the
+      admin lands back on the table. `needs-review.spec.js`
+      **Mutation-tested.** Set `NeedsReview = false` in `UpdateBooking`: the spec went red waiting for
+      the Needs Review button that never appeared. Fix restored.
+- [ ] ~~B8. A booking flagged for a *failed refund*~~ — **moved to Not reachable, see below.**
 
 ## C. Excluding and re-including a barber's bookings
 
 The two directions of the same lever: work is taken away from a barber, then given back.
 
-- [ ] C1. Narrowing hours over existing bookings raises the conflict warning **before** saving, and
-      names the affected bookings.
-- [ ] C2. Cancelling at that warning changes nothing — the schedule and the bookings are untouched.
-- [ ] C3. Confirming saves the schedule and flags the affected bookings.
-- [ ] C4. Widening the hours back tells the admin which review notes it has just made stale.
-- [ ] C5. Deleting a schedule version — `SchedulesController.DeleteVersion` has **no orphan check**
-      (documented gap, there's a characterisation test in C#). Prove what an admin actually sees, and
-      write down whether it's acceptable.
-- [ ] C6. "Accepting bookings" toggled OFF → the barber disappears from the customer picker but keeps
-      their existing bookings and is still visible to staff.
-- [ ] C7. Toggled back ON → the barber returns to the customer picker.
-- [ ] C8. A barber winding down can still open and edit their own bookings (this regressed once —
-      `includeUnbookable`).
-- [ ] C9. Deactivating a barber signs them out (TokenVersion bumps) — prove the session actually dies.
+C1–C5 are in `schedule-conflicts.spec.js`, C6–C7 in `accepting-bookings.spec.js`, C8–C9 in
+`barber-access.spec.js`.
+
+Unlike section B, C1–C5 are **not** arranged through the API. The warning modal IS the subject — C1 and
+C2 are entirely about what an admin sees *before* anything is saved — so the hours are edited in the
+real editor at `/admin/schedules`.
+
+**Open the editor with `?barberId=`, never the toolbar dropdown.** `onPickBarber` clears `versions` and
+leaves the reload to an effect keyed on `barberId`, so picking the barber who is ALREADY selected (the
+first in the roster, preselected on load) empties the editor and never refills it — blank week, no
+spinner, no error, until the page is reloaded. `openSchedules()` takes the id and goes straight there.
+**This is a real product bug, not just a test hazard.**
+
+- [x] C1. Narrowing hours over existing bookings raises the conflict warning **before** saving, and
+      names the affected bookings. `schedule-conflicts.spec.js`
+      Asserts the shop is genuinely unchanged at that moment (hours still 17:30, nothing flagged) —
+      otherwise "Go back" would be a lie.
+- [x] C2. Cancelling at that warning changes nothing — the schedule and the bookings are untouched.
+      `schedule-conflicts.spec.js`
+- [x] C3. Confirming saves the schedule and flags the affected bookings. `schedule-conflicts.spec.js`
+      The booking stays COMPLETED — grandfathered, never cancelled.
+- [x] C4. Widening the hours back tells the admin which review notes it has just made stale.
+      `schedule-conflicts.spec.js`
+      **Mutation-tested.** Made `announceBackInsideHours` a no-op: the spec went red on the missing
+      "These bookings fit again" modal. Also asserts the count does NOT drop — it's a list to go and
+      check, not a clear-them-all button.
+- [x] C5. Deleting a schedule version. `schedule-conflicts.spec.js`
+      **The premise was out of date.** `DeleteVersion` is no longer a gap — it runs the same
+      `FindOrphanedBookingsAsync` and returns 409 unless `confirmOrphaned`, with its own wording
+      ("the hours this restores", since nothing new is being proposed). Tested as the warn-then-flag
+      path it now is. **Mutation-tested:** disabling that check turned the spec red.
+- [x] C6. "Accepting bookings" toggled OFF → the barber disappears from the customer picker but keeps
+      their existing bookings and is still visible to staff. `accepting-bookings.spec.js`
+- [x] C7. Toggled back ON → the barber returns to the customer picker. `accepting-bookings.spec.js`
+- [x] C8. A barber winding down can still open and edit their own bookings (this regressed once —
+      `includeUnbookable`). `barber-access.spec.js`
+      **Mutation-tested.** Dropped `includeUnbookable=true` from the staff roster fetch and the spec
+      went red — the barber vanished from their own edit page, exactly the original regression.
+- [x] C9. Deactivating a barber signs them out (TokenVersion bumps) — prove the session actually dies.
+      `barber-access.spec.js`
+      Proves the session was live FIRST, or it would also pass for one that never worked.
+
+### Barber sessions
+
+C8 and C9 are the only specs that run as a BARBER — an admin cookie would pass every assertion in them
+while proving nothing. `global-setup.js` saves `BARBER_ONE_STATE` and `BARBER_TWO_STATE` alongside the
+admin one (barbers share the admin password, so no extra secret). Three logins per run, still well
+inside the 10/min limit, and it keeps "never log in inside a spec" intact.
+
+**Two states, not one, because C9 destroys the one it uses.** Deactivation bumps `TokenVersion` and
+reviving does not put it back, so `BARBER_TWO_STATE` is dead for the rest of the run once C9 has gone.
+Any future spec needing a live barber session must use BARBER_ONE.
 
 ## D. Money on screen
 
@@ -142,17 +201,50 @@ The two directions of the same lever: work is taken away from a barber, then giv
 
 ## E. Everything else worth a browser
 
-- [ ] E1. The whole happy path: pick barber → date → time → details → pay with test card
-      `4242 4242 4242 4242` → confirmation names the right barber, service, time and total.
+E3–E4 are in `customer-picker.spec.js`, E5–E6 in `admin-edits.spec.js`, E7–E9 in
+`auth-and-errors.spec.js`. None of them use a staff session on the page: E5 and E6 assert on the
+CUSTOMER's own record, and a page holding staff rights would not be that.
+
+- [ ] E1. The whole happy path … pay with test card `4242 4242 4242 4242`.
+      **Blocked, twice over.** The card path is webhook-bound — `Summary.jsx` polls 5× at 2s and then
+      sends the customer back to `/checkout` to pay again — so it needs Stripe reaching localhost (see
+      the not-reachable note on B8; the Stripe CLI is the route in). It is ALSO blocked by everything
+      under E2 below, since it starts from the same customer flow.
 - [ ] E2. Cash booking end to end.
-- [ ] E3. Booking a slot outside the barber's hours is refused, with a readable reason.
-- [ ] E4. A closed day is not selectable in the picker.
-- [ ] E5. Admin reassigns a booking to another barber → the customer-facing record reflects the new
-      barber. (The update email is C#-tested; this is the screen.)
-- [ ] E6. Admin reschedules a booking → new time shows everywhere it should.
-- [ ] E7. Password reset: request → the reset screen rejects a bad/expired token readably.
-- [ ] E8. A customer hitting an unknown booking id gets the 404 page, not a blank screen.
-- [ ] E9. Staff-only pages redirect a signed-out visitor to login rather than flashing the content.
+      **Blocked on the unbuilt Services page.** Nothing outside the "Book again" rebook path in
+      `AlreadyPaid` ever calls `setChosenServiceIds`, so a fresh customer cannot choose services and
+      `create-pending` rejects the booking. Three bugs found underneath this are now fixed — the
+      singular `/api/booking/create-pending` 404, the `ServiceIds`/`ServicesIds` payload key, and the
+      closure-date parsing in E4 — so `handleUserCreate` now sends a shape the API accepts (verified by
+      probe: that exact body returns 200). What remains is only the missing data: build the Services
+      page so something sets `chosenServiceIds`, and this becomes writable as specified.
+- [x] E3. Booking a slot outside the barber's hours is refused, with a readable reason.
+      `customer-picker.spec.js`
+      Both halves: the grid doesn't offer 20:00, AND the API refuses it in words a customer can act on
+      (asserted against the message, since a bare 400 would pass a status-only check).
+- [x] E4. A closed day is not selectable in the picker. `customer-picker.spec.js`
+      **Found and fixed a real bug.** `isDateClosed` did `new Date("yyyy-MM-dd")`, which the spec parses
+      as UTC midnight — 02:00 local in Malta — while every calendar cell is local midnight. So a
+      closure never matched its own FIRST day, and a single-day closure never matched at all: the shop
+      was shut and the customer could still pick the day. Correct in UTC, wrong in the shop's own
+      timezone, which is how it survived. Fixed with `parseLocalDay`; **mutation-tested** by putting
+      `new Date` back, which turned the spec red.
+- [x] E5. Admin reassigns a booking to another barber → the customer-facing record reflects the new
+      barber. (The update email is C#-tested; this is the screen.) `admin-edits.spec.js`
+      Note the receipt shows the barber's FULL name — unlike the picker, which is first-name only.
+- [x] E6. Admin reschedules a booking → new time shows everywhere it should. `admin-edits.spec.js`
+      Asserts the old time is gone, not merely joined by the new one, and that the staff table agrees.
+- [x] E7. Password reset: request → the reset screen rejects a bad/expired token readably.
+      `auth-and-errors.spec.js`
+      Two cases: no token at all shows "Invalid Link" and no form; a token-shaped string shows the form
+      and fails on submit with a toast, since the page can't know until it asks.
+- [x] E8. A customer hitting an unknown booking id gets the 404 page, not a blank screen.
+      `auth-and-errors.spec.js`
+- [x] E9. Staff-only pages redirect a signed-out visitor to login rather than flashing the content.
+      `auth-and-errors.spec.js`
+      "Didn't flash" can't be answered by a screenshot, which samples one moment — a `MutationObserver`
+      installed via `addInitScript` records whether an admin-only node was EVER attached, and the
+      assertion reads that record after the redirect.
 
 ---
 
@@ -162,6 +254,13 @@ Add to this list rather than fighting a scenario that can't be driven. Each entr
 
 - Stripe webhook signature failures — no browser involvement; covered in `WebhookRefundTests`.
 - Email send failures and their retry-exhaustion flags — no UI; covered in `EmailFailureReviewTests`.
+- **B8, "flagged for a failed refund" — the branch cannot be reached from here.** The note comes from
+  `BookingConflictCanceller`'s default case, which only runs on `BookingCanceller.Outcome.RefundFailed`.
+  That needs `hadRefundablePayment` — a COMPLETED payment **with a StripePaymentIntentId** — and then
+  Stripe's refund call to fail. Every booking this harness can make is confirmed as cash and has no
+  PaymentIntent, so the branch is dead here for the same reason A3 shrank: it needs Stripe to reach
+  localhost. Covered from the other side in the C# suite. If a card path ever becomes drivable locally
+  (a Stripe CLI webhook forward), this is worth revisiting — it is the note that costs real money.
 - **A1, "admin cancels a booking mid-checkout" — not a real flow.** `admin-fetch` filters to
   `Payment != null` and defaults to COMPLETED, so a PENDING booking never appears in the admin list.
   An admin cannot see a checkout in progress, so cannot cancel one. What actually kills a live
