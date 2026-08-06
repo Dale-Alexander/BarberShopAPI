@@ -50,9 +50,9 @@ const versionState = (v) => {
    three labels parallel makes the row scan as one timeline. */
 const versionLabel = (v) => {
     const s = versionState(v);
-    if (s === "active") return "Hours in effect now";
-    if (s === "upcoming") return `Hours from ${fmtDate(v.effectiveFrom)}`;
-    return `Hours until ${fmtDate(v.effectiveTo)}`;
+    if (s === "active") return "Schedule in effect now";
+    if (s === "upcoming") return `Schedule from ${fmtDate(v.effectiveFrom)}`;
+    return `Schedule until ${fmtDate(v.effectiveTo)}`;
 };
 
 const Schedules = () => {
