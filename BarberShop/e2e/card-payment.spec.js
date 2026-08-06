@@ -138,9 +138,9 @@ test.describe("paying by card", () => {
 
         await page.goto(`/booking/success/${publicId}?redirect_status=failed`);
 
-        /* Straight back to checkout with the slot still theirs. The booking is still PENDING, so
-           without this the success screen would sit on "Finalising your booking..." for ten seconds
-           waiting for a webhook that is never coming. */
+        /* Straight back to checkout with the slot still theirs. The booking is still PENDING, so without
+           this the success screen would wait out its full 30 seconds for a webhook that is never coming,
+           and then tell them their payment had been received - which for an abandoned payment is false. */
         await expect(page).toHaveURL(new RegExp(`/checkout/${publicId}`), { timeout: 20_000 });
         await expect(page.getByText("Booking Confirmed")).toHaveCount(0);
         await expect(page.getByText("Total")).toBeVisible();

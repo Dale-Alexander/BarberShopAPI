@@ -64,8 +64,7 @@ test.describe("a booking killed while the customer is in checkout", () => {
      *
      * What IS worth proving here, and is not covered anywhere else, is the success screen's own
      * behaviour: a booking cancelled after it was confirmed must never still read "Booking
-     * Confirmed". Summary.jsx polls for exactly this, so the assertion has to allow for the delay
-     * rather than demand it instantly. */
+     * Confirmed". */
     test("a booking cancelled after confirmation never shows as confirmed on the success screen", async ({ page, request }) => {
         const startDateTime = slotInDays(4, 14, 0);
         const { publicId } = await createPendingBooking(request, {
@@ -79,9 +78,11 @@ test.describe("a booking killed while the customer is in checkout", () => {
 
         await page.goto(`/booking/success/${publicId}`);
 
-        /* toHaveURL waits, which is what lets the poll in Summary.jsx settle. Given a generous
-           timeout on purpose: the component polls every 2s up to 4 times, so a tighter budget would
-           make this fail on timing rather than on behaviour. */
+        /* The booking is cancelled BEFORE the page is opened, so what redirects here is the success
+           screen's load-time check on its first fetch, not a poll. (An earlier version of this comment
+           credited a poll that watched an already-confirmed booking for a late cancellation; that poll
+           has since been removed as dead - see the note where it used to be in Summary.jsx.) The
+           timeout is generous because it covers a page load, not a polling interval. */
         await expect(page).toHaveURL(new RegExp(`/cancelledorcompleted/${publicId}`), { timeout: 15_000 });
         await expect(page.getByText("Booking Confirmed")).toHaveCount(0);
         await expect(page.getByText("Cancelled").first()).toBeVisible();
