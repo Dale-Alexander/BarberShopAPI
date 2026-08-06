@@ -269,5 +269,118 @@ namespace BarberShopAPI.Tests
             Assert.Contains("No refund was issued", (await ReadJson(response)).GetProperty("message").GetString());
             Assert.Equal(0, stripe.RefundAttempts);
         }
+
+        // ---------------------------------------------------------------------------------------------
+        // The ASYNC refund failure - Stripe accepted the refund, then failed it hours later
+        // ---------------------------------------------------------------------------------------------
+
+        /* Everything above is the synchronous failure: StripeRefunds returns Failed and the caller reacts
+         * on the spot. This section is the other one, which no amount of test-mode card work can reach -
+         * `4000 0000 0000 5126` returns a refund of status `succeeded` and only flips it to `failed` later,
+         * in a webhook. So by the time the shop finds out, the booking is CANCELLED, the Payment row says
+         * REFUNDED and the customer has an email promising their money back. Nothing retries, and until
+         * this branch existed the event was discarded before the controller's switch even saw it.
+         *
+         * Arranged in exactly that end state, because that IS the state Stripe's event arrives into. */
+        private (int BookingId, string PaymentIntentId, string Phone) ArrangeRefundedBooking()
+        {
+            using var db = NewDb();
+            var barber = db.AddBarber();
+            db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30));
+            var booking = db.AddBooking(barber.Id, TestData.FutureAt(14, 16), BookingStatus.CANCELLED);
+            var payment = db.AddCardPayment(booking.Id, status: PaymentStatus.REFUNDED);
+            var phone = db.Users.Single(u => u.Id == booking.UserId).Phone;
+            return (booking.Id, payment.StripePaymentIntentId!, phone!);
+        }
+
+        [Fact]
+        public async Task A_refund_that_fails_after_stripe_accepted_it_reaches_the_worklist()
+        {
+            var (bookingId, paymentIntentId, phone) = ArrangeRefundedBooking();
+            // Armed to fail, and it must never be called: this branch does not retry the refund. A refund the
+            // bank rejected usually needs a different route entirely, and a silent retry would bury it.
+            using var stripe = new FakeStripe { Refunds = FakeStripe.RefundOutcome.Fails };
+
+            var response = await Client.SendAsync(StripeWebhookRequest.RefundOutcome(paymentIntentId, amount: 2550));
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(0, stripe.RefundAttempts);
+
+            using var assertDb = NewDb();
+            var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.True(booking.NeedsReview);
+
+            // What the admin has to be able to act on: that it failed, how much is still with the shop, the
+            // id to search for in Stripe, and the number to ring - the customer was already told otherwise.
+            Assert.Contains(ReviewMarkers.RefundFailed, booking.ReviewReason);
+            Assert.Contains("25.50", booking.ReviewReason);
+            Assert.Contains("re_test_refund", booking.ReviewReason);
+            Assert.Contains(phone, booking.ReviewReason);
+
+            // No second automated email. They have one saying the money is coming; the correction is a call.
+            Assert.Empty(Factory.EnqueuedEmailJobs());
+        }
+
+        [Fact]
+        public async Task A_refund_that_settles_normally_flags_nothing()
+        {
+            var (bookingId, paymentIntentId, _) = ArrangeRefundedBooking();
+
+            // The same event fires as a refund settles - the failure is the only news in it. Flagging on
+            // arrival rather than on status would put EVERY refunded booking in the worklist.
+            var response = await Client.SendAsync(StripeWebhookRequest.RefundOutcome(paymentIntentId, status: "succeeded"));
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            using var assertDb = NewDb();
+            Assert.False((await assertDb.Bookings.SingleAsync(b => b.Id == bookingId)).NeedsReview);
+        }
+
+        [Fact]
+        public async Task The_newer_event_name_lands_in_the_same_branch()
+        {
+            var (bookingId, paymentIntentId, _) = ArrangeRefundedBooking();
+
+            /* This account sends the legacy `charge.refund.updated`; a newer API version sends
+             * `refund.failed` for the same thing. The controller dispatches on the Refund OBJECT, not the
+             * event name, so an API version bump must not quietly stop the shop hearing about failed
+             * refunds. Same payload, different name, same outcome. */
+            var response = await Client.SendAsync(
+                StripeWebhookRequest.RefundOutcome(paymentIntentId, eventType: "refund.failed"));
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            using var assertDb = NewDb();
+            var booking = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
+            Assert.True(booking.NeedsReview);
+            Assert.Contains(ReviewMarkers.RefundFailed, booking.ReviewReason);
+        }
+
+        [Fact]
+        public async Task A_redelivered_failure_does_not_write_the_note_twice()
+        {
+            var (bookingId, paymentIntentId, _) = ArrangeRefundedBooking();
+
+            // Stripe redelivers, and a refund reports more than once as it settles. The note carries the
+            // refund id, which is what makes the repeat identical and lets FlagForReview swallow it.
+            for (var i = 0; i < 3; i++)
+                Assert.Equal(HttpStatusCode.OK,
+                    (await Client.SendAsync(StripeWebhookRequest.RefundOutcome(paymentIntentId))).StatusCode);
+
+            using var assertDb = NewDb();
+            var reason = (await assertDb.Bookings.SingleAsync(b => b.Id == bookingId)).ReviewReason;
+            Assert.Equal(1, reason!.Split(ReviewMarkers.RefundFailed).Length - 1);
+        }
+
+        [Fact]
+        public async Task A_failed_refund_for_a_payment_we_never_recorded_is_accepted_and_ignored()
+        {
+            // A refund issued by hand in the Dashboard against a charge this shop has no Payment row for.
+            // Nothing to flag, and Stripe retrying will not conjure one - so take the event and move on
+            // rather than 500ing into its retry schedule forever.
+            var response = await Client.SendAsync(StripeWebhookRequest.RefundOutcome("pi_not_a_booking_of_ours"));
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
     }
 }

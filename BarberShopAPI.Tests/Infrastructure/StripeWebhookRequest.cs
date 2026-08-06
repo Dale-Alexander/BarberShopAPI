@@ -63,6 +63,47 @@ namespace BarberShopAPI.Tests.Infrastructure
             return Signed(json);
         }
 
+        /* A refund reporting its outcome. Defaults to the one that matters - a refund Stripe accepted and
+         * then FAILED, which arrives hours after the refund call already returned "succeeded" and is the
+         * only notice the shop ever gets that the money never left.
+         *
+         * The event type defaults to the legacy `charge.refund.updated` because that is what this account
+         * actually sends; `refund.failed` is the newer name for the same delivery. The controller dispatches
+         * on the Refund object rather than the name, so both land in the same branch - which is what the
+         * eventType parameter exists to prove. */
+        public static HttpRequestMessage RefundOutcome(
+            string paymentIntentId,
+            string status = "failed",
+            long amount = 2500,
+            string refundId = "re_test_refund",
+            string? failureReason = "expired_or_canceled_card",
+            string eventType = "charge.refund.updated")
+        {
+            var json = $@"{{
+                ""id"": ""evt_test_{Guid.NewGuid():N}"",
+                ""object"": ""event"",
+                ""api_version"": ""{Stripe.StripeConfiguration.ApiVersion}"",
+                ""created"": {DateTimeOffset.UtcNow.ToUnixTimeSeconds()},
+                ""livemode"": false,
+                ""pending_webhooks"": 1,
+                ""request"": {{ ""id"": null, ""idempotency_key"": null }},
+                ""type"": ""{eventType}"",
+                ""data"": {{
+                    ""object"": {{
+                        ""id"": ""{refundId}"",
+                        ""object"": ""refund"",
+                        ""amount"": {amount},
+                        ""currency"": ""eur"",
+                        ""payment_intent"": ""{paymentIntentId}"",
+                        ""status"": ""{status}"",
+                        ""failure_reason"": {(failureReason == null ? "null" : $"\"{failureReason}\"")}
+                    }}
+                }}
+            }}";
+
+            return Signed(json);
+        }
+
         /// <summary>Signs a payload the way Stripe does: HMAC-SHA256 over "{timestamp}.{payload}".</summary>
         public static HttpRequestMessage Signed(string json)
         {

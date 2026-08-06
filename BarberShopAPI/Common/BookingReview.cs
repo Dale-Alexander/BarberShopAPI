@@ -39,6 +39,16 @@ namespace BarberShopAPI.Common
         public const string ShopClosed = "The shop is closed for this booking's slot";
 
         public const string BarberClosed = "is off for this booking's slot";
+
+        /* The refund Stripe accepted and then failed hours later (charge.refund.updated / refund.failed).
+         * Unlike every other marker here, nothing ever undoes this one: no flow puts the money back by
+         * itself, so there is nothing to match on it for a "this is stale now" announcement. It is a
+         * constant anyway so the sentence has one author, like the rest.
+         *
+         * The wording has to be blunt. Every other note describes something that has NOT happened to the
+         * customer yet; this one describes a promise the shop has already broken - the cancellation email
+         * told them the money was on its way, and it isn't coming without a human. */
+        public const string RefundFailed = "The refund for this booking FAILED after Stripe had accepted it";
     }
 
     public static class BookingReview

@@ -72,6 +72,17 @@ namespace BarberShopAPI.Controllers
                 Console.WriteLine($"Webhook signature verification failed:{ex.Message}");
                 return BadRequest($"Webhook error, {ex.Message}");
             }
+            /* Refund events carry a Refund, not a PaymentIntent, so they must be dealt with BEFORE the cast
+             * below - which bails on anything that isn't a PaymentIntent and would otherwise drop this
+             * without even reaching the "unhandled event type" line at the end of the switch.
+             *
+             * Dispatched on the OBJECT TYPE rather than the event name on purpose. Stripe sends the legacy
+             * `charge.refund.updated` and the newer `refund.updated` / `refund.failed` depending on the API
+             * version the endpoint is on, and all of them carry the same Refund object - so this handles
+             * whichever the account happens to send, and keeps handling it across an API version bump. */
+            if (stripeEvent.Data.Object is Refund refund)
+                return await HandleRefundOutcomeAsync(refund);
+
             var paymentIntent = stripeEvent.Data.Object as PaymentIntent;
             if (paymentIntent == null) return Ok(new { message = "Invalid event data" });
             //you can change the above to Ok("Event ignored"); That is for when a charge object gets received and not a payment intent. PaymentIntent and charge objects gets
@@ -512,6 +523,69 @@ await _context.SaveChangesAsync();
             Result: Booking confirmed, no confirmation email.
             But this is fine. It is a minor inconvenience
              */
+        }
+
+        /* A refund Stripe accepted and later failed.
+         *
+         * Every refund site in this codebase reads the IMMEDIATE response from StripeRefunds - which is the
+         * only failure Stripe test mode can produce synchronously - and treats "accepted" as done: the
+         * Payment goes to REFUNDED, the booking is cancelled, and the customer is emailed that their money
+         * is on its way. But a refund can be accepted and then fail hours later (the bank rejects the
+         * return, the card is closed), and Stripe reports that only in this event. Without this branch the
+         * shop keeps money it has told the customer it gave back, and nobody at the shop ever finds out.
+         *
+         * All this does is put it in front of a human. It deliberately does NOT:
+         *   - retry the refund. A refund that failed on the bank's side usually needs a different route
+         *     (bank transfer, cash in the shop), and silently trying again would hide it for another day.
+         *   - change Payment.Status off REFUNDED. That would need a status meaning "we tried and the money
+         *     is still with us", and inventing one moves the three email branches that read REFUNDED to
+         *     decide whether to promise a refund. Worth doing, but not in the same change as closing the
+         *     hole - the note carries the truth in the meantime.
+         *   - email the customer. They have already been told the money is coming; the correction is a
+         *     phone call about how they will actually be paid, not a second automated mail.
+         *
+         * Always 200s. A refund we can't match to a booking is not something Stripe retrying will fix. */
+        private async Task<IActionResult> HandleRefundOutcomeAsync(Refund refund)
+        {
+            // succeeded / pending are the normal course - the same refund reports several times as it
+            // settles, and only the failure is news.
+            if (refund.Status != "failed") return Ok(new { message = "Refund event ignored" });
+
+            if (string.IsNullOrWhiteSpace(refund.PaymentIntentId))
+            {
+                Console.WriteLine($"Refund {refund.Id} failed but carries no PaymentIntent - cannot match it to a booking.");
+                return Ok(new { message = "Refund not linked to a payment intent" });
+            }
+
+            /* The PaymentIntent id is the only link back: it's what StripeRefunds refunds by, and what the
+             * Payment row stores. Both webhook refund paths write that row before the money leaves. */
+            var payment = await _context.Payments
+                .Include(p => p.Booking)
+                    .ThenInclude(b => b.User)
+                .FirstOrDefaultAsync(p => p.StripePaymentIntentId == refund.PaymentIntentId);
+
+            if (payment?.Booking == null)
+            {
+                Console.WriteLine($"Refund {refund.Id} failed for PaymentIntent {refund.PaymentIntentId} with no payment on file.");
+                return Ok(new { message = "No booking for this refund" });
+            }
+
+            var booking = payment.Booking;
+            var amount = refund.Amount / 100m;
+            /* The refund id is in the note on purpose. It makes the sentence unique per refund, so
+             * FlagForReview's duplicate check swallows a redelivery of the same event (Stripe repeats these)
+             * while still writing a second note if a second refund on the same booking also fails. It is
+             * also what staff need to search for in the Dashboard. */
+            booking.FlagForReview(
+                $"{ReviewMarkers.RefundFailed} - €{amount:0.00} is still with the shop "
+                + $"(refund {refund.Id}{(string.IsNullOrWhiteSpace(refund.FailureReason) ? "" : $", reason: {refund.FailureReason}")}). "
+                + "The customer has been told their money is on the way, so they must be contacted"
+                + $"{(string.IsNullOrWhiteSpace(booking.User?.Phone) ? "" : $" on {booking.User!.Phone}")} "
+                + "and refunded another way.");
+
+            await _context.SaveChangesAsync();
+            Console.WriteLine($"Refund {refund.Id} FAILED for booking {booking.Id} - flagged for review.");
+            return Ok(new { message = "Refund failure flagged" });
         }
     }
 }
