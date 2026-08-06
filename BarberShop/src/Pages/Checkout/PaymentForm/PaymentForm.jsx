@@ -209,7 +209,10 @@ const PaymentForm = ({email,setEmail,bookingId, bookingDetails, clientSecret, se
 
     const handleCardMethodSelected = async () => {
         setAttempted(true);
-        if (!isContactValid()) return;
+        // Same silent-return problem the Confirm handlers had: this button is never disabled, so a blank
+        // name means clicking "Pay Online" reveals an error further up the form and otherwise appears to
+        // do nothing - the card form simply never opens. Send focus to the field instead.
+        if (!isContactValid()) return focusFirstInvalid();
         setPaymentMethod("CARD");
         setPaymentInProgress(false);
         setLoadingPayment(true);
