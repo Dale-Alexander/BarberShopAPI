@@ -1,3 +1,4 @@
+using BarberShopAPI.Common;
 using BarberShopAPI.Data;
 using BarberShopAPI.Models.Enums;
 using Hangfire;
@@ -58,6 +59,29 @@ namespace BarberShopAPI.CronJob
                             // happened. If that webhook never arrives, this booking will show up again
                             // on the next run and we'll retry the cancel then.
                             Console.WriteLine($"Skipping expiry for booking {booking.Id}: could not cancel PaymentIntent {booking.StripePaymentIntentId} ({ex.Message})");
+
+                            /* Paid, but never confirmed - and after an hour, stuck.
+                             *
+                             * The cancel above failed because the charge had already succeeded, so the money
+                             * is gone and the webhook that should have completed this booking has not landed.
+                             * Left alone that is invisible to everyone: the customer sees no confirmation
+                             * email, and the admin bookings table only lists bookings with a payment recorded,
+                             * so a PENDING one never appears anywhere for staff to notice. This puts it on the
+                             * Needs Review worklist, which is the one screen that shows a booking of any status.
+                             *
+                             * An hour rather than the 15 minutes that brought it into this query, because
+                             * Stripe retries a failed delivery for days and nearly all of these settle on their
+                             * own within seconds. Flagging at 15 minutes would fill the worklist with bookings
+                             * that were about to fix themselves.
+                             *
+                             * Re-flagging on every run costs nothing - FlagForReview drops a note it already
+                             * holds - so this needs no "have I flagged this one" bookkeeping. */
+                            if (booking.CreatedAt <= DateTime.UtcNow.AddHours(-1))
+                                booking.FlagForReview(
+                                    "This booking was paid for but never confirmed - the card payment succeeded and "
+                                    + "Stripe's confirmation never arrived. The customer has been charged and has had "
+                                    + $"no confirmation email. Check PaymentIntent {booking.StripePaymentIntentId} in "
+                                    + "Stripe, then confirm this booking by hand.");
                             continue;
                         }
                     }
