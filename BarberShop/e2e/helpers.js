@@ -514,10 +514,15 @@ export async function payWithCard(page, cardNumber = TEST_CARDS.success) {
 /* Clicks Confirm Booking and makes sure the click actually did something.
 
    Roughly one submit in five is swallowed: the button is enabled, the click lands, and nothing at all
-   happens - no request to Stripe, no toast, no navigation. handleCardConfirm has two SILENT early
-   returns (`!isConfirmValid()` and `!isContactValid()`), so the customer gets no feedback whatsoever
-   when one of them fires; that is a real wrinkle in the checkout form, written up under section F in
-   TESTS.md, and it is not this helper's job to hide it.
+   happens - no request to Stripe, no toast, no navigation.
+
+   The cause is NOT the one this comment used to name. It blamed the two silent early returns in
+   `handleCardConfirm`, but neither can fire here: the harness fills a valid name, phone and email, so
+   `isContactValid()` is true (and that branch now moves focus to the offending field anyway), and
+   `isConfirmValid()` gates the button itself - Playwright will not click it while it is disabled. So
+   the swallow is something else, still undiagnosed, most likely a race between the click and the
+   Stripe element becoming ready. If it starts happening often enough to be worth chasing, chase it
+   fresh; do not start from the returns.
 
    What this does is make the harness's own arrangement reliable without touching any assertion. A
    swallowed click is retried ONCE, and only when the page has neither moved nor said anything - if the

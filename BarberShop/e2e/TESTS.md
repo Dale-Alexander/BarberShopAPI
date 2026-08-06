@@ -320,21 +320,40 @@ it. All three are covered in `EmailFailureReviewTests` / `WebhookRefundTests`.
 
 ### Found while writing section F
 
-- **The Confirm Booking button has two silent early returns.** Roughly one card submit in five does
-  nothing at all: no request to Stripe, no toast, no navigation. `handleCardConfirm` returns silently
-  on `!isConfirmValid()` and on `!isContactValid()`, so a customer who hits one gets no feedback and no
-  way to know what to fix. The harness retries a swallowed click once (`submitCheckout` in
-  `helpers.js`) — arrangement only, no assertion is weakened — but the product wrinkle is real and
-  unfixed.
-- **The success screen gives the webhook ten seconds.** `Summary.jsx` polls 5× at 2s and then sends the
-  customer back to `/checkout` to pay again. Delivery measured under a second locally, so this passes
-  here; against Stripe's live delivery it is a thin margin, and the failure mode is showing a payment
-  form to someone who has already paid.
-- **A barber-unavailable email is not sent when a barber is deactivated.** `BarbersController` hands
-  only PENDING bookings to `BookingConflictCanceller` and flags the confirmed ones, and a pending
-  booking never gets an email — so that flow notifies nobody. The email is only reachable through the
-  webhook race (F6) or a staff cancel of an already-flagged booking. Worth a product decision, not a
-  test.
+- ~~**The Confirm Booking button has two silent early returns.**~~ **Fixed, and the diagnosis was
+  half wrong.** The `!isContactValid()` return in both handlers now calls `focusFirstInvalid()`, which
+  scrolls the offending field into view and focuses it — the case that actually reached a customer was
+  a blank name, which passes the relaxed check gating the button but fails the strict one in the
+  handler. The other return, `!isConfirmValid()`, is still bare but cannot be reached by a click: the
+  submit button carries the same predicate in its `disabled`, which also blocks implicit Enter
+  submission. **The same silent return was still live on a third button** — `handleCardMethodSelected`,
+  so clicking "Pay Online" with a blank name never opened the card form and said nothing about why —
+  and is now fixed the same way.
+  Note the harness's retry in `submitCheckout` is NOT explained by any of this: it fills valid contact
+  details, so neither return could ever have fired for it. The swallowed click is a separate,
+  still-undiagnosed race; the comment there has been corrected so nobody starts from the wrong cause.
+- ~~**The success screen gives the webhook ten seconds.**~~ **Fixed.** It polled 5× at 2s and then sent
+  the customer to `/checkout` — a payment form, shown to somebody Stripe had already told us paid. The
+  bad case was never the common one (`Checkout.jsx` bounces a non-PENDING booking straight back out, so
+  a late webhook self-healed into a blank beat), but with the webhook still in flight it really did
+  offer a second payment, and that charge lands in the orphaned-charge branch as a worklist row.
+  Now: backoff to about 30 seconds, then a screen that says the payment was received, that confirmation
+  happens server-side without the page open, and that they can close it — with "Check again" as the only
+  control and no way to pay twice. The spinner says "Payment received - finalising your booking...", so
+  the money question is answered while they wait rather than after.
+  Deliberately says **settled**, not confirmed: the webhook re-checks the slot, so F5–F7's endings
+  (refund and cancel) are live possibilities and this screen must not promise an outcome.
+  No spec covers the new screen — reaching it means holding a webhook for 30 seconds, which the harness's
+  gate could do but which would add half a minute to a run to assert on a message. Not worth it.
+- **A barber-unavailable email is not sent when a barber is deactivated. This is deliberate — decided,
+  not outstanding.** `BarbersController` hands only PENDING bookings to `BookingConflictCanceller` and
+  flags the confirmed ones, and a pending booking never gets an email, so that flow notifies nobody.
+  That is the house rule and every sibling flow follows it: a closure (`DatesController`) and narrowed
+  hours (`SchedulesController`) also flag confirmed bookings without emailing. It is also right on its
+  own terms — the appointment still stands until an admin reassigns or cancels it, so an email here
+  would be announcing a change that has not happened, which is exactly what the worklist note says
+  ("The customer has NOT been told"). The email is reachable through the webhook race (F6) or a staff
+  cancel of an already-flagged booking, and that is where it belongs.
 
 ---
 
@@ -358,9 +377,24 @@ Add to this list rather than fighting a scenario that can't be driven. Each entr
   branch in this codebase reads the immediate response from `StripeRefunds.RefundIdempotentlyAsync`, so
   none of them ever sees it. Covered from the other side in `WebhookRefundTests` and
   `RefundFailureReviewTests`.
-  **This also surfaced a real gap, which is not a testing problem:** nothing in the application handles
-  the async refund-failure event at all. A refund that Stripe accepts and then fails hours later leaves
-  the booking cancelled, the customer told their money is coming, and nobody notified. Worth a decision.
+  **This also surfaced a real gap, which was not a testing problem — now fixed.** Nothing in the
+  application handled the async refund-failure event at all, and the reason was structural:
+  `WebHookController` casts `stripeEvent.Data.Object as PaymentIntent` and returns early when that is
+  null, so a refund event was discarded before the `switch` was ever reached — it did not even land in
+  the "unhandled event type" log. A refund that Stripe accepted and then failed hours later left the
+  booking CANCELLED, the `Payment` row marked REFUNDED, the customer told by email their money was
+  coming, and nobody at the shop told otherwise.
+  `HandleRefundOutcomeAsync` now runs ahead of that cast (`Refund.PaymentIntentId` → `Payment` →
+  `Booking` → flag for review, with the amount, the refund id and the customer's number in the note).
+  It dispatches on the Refund OBJECT rather than the event name, so the legacy `charge.refund.updated`
+  this account sends and the newer `refund.failed` both land in it. Covered by five tests in
+  `RefundFailureReviewTests`, **mutation-tested** by disabling the branch — the three flagging tests
+  went red, the two "accept and ignore" ones stayed green, which is the right split.
+  Still B8's own answer, though: **no browser spec, now or ever.** There is no screen in this flow, and
+  the worklist row it produces is already covered by B1–B7.
+  Two follow-ups deliberately left out of that change: `Payment.Status` stays `REFUNDED` (a truthful
+  value needs a new enum member, which moves the three `EmailService` branches that read it), and the
+  customer gets no second email — they have one promising a refund, and the correction is a phone call.
 - **A1, "admin cancels a booking mid-checkout" — not a real flow.** `admin-fetch` filters to
   `Payment != null` and defaults to COMPLETED, so a PENDING booking never appears in the admin list.
   An admin cannot see a checkout in progress, so cannot cancel one. What actually kills a live
