@@ -72,7 +72,10 @@ const AlreadyPaid = () => {
         : reason === "ShopClosure"
             ? "The shop is closed for this time, so this appointment has been cancelled. Please book again at a different time."
         : reason === "ScheduleChange"
-            ? "Your barber's working hours have changed for this time, so this appointment has been cancelled. Please book again at a different time."
+            /* "our availability", not the barber's hours: ScheduleChange now covers a slot left outside the
+               SHOP's opening hours as well as one left outside the barber's rota, and blaming the barber
+               for the former is untrue. Kept in step with the cancellation email, which says the same. */
+            ? "Our availability has changed for this time, so this appointment has been cancelled. Please book again at a different time."
             : "This appointment was cancelled. If you'd like to make a new booking, please use the button below.";
     const rebookLabel =
         reason === "BarberUnavailable" ? "Choose Another Barber"

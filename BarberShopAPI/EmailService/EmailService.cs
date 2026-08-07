@@ -476,16 +476,22 @@ namespace BarberShopAPI.Services
                 Subject = "Your appointment has been cancelled"
             };
             message.To.Add(booking.ContactEmail);
+            /* "our availability", not "your barber's working hours". ScheduleChange used to have exactly
+             * one cause - the barber's rota moved - so naming the barber was precise. It now also covers a
+             * slot left outside the SHOP's opening hours, and telling a customer their barber's hours
+             * changed when the shop's did is simply untrue. The customer's next step is the same either
+             * way (pick another time), so the wording covers both rather than the enum gaining a second
+             * member that every reader, email and screen would have to learn. */
             message.HtmlBody = $@"
             <h2>Hi {safeName},</h2>
-            <p>We're sorry, but your barber's working hours have changed for
+            <p>We're sorry, but our availability has changed for
             <strong>{booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}</strong>,
             so your appointment for that time has been cancelled.</p>
             {refundHtml}
             <p>We apologise for the inconvenience. Please visit our website to book another time.</p>";
 
             message.TextBody = $"Hi {booking.User.Name},\n\n" +
-                       $"We're sorry, but your barber's working hours have changed for {booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}, " +
+                       $"We're sorry, but our availability has changed for {booking.StartDateTime:dddd, MMMM d 'at' h:mm tt}, " +
                        $"so your appointment for that time has been cancelled.\n\n" +
                        refundText +
                        $"We apologise for the inconvenience. Please visit our website to book another time.";
