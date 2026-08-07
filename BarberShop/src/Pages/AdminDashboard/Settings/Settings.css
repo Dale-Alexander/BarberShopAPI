@@ -74,6 +74,14 @@
     color: var(--muted-fg, #a0a0a0);
 }
 
+/* The slot-step field is a <select>, and the arrow and the drop-down list are drawn by the browser, not
+   by .form-input's colours - so without this they render light-scheme and the arrow is a dark glyph on a
+   dark field, the same way the time inputs' clock icon was. Also covers the number fields' spinners. */
+.settings-grid select.form-input,
+.settings-grid input[type="number"].form-input {
+    color-scheme: dark;
+}
+
 /* These are one-to-four digit numbers - a full-width input in a wide grid cell reads as a text field. */
 .settings-grid .form-input {
     max-width: 220px;
@@ -89,5 +97,115 @@
     .settings-actions .btn-primary {
         width: 100%;
         justify-content: center;
+    }
+}
+
+/* Opening hours: seven rows of the same shape, so the eye can run down the times and spot the odd one
+   out. A grid rather than flex per row because the day names differ in width, and ragged time columns
+   make "which day closes early?" a reading exercise. */
+.settings-hours {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin-bottom: 1.25rem;
+}
+
+.settings-hours-row {
+    display: grid;
+    grid-template-columns: 7.5rem 6rem 1fr auto 1fr;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+/* Explicit colour, like every other text rule on this page. The section is dark but sets no `color`, so
+   anything that doesn't name one inherits the document default - black text on a #1f2a40 card. */
+.settings-hours-day {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--grey-100);
+}
+
+.settings-hours-closed {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.82rem;
+    color: var(--muted-fg, #a0a0a0);
+    cursor: pointer;
+    user-select: none;
+}
+
+    .settings-hours-closed input {
+        cursor: pointer;
+        accent-color: var(--green-500);
+        color-scheme: dark;
+    }
+
+/* Overrides the 220px cap the numeric fields get - a time input is already narrow, and letting it fill
+   the column keeps the two sides of the "to" symmetrical.
+
+   color-scheme tells the browser to render the parts IT draws - the clock icon, the time spinner, the
+   picker popup - in dark. Without it those are drawn light-scheme: a near-black clock glyph sitting on a
+   near-black input, invisible until you hover it. The .form-input colours only cover the parts CSS owns,
+   which is why the surrounding text looked fine while the icon did not. Schedules.css already does this
+   on its own time fields; this is the same fix in the second place that needed it. */
+.settings-hours .settings-hours-time {
+    max-width: none;
+    width: 100%;
+    color-scheme: dark;
+}
+
+    .settings-hours .settings-hours-time:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+    }
+
+.settings-hours-sep {
+    font-size: 0.82rem;
+    color: var(--muted-fg, #a0a0a0);
+}
+
+/* The refusal listing which barber schedules stick out past the proposed hours. Styled as a warning
+   panel, not an error toast: it's a to-do list the admin works through, so it has to stay on screen. */
+.settings-hours-conflicts {
+    margin-bottom: 1rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid #c9770a;
+    border-left-width: 3px;
+    border-radius: 8px;
+    background: hsla(35, 90%, 50%, 0.07);
+    font-size: 0.85rem;
+    line-height: 1.5;
+    /* A translucent amber wash over a dark card is still dark, so this needs light text like everything
+       else here - the panel only ever appears to deliver bad news, which is the worst thing to lose. */
+    color: var(--grey-100);
+}
+
+    .settings-hours-conflicts ul {
+        margin: 0.5rem 0 0 1.1rem;
+        padding: 0;
+    }
+
+    .settings-hours-conflicts li {
+        margin-bottom: 0.25rem;
+    }
+
+/* Stack the row on narrow screens - five columns in 400px gives each time field about 60px. */
+@media (max-width: 639px) {
+    .settings-hours-row {
+        grid-template-columns: 1fr 1fr;
+        gap: 0.4rem 0.6rem;
+    }
+
+    .settings-hours-day {
+        grid-column: 1 / -1;
+    }
+
+    .settings-hours-closed {
+        grid-column: 1 / -1;
+    }
+
+    .settings-hours-sep {
+        display: none;
     }
 }

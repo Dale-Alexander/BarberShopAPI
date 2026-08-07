@@ -346,3 +346,30 @@ body{
     outline: none;
     font: inherit;
   }
+/* "Outside working hours (Approved)" - a booking staff deliberately placed outside the shop's opening
+   hours or the barber's shift (Booking.OutsideShopHours / OutsideBarberSchedule).
+
+   Lives here, with the other shared primitives, because two different tables show it: the admin's
+   bookings list and the barber's own. A copy in each stylesheet would drift the first time one was
+   restyled.
+
+   Amber, echoing the out-of-hours chip in the booking picker, so the colour carries the same meaning in
+   both places: allowed, but a decision somebody made. Deliberately NOT red, and deliberately not shaped
+   like the needs-review marker that can appear in the same row - that one means "a human still owes
+   someone something" and this one means the opposite, it was settled when the booking was taken.
+   Outlined rather than filled so it reads as an annotation on the time above it rather than a third
+   status badge competing with Status and Payment. */
+.override-badge {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 1px 7px;
+    border: 1px solid rgba(201, 119, 10, 0.55);
+    border-radius: 999px;
+    background: rgba(201, 119, 10, 0.12);
+    color: #e0a35a;
+    font-size: 0.68rem;
+    font-weight: 600;
+    line-height: 1.5;
+    white-space: nowrap;
+    cursor: help;
+}

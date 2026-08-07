@@ -1,4 +1,4 @@
-﻿import { useState, useMemo, useEffect, useContext } from "react";
+﻿import { useState, useMemo, useEffect, useContext, useRef, useLayoutEffect } from "react";
 import UserFormModal from "./UserFormModal/UserFormModal.jsx";
 import { resolveBarberImage, handleBarberImageError } from "../../utils/barberImage.js";
 import { useNavigate, useParams, useSearchParams, useLocation } from "react-router-dom";
@@ -33,10 +33,18 @@ import Navlinks from "../../Components/NavLinks/Navlinks";
 import { BookingDetailsContext } from "../../Context/BookingDetailsContext.jsx";
 import { getErrorMessage } from "../../utils/errorMessage.js";
 
-/* Slot generation granularity, mirroring the backend's 30-minute slotify step. There is no fixed slot
- * list anymore: slots are generated per (barber, date) from each barber's effective-dated schedule,
- * delivered as a template on barbers-with-bookings (see ScheduleResolver on the backend). */
-const SLOT_STEP_MIN = 30;
+/* Fallback slot granularity, used only until barbers-with-bookings answers with the configured
+ * ShopSettings.SlotStepMin. There is no fixed slot list: slots are generated per (barber, date) from
+ * each barber's effective-dated schedule for a customer, and from the shop's opening hours for staff.
+ *
+ * Purely how far apart the OFFERED start times are - no backend rule requires a booking to land on this
+ * grid, since the server validates an arbitrary DateTime against shifts, closures and overlaps. So a
+ * change here can't put the picker out of step with what the server will accept. */
+const DEFAULT_SLOT_STEP_MIN = 30;
+
+/* Fallback shop hours, for the same window before the payload arrives. Matches the seeded row. */
+const FALLBACK_OPEN_MIN = 9 * 60;
+const FALLBACK_CLOSE_MIN = 17 * 60 + 30;
 
 const toMin = (hhmm) => {
     const [h, m] = hhmm.split(":").map(Number);
@@ -78,15 +86,29 @@ const shiftsForDate = (schedule, date) => {
         .sort((a, b) => a.startMin - b.startMin);
 };
 
-/* The barber's candidate slot START times (HH:mm) for a date: 30-min steps from each shift's start,
- * excluding the shift end (a start at the shift end can never fit a positive-length booking). Whether
- * a start ACTUALLY fits (duration, grace, split-shift gaps) is slotFitsBarberSchedule below. */
-const scheduleSlots = (schedule, date) => {
+/* Candidate slot START times (HH:mm) across a span, stepping by the configured granularity and
+ * excluding the end itself (a start AT the end can never fit a positive-length booking). */
+const stepRange = (startMin, endMin, stepMin) => {
     const out = [];
-    for (const sh of shiftsForDate(schedule, date)) {
-        for (let m = sh.startMin; m < sh.endMin; m += SLOT_STEP_MIN) out.push(toHHMM(m));
-    }
+    for (let m = startMin; m < endMin; m += stepMin) out.push(toHHMM(m));
     return out;
+};
+
+/* The barber's candidate slot START times for a date: stepped from each shift's start. Whether a start
+ * ACTUALLY fits (duration, grace, split-shift gaps) is slotFitsBarberSchedule below. */
+const scheduleSlots = (schedule, date, stepMin) => {
+    const out = [];
+    for (const sh of shiftsForDate(schedule, date)) out.push(...stepRange(sh.startMin, sh.endMin, stepMin));
+    return out;
+};
+
+/* The shop's own opening hours for a date, from the seven ShopHours rows the API sends. null = the shop
+ * is shut that weekday (or the row is missing, which is treated the same way and fails closed). */
+const shopHoursForDate = (shopHours, date) => {
+    if (!date) return null;
+    const row = (shopHours ?? []).find((h) => h.dayOfWeek === date.getDay());
+    if (!row || row.isClosed) return null;
+    return { openMin: toMin(row.openTime.slice(0, 5)), closeMin: toMin(row.closeTime.slice(0, 5)) };
 };
 
 /* Current time as Malta wall-clock. The slot strings ("09:00") are Malta wall-clock times and the backend
@@ -109,6 +131,18 @@ const BarberDateAndTime = () => {
      * minAdvanceMinutes ahead and at most maxAdvanceDays out. Defaults match the seed until loaded. */
     const [minAdvanceMinutes, setMinAdvanceMinutes] = useState(90);
     const [maxAdvanceDays, setMaxAdvanceDays] = useState(60);
+    /* Spacing of the offered start times, from ShopSettings. */
+    const [slotStepMin, setSlotStepMin] = useState(DEFAULT_SLOT_STEP_MIN);
+    /* The shop's own opening hours, one row per weekday. These draw the STAFF grid (staff aren't bounded
+     * by any barber's hours, so there'd otherwise be nothing to draw) and mark which slots are outside
+     * them. Customers never read these: their grid comes from the selected barber's shifts, which the
+     * backend already keeps inside these hours. */
+    const [shopHours, setShopHours] = useState([]);
+    /* Staff-only escape from that grid. Shop hours cap what staff are OFFERED, not what they may book -
+     * the shop can open late for a regular, and the whole out-of-hours confirmation exists for it. Off by
+     * default because the alternative is a grid of every slot in the day: 48 chips at a 30-minute step and
+     * 96 at 15, nearly all of them useless. Never shown to customers, who cannot override anything. */
+    const [showExtendedHours, setShowExtendedHours] = useState(false);
     const [calendarMonth, setCalendarMonth] = useState(new Date());
     const { bookingId } = useParams();
     const isEditMode = !!bookingId;
@@ -207,6 +241,8 @@ const BarberDateAndTime = () => {
         setGraceMinutesAfterClose(barberBookings?.graceMinutesAfterClose ?? 0);
         setMinAdvanceMinutes(barberBookings?.minAdvanceBookingMinutes ?? 90);
         setMaxAdvanceDays(barberBookings?.maxAdvanceBookingDays ?? 60);
+        setSlotStepMin(barberBookings?.slotStepMin || DEFAULT_SLOT_STEP_MIN);
+        setShopHours(barberBookings?.shopHours ?? []);
         if (bookingId && editBooking) {
             const selectedBarber = barberBookings?.barbers.find(b => b?.barberId == editBooking?.barberId);
             setSelectedBarberId(selectedBarber?.barberId ?? null);
@@ -296,27 +332,6 @@ const BarberDateAndTime = () => {
     const maxCustomerDate = isCustomer ? addDays(today, maxAdvanceDays) : null;
     const isDateBeyondHorizon = (day) => !!maxCustomerDate && isAfter(startOfDay(day), maxCustomerDate);
 
-    /*const isBarberAvailable = (barber, selectedDate, selectedTime) => {
-        if (!selectedDate || !selectedTime) return true; // no date and time yet, show all
-        const selectedDateOnly = format(selectedDate, "yyyy-MM-dd");
-
-        //check closures
-        const isClosed = barber.dateClosures?.some(c => {
-            if (c.date !== selectedDateOnly) return false;
-            if (c.isFullDay) return true;
-            return c.startTime.slice(0, 5) <= selectedTime && c.EndTime.slice(0, 5) > selectedTime;
-            //the reason we clice is because TimeOnly from the backend returns in this format
-            //HH:mm:ss and lets say selectedTime is "10:00". Comparing "10:00" with "10:00:00" is unreliable
-        });
-
-        const isBooked = barber?.bookings?.some(b =>
-            format(new Date(b.startDateTime), "yyyy-MM-dd HH:mm") === `${selectedDateOnly} ${selectedTime}`
-        );
-
-        return !isClosed && !isBooked;//if barber is not closed and not booked return true
-    }*/
-
-
     const handleCancel = () => {
         setShowModal(false);
     }
@@ -357,40 +372,43 @@ const BarberDateAndTime = () => {
         if (!selectedBarberId) return false;
         return getAvailableSlots(day).length === 0;
     }
-    /* Broad staff time grid = the shop's operating envelope: earliest shift start .. latest shift end
-     * across all barbers' current/future schedules. Staff can step outside the selected barber's own
-     * hours by confirming it, so their grid has to reach past those hours or there'd be nothing to
-     * confirm. Falls back to 09:00-17:30 when no schedules are loaded yet. */
-    const staffEnvelopeSlots = useMemo(() => {
-        let minStart = Infinity;
-        let maxEnd = -Infinity;
-        for (const b of barbers) {
-            for (const v of b.schedule ?? []) {
-                for (const s of v.shifts ?? []) {
-                    minStart = Math.min(minStart, toMin(s.startTime.slice(0, 5)));
-                    maxEnd = Math.max(maxEnd, toMin(s.endTime.slice(0, 5)));
-                }
-            }
-        }
-        if (!isFinite(minStart)) { minStart = 9 * 60; maxEnd = 17 * 60 + 30; }
-        const out = [];
-        for (let m = minStart; m < maxEnd; m += SLOT_STEP_MIN) out.push(toHHMM(m));
-        return out;
-    }, [barbers]);
+    /* The staff time grid for a date: the shop's opening hours for THAT WEEKDAY, or the whole day when
+     * extended hours are switched on.
+     *
+     * This used to scan every barber's every schedule version for the widest start and end anywhere, which
+     * was wrong three ways at once: a version effective from next month widened today's grid, Saturday's
+     * early opening widened Tuesday's, and the widest hours anyone had were also the furthest staff could
+     * ever reach - so in a shop where nobody works past 17:30, an 18:00 favour was simply not on the grid,
+     * even though the backend would have taken it with a confirmation. Shop hours answer all three: they're
+     * per-weekday, they don't depend on rosters at all, and what staff may exceed is now a deliberate
+     * toggle rather than an accident of whose shift happened to run latest.
+     *
+     * A day the shop is closed gives an empty grid - correct, and reachable via extended hours, which is
+     * exactly the Sunday-opening case. */
+    const staffGridSlots = (date) => {
+        if (showExtendedHours) return stepRange(0, 24 * 60, slotStepMin);
+        const hours = shopHoursForDate(shopHours, date);
+        // Only while the payload is in flight; a genuinely closed day resolves to null AFTER it arrives,
+        // and must stay empty rather than falling back to hours the shop doesn't keep.
+        if (!hours) return shopHours.length === 0
+            ? stepRange(FALLBACK_OPEN_MIN, FALLBACK_CLOSE_MIN, slotStepMin)
+            : [];
+        return stepRange(hours.openMin, hours.closeMin, slotStepMin);
+    };
 
     /* The candidate slot START times shown for a date, BEFORE removing booked/closed/past ones:
      * customers get the selected barber's schedule slots (hard-limited to their real hours); staff get
-     * the broad envelope, with out-of-hours ones marked rather than removed (see isOutsideSchedule). */
+     * the shop-hours grid, with out-of-hours ones marked rather than removed (see isOutsideSchedule). */
     const slotUniverse = (date) => {
         if (!date || !selectedBarberId) return [];
-        if (!isCustomer) return staffEnvelopeSlots;
+        if (!isCustomer) return staffGridSlots(date);
         if (selectedBarberId === "All") {
             const set = new Set();
-            barbers.forEach((b) => scheduleSlots(b.schedule, date).forEach((s) => set.add(s)));
+            barbers.forEach((b) => scheduleSlots(b.schedule, date, slotStepMin).forEach((s) => set.add(s)));
             return [...set].sort();
         }
         const barber = barbers.find((b) => b.barberId === selectedBarberId);
-        return scheduleSlots(barber?.schedule, date);
+        return scheduleSlots(barber?.schedule, date, slotStepMin);
     };
 
     const getAvailableSlots = (date) => {
@@ -483,18 +501,91 @@ const BarberDateAndTime = () => {
         return !slotFitsBarberSchedule(time, date, barber);
     };
 
+    /* The OTHER boundary: does [time, time+duration] fall outside the shop's own opening hours? Mirrors
+     * the backend ShopHoursResolver, grace included - Req 2 makes a shift ending at closing time the norm,
+     * so without grace here a non-zero GraceMinutesAfterClose would mark the day's last slot out-of-hours
+     * on a shop that has explicitly allowed it to run over.
+     *
+     * Separate from the barber question on purpose: they're independent, they're overridden independently
+     * on the backend, and a staff member needs to see which of the two they're about to step outside.
+     * Only reachable with extended hours on - the ordinary staff grid stops at these hours. */
+    const isTimeSlotOutsideShopHours = (time, date = selectedDate) => !!shopHoursBreach(time, date);
+
+    /* WHICH side of the shop's hours a slot falls foul of, or null if none.
+     *
+     * Worth distinguishing because the three cases are not the same news. A 17:15 start in a shop that
+     * shuts at 17:30 is INSIDE opening hours - it is the appointment that runs over - and calling that
+     * "outside the shop's opening hours" invites the reader to check a clock that says otherwise. The
+     * distinction is also actionable: an overrun is what GraceMinutesAfterClose exists to permit, whereas
+     * a closed day or an early start is not. */
+    const shopHoursBreach = (time, date = selectedDate) => {
+        if (!date) return null;
+        const hours = shopHoursForDate(shopHours, date);
+        // No row = the shop is shut that weekday. Null while the payload is still in flight, when nothing
+        // should be marked at all.
+        if (!hours) return shopHours.length > 0 ? { kind: "closed" } : null;
+        const startMin = toMin(time);
+        if (startMin < hours.openMin) return { kind: "before-open", at: toHHMM(hours.openMin) };
+        if (startMin + slotDurationMin > hours.closeMin + graceMinutesAfterClose)
+            return { kind: "overruns", at: toHHMM(hours.closeMin) };
+        return null;
+    };
+
+    /* The same question for the selected barber's shifts. "Runs past the end of their shift" and "they
+     * aren't working then" read very differently to whoever has to agree to it. */
+    const barberHoursBreach = (time, date = selectedDate) => {
+        if (selectedBarberId === "All" || !date) return null;
+        const barber = barbers.find((b) => b.barberId === selectedBarberId);
+        const shifts = shiftsForDate(barber?.schedule, date);
+        if (shifts.length === 0) return { kind: "day-off" };
+        if (slotFitsBarberSchedule(time, date, barber)) return null;
+        const startMin = toMin(time);
+        // Started inside a shift but ran past its end - as opposed to landing in a lunch gap or outside
+        // the day's shifts entirely.
+        const covering = shifts.find((s) => startMin >= s.startMin && startMin < s.endMin);
+        return covering
+            ? { kind: "overruns", at: toHHMM(covering.endMin) }
+            : { kind: "outside" };
+    };
+
     /* Wording for the out-of-hours confirmation. A barber is locked to their own chair, so they are always
      * agreeing to work the slot themselves and get the soft copy; an admin is always committing somebody
      * else and gets the "make sure they've agreed" copy. */
     const isBookingSelf = user?.role === "BARBER";
     const selectedBarberName = barbers.find((b) => b.barberId === selectedBarberId)?.barberName ?? "this barber";
 
-    /* Staff-only: is the currently SELECTED slot outside the target barber's hours? Drives the
-     * warn-and-confirm on the Next button. */
-    const selectedSlotOutsideSchedule = () => {
-        if (isCustomer) return false;
-        if (!selectedTime || !selectedDate || !selectedBarberId || selectedBarberId === "All") return false;
-        return isTimeSlotOutsideSchedule(selectedTime, selectedDate);
+    /* Staff-only: which boundaries does the currently SELECTED slot step outside? Drives the
+     * warn-and-confirm on the Next button and which of the three messages it shows.
+     *
+     * The shop-hours half is asked even when the barber is "All", where there is no one schedule to
+     * measure against - the shop's hours don't depend on which barber it is. */
+    const selectedSlotOverrides = () => {
+        if (isCustomer || !selectedTime || !selectedDate || !selectedBarberId)
+            return { schedule: false, shop: false, any: false };
+        const schedule = selectedBarberId !== "All" && isTimeSlotOutsideSchedule(selectedTime, selectedDate);
+        const shop = isTimeSlotOutsideShopHours(selectedTime, selectedDate);
+        return { schedule, shop, any: schedule || shop };
+    };
+    const selectedSlotOutsideSchedule = () => selectedSlotOverrides().any;
+
+    /* One place that turns a breach into words, so the chip's tooltip and the confirmation modal can never
+     * describe the same slot differently. `who` varies because the modal addresses a barber about their
+     * own chair ("your shift") and an admin about someone else's ("Alex's shift"), while the tooltip is
+     * always third-person. */
+    const shopBreachPhrase = (breach, dayName) => {
+        if (!breach) return null;
+        if (breach.kind === "closed") return `the shop is closed on ${dayName}s`;
+        if (breach.kind === "before-open") return `the shop doesn't open until ${breach.at}`;
+        return `it would run past closing (${breach.at})`;
+    };
+    /* `subject` and `possessive` are passed in rather than derived, because the same sentence is said to
+     * two different people: a barber about their own chair ("you aren't working", "your shift") and an
+     * admin about someone else's ("Alex isn't working", "Alex's shift"). */
+    const barberBreachPhrase = (breach, subject, possessive, dayName) => {
+        if (!breach) return null;
+        if (breach.kind === "day-off") return `${subject} not working on ${dayName}s`;
+        if (breach.kind === "overruns") return `it would run past the end of ${possessive} shift (${breach.at})`;
+        return `it's outside ${possessive} working hours`;
     };
 
     /* The booking being edited is still sitting on the barber it belongs to. This gates the exemption
@@ -517,20 +608,35 @@ const BarberDateAndTime = () => {
     };
 
     const isTimeSlotClosed = (time, date = selectedDate) => {
-        /* partial closures can never be multi-day so just keep checking startDate and ignore endDate because it is irrelevant here */
+        /* partial closures can never be multi-day (DatesController rejects it), so just keep checking
+           startDate and ignore endDate because it is irrelevant here */
         if (!date) return false;
         if (!selectedBarberId) return false;
         const dateStr = format(date, "yyyy-MM-dd");//dont change this format because dateOnly stores it in this format
-        const shopWide = shopWideClosures.filter(c => !c.isFullDay && c.startDate === dateStr).some(c => time >= c.startTime.slice(0, 5) && time < c.endTime.slice(0, 5));
-        if (selectedBarberId === "All") return shopWide;
-        let barberBlocked = false;
-        const selectedBarber = barbers.find(b => b.barberId === selectedBarberId);
-        barberBlocked = selectedBarber?.dateClosures.filter(c => !c.isFullDay && c.startDate === dateStr)
-            .some(c => time >= c.startTime.slice(0, 5) && time < c.endTime.slice(0, 5));
-        //the reason we clice is because TimeOnly from the backend returns in this format
-        //HH:mm:ss and lets say selectedTime is "10:00". Comparing "10:00" with "10:00:00" is unreliable
+        /* The booking's whole span, not just where it starts. Mirrors the backend's closure overlap test
+           (BookingsController create/update, BookingSlotGuard.ClosuresCoveringSlot):
+               closure.start < bookingEnd && closure.end > bookingStart
+           Testing only the start let a booking that BEGINS before a partial closure and RUNS INTO it show
+           as available, and the backend then refused it on submit - a 30-minute booking at 12:45 against a
+           13:00-14:00 closure. Rare while slots step every 30 minutes and closures are set on the hour, so
+           the start lands on the boundary anyway; routine the moment either of those stops being true.
+           No buffer here on purpose: the between-booking gap applies to bookings only, never to closures.
+           Comparing in minutes rather than as strings because "12:45" + 30 isn't a string operation - and
+           it drops the HH:mm:ss-vs-HH:mm slicing hazard the old comparison had to keep explaining. */
+        const startMin = toMin(time);
+        const endMin = startMin + slotDurationMin;
+        const overlaps = (c) =>
+            toMin(c.startTime.slice(0, 5)) < endMin && toMin(c.endTime.slice(0, 5)) > startMin;
+        /* The times are nullable in the database, and a partial closure without them can't be reasoned
+           about - so skip it rather than throw. The API rejects such a closure on create, but the column
+           allows it, and a null here would otherwise take down the whole booking page on .slice(). */
+        const partialOnDay = (closures) => (closures ?? [])
+            .filter(c => !c.isFullDay && c.startDate === dateStr && c.startTime && c.endTime);
 
-        return shopWide || barberBlocked;
+        const shopWide = partialOnDay(shopWideClosures).some(overlaps);
+        if (selectedBarberId === "All") return shopWide;
+        const selectedBarber = barbers.find(b => b.barberId === selectedBarberId);
+        return shopWide || partialOnDay(selectedBarber?.dateClosures).some(overlaps);
     }
 
     useEffect(() => {
@@ -701,25 +807,76 @@ const BarberDateAndTime = () => {
         const free = getAvailableSlots(selectedDate);
         const isOnOriginalDate = originalDate && isSameDay(selectedDate, originalDate);
         return slotUniverse(selectedDate).map((time) => {
-            /* Outside the barber's hours is a hard block for customers only. For staff it stays pickable
-               and is styled as out-of-hours, so choosing it raises the confirmation rather than being
-               silently unavailable. */
+            /* Outside either set of hours is a hard block for customers only. For staff both stay pickable
+               and are styled, so choosing one raises the confirmation rather than being silently
+               unavailable. Customers can't actually reach the shop-hours case - their grid comes from
+               shifts, which the backend keeps inside shop hours - but it's included so the rule the chip
+               enforces is the same one the server does rather than relying on that invariant holding. */
             const isOutsideSchedule = isTimeSlotOutsideSchedule(time, selectedDate);
+            const isOutsideShopHours = isTimeSlotOutsideShopHours(time, selectedDate);
             const blocked = !free.includes(time)
                 || isTimeSlotClosed(time, selectedDate)
                 || isTimeSlotInPast(time, selectedDate)
                 // Customers also can't pick a slot inside the lead time; staff (admin/edit) only past.
                 || (isCustomer && isTimeSlotTooSoon(time, selectedDate))
-                || (isCustomer && isOutsideSchedule);
+                || (isCustomer && (isOutsideSchedule || isOutsideShopHours));
             /* The booking's own slot stays pickable so an edit can leave the time alone - but only while
                it's still on its own barber (see isOnOriginalBarber). Reassign it and it's judged like
                any other slot. */
             const isDisabled = isEditMode
                 ? (!(isOnOriginalBarber && isOnOriginalDate && time === originalTime) && blocked)
                 : blocked;
-            return { time, isDisabled, isOutsideSchedule };
+            return { time, isDisabled, isOutsideSchedule, isOutsideShopHours };
         });
     })() : [];
+
+    /* How many chips go on a row, MEASURED rather than tabulated.
+     *
+     * This was five hand-tuned pixel widths, one per slot step, matched to how wide the card happened to
+     * be. They were wrong three times in a row - too small here, clipped there - because the thing that
+     * actually decides a good layout is the card's real width and height against the number of slots, and
+     * none of that is knowable from the step alone. A shop open 08:00-20:00 has twice the slots of one
+     * open 09:00-13:00 at the same step, and the constants couldn't tell them apart.
+     *
+     * The rule: take the FEWEST columns (so the biggest chips) whose rows still fit the height. If nothing
+     * fits - a 5-minute day is 100+ slots and never will - fall back to the most columns that keep chips
+     * at a comfortable width and let it scroll, which is the honest outcome at that density.
+     *
+     * Safe from feedback loops because scrollbar-gutter reserves the bar's width whether or not it shows,
+     * so a re-layout can't change the width that produced it. */
+    const gridRef = useRef(null);
+    const [slotCols, setSlotCols] = useState(null);
+    const slotCount = daySlots.length;
+
+    useLayoutEffect(() => {
+        const el = gridRef.current;
+        if (!el || slotCount === 0) return;
+
+        const measure = () => {
+            const cs = getComputedStyle(el);
+            const colGap = parseFloat(cs.columnGap) || 0;
+            const rowGap = parseFloat(cs.rowGap) || 0;
+            const width = el.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+            const height = el.clientHeight;
+            if (width <= 0 || height <= 0) return;
+
+            // Narrowest chip that still reads as a time, and shortest row that stays comfortably tappable.
+            const MIN_CHIP = 72, MIN_ROW = 32;
+            const maxCols = Math.max(1, Math.floor((width + colGap) / (MIN_CHIP + colGap)));
+
+            let chosen = maxCols;
+            for (let cols = 1; cols <= maxCols; cols++) {
+                const rows = Math.ceil(slotCount / cols);
+                if (rows * MIN_ROW + (rows - 1) * rowGap <= height) { chosen = cols; break; }
+            }
+            setSlotCols(chosen);
+        };
+
+        measure();
+        const observer = new ResizeObserver(measure);
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [slotCount]);
 
     const containerVariants = {
         hidden: {},
@@ -945,32 +1102,86 @@ const BarberDateAndTime = () => {
                                         </div>
                                     </div>
 
-                                    {/* Time Slots */}
+                                    {/* Time Slots. The wrapper is the grid item, so the calendar beside it
+                                        sets the row height and a long slot list can't stretch it - see
+                                        .bp-time-card-slot. */}
+                                    <div className="bp-time-card-slot">
                                     <div className="bp-time-card">
+                                        {/* Staff only, and never for customers, who can't override either boundary and
+                                            would only be shown slots the backend will refuse. Off by default: the whole
+                                            day is 48 chips at a 30-minute step and 96 at 15, so it's the exception
+                                            (opening specially for a regular) rather than the view.
+
+                                            Outside the "has a date been picked?" branch below, and it has to be. A day
+                                            the shop is closed has an empty grid, which makes isDateBooked true and
+                                            DISABLES that day in the calendar - so with the toggle inside that branch,
+                                            reaching it needed a selected date and selecting the date needed the toggle.
+                                            Opening specially on a Sunday, the case it exists for, was the one case it
+                                            could not do. */}
+                                        {!isCustomer && (
+                                            <label className="bp-extended-hours">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={showExtendedHours}
+                                                    onChange={(e) => setShowExtendedHours(e.target.checked)}
+                                                />
+                                                <span>Show hours outside the shop's opening times</span>
+                                            </label>
+                                        )}
                                         {selectedDate ? (
                                             <>
                                                 <h3 className="bp-time-heading">{format(selectedDate, "EEEE, MMMM d")}</h3>
                                                 <p className="bp-time-sub">Available slots</p>
-                                                <div className="bp-time-grid">
-                                                    {daySlots.map(({ time, isDisabled, isOutsideSchedule }) => (
+                                                {/* Column count is measured, not configured - see the useLayoutEffect
+                                                    above. Until the first measurement lands the CSS fallback applies,
+                                                    which is why this is an override and not the only rule. */}
+                                                <div
+                                                    ref={gridRef}
+                                                    className="bp-time-grid"
+                                                    style={slotCols ? { gridTemplateColumns: `repeat(${slotCols}, minmax(0, 1fr))` } : undefined}
+                                                >
+                                                    {daySlots.map(({ time, isDisabled, isOutsideSchedule, isOutsideShopHours }) => (
                                                         <button
                                                             key={time}
-                                                            className={`bp-time-chip ${selectedTime === time ? "selected" : ""} ${isDisabled ? "booked" : ""} ${!isDisabled && isOutsideSchedule ? "outside-hours" : ""}`}
+                                                            className={`bp-time-chip ${selectedTime === time ? "selected" : ""} ${isDisabled ? "booked" : ""} ${!isDisabled && isOutsideShopHours ? "outside-shop-hours" : !isDisabled && isOutsideSchedule ? "outside-hours" : ""}`}
                                                             onClick={() => !isDisabled && setSelectedTime(time)}
                                                             disabled={isDisabled}
-                                                            title={!isDisabled && isOutsideSchedule ? "Outside this barber's working hours" : undefined}
+                                                            /* Shop hours win the styling when both apply: it's the wider
+                                                               problem (the shop is shut, so who is rostered is moot), and
+                                                               two dashed borders on one chip say nothing useful. The
+                                                               tooltip still names both, and names WHICH way each is
+                                                               breached - "would run past closing (17:30)" rather than
+                                                               "outside opening hours" for a 17:15 start that is plainly
+                                                               inside them. Same phrase builders as the confirmation
+                                                               modal, so the two can't describe a slot differently. */
+                                                            title={isDisabled ? undefined : (() => {
+                                                                const dayName = format(selectedDate, "EEEE");
+                                                                const parts = [
+                                                                    shopBreachPhrase(shopHoursBreach(time, selectedDate), dayName),
+                                                                    barberBreachPhrase(barberHoursBreach(time, selectedDate),
+                                                                        `${selectedBarberName} isn't`, `${selectedBarberName}'s`, dayName),
+                                                                ].filter(Boolean);
+                                                                if (parts.length === 0) return undefined;
+                                                                const s = parts.join(", and ");
+                                                                return s.charAt(0).toUpperCase() + s.slice(1);
+                                                            })()}
                                                         >
                                                             {time}
                                                         </button>
                                                     ))}
                                                 </div>
-                                                {/* Only shown when there is actually an amber chip on screen to explain. A
-                                                    barber on their own full-day schedule has none, and a legend for a state
-                                                    the grid isn't in just makes the reader hunt for something that isn't
-                                                    there. Same dot/label shape as the calendar legend above. */}
-                                                {daySlots.some(s => !s.isDisabled && s.isOutsideSchedule) && (
+                                                {/* Each row only shows when there is actually a chip on screen in that state
+                                                    to explain. A barber on their own full-day schedule has none, and a legend
+                                                    for a state the grid isn't in just makes the reader hunt for something
+                                                    that isn't there. Same dot/label shape as the calendar legend above. */}
+                                                {daySlots.some(s => !s.isDisabled && (s.isOutsideSchedule || s.isOutsideShopHours)) && (
                                                     <div className="bp-time-legend">
-                                                        <span><i className="legend-dot outside-hours" /> Outside working hours</span>
+                                                        {daySlots.some(s => !s.isDisabled && !s.isOutsideShopHours && s.isOutsideSchedule) && (
+                                                            <span><i className="legend-dot outside-hours" /> Outside working hours</span>
+                                                        )}
+                                                        {daySlots.some(s => !s.isDisabled && s.isOutsideShopHours) && (
+                                                            <span><i className="legend-dot outside-shop-hours" /> Outside shop opening hours</span>
+                                                        )}
                                                     </div>
                                                 )}
                                             </>
@@ -981,8 +1192,9 @@ const BarberDateAndTime = () => {
                                             </div>
                                         )}
                                     </div>
+                                    </div>
                                 </div>
-                            </motion.section>                     
+                            </motion.section>
                     </motion.div>
                     <div className="barber-datetime-proceed">
                         <button onClick={handleNextClick} disabled={loading || bookingLoading || !(selectedBarberId && selectedDate && selectedTime) || (isStaffMode && !!adminDurationError)} className={`next-details-btn ${!(selectedBarberId && selectedDate && selectedTime) || (isStaffMode && !!adminDurationError) ? "disabled" : ""}`}>
@@ -1006,24 +1218,74 @@ const BarberDateAndTime = () => {
             )}
             {/* The one place an out-of-hours booking can be agreed to. The backend refuses the slot unless
                 this has been clicked, so it isn't advisory - it's the decision itself. */}
-            {showScheduleWarn && (
+            {showScheduleWarn && (() => {
+                /* Which boundaries are actually being crossed decides the whole message. "Outside working
+                   hours" on a slot that is really outside the SHOP's hours would have the staff member
+                   checking a rota that has nothing to do with the problem - and agreeing to open the shop
+                   late is a different decision from agreeing to work a shift, made by a different person.
+                   The barber half keeps its existing split: a barber is locked to their own chair, so they
+                   are always agreeing for themselves and get the soft copy, while an admin is always
+                   committing someone else and gets "make sure they've agreed". */
+                const dayName = selectedDate ? format(selectedDate, "EEEE") : "that day";
+                const when = `${selectedTime} on ${selectedDate ? format(selectedDate, "EEEE, MMMM d") : ""}`;
+                const checkWith = isBookingSelf
+                    ? "do you want to work this slot?"
+                    : "make sure they've agreed to work this slot.";
+
+                /* The same two phrase builders the chips' tooltips use, so a slot is described identically
+                   wherever it is explained. Each names the strongest true thing: a whole day off reads
+                   differently from a slot merely outside a shift, a shop that never opens that day
+                   differently from one not open YET, and both of those differently again from an
+                   appointment that starts inside the hours and simply runs past the end of them. */
+                const shopBreach = shopHoursBreach(selectedTime, selectedDate);
+                const barberBreach = barberHoursBreach(selectedTime, selectedDate);
+                const shopClause = shopBreachPhrase(shopBreach, dayName);
+                const barberClause = barberBreachPhrase(
+                    barberBreach,
+                    isBookingSelf ? "you're" : `${selectedBarberName} isn't`,
+                    isBookingSelf ? "your" : `${selectedBarberName}'s`,
+                    dayName);
+
+                /* "Runs past closing" is a smaller thing to agree to than "the shop is shut", and the
+                   heading is the first word on it - so it says which. */
+                const heading = shopBreach?.kind === "closed" ? "The shop is closed that day"
+                    : shopBreach?.kind === "overruns" && !barberClause ? "Runs past closing time"
+                    : shopClause && barberClause ? "Outside shop and working hours"
+                    : shopClause ? "Outside shop opening hours"
+                    : barberBreach?.kind === "day-off" ? "That's a day off"
+                    : barberBreach?.kind === "overruns" ? "Runs past the end of the shift"
+                    : "Outside working hours";
+
+                /* An overrun doesn't need the shop to "open specially" - it needs it to stay a little
+                   late, which is a different ask and the one GraceMinutesAfterClose exists to pre-approve. */
+                const shopConsequence = shopBreach?.kind === "overruns"
+                    ? "the shop will have to stay open a little later"
+                    : "the shop will have to open specially";
+
+                const body = shopClause && barberClause
+                    ? `${when}: ${shopClause}, and ${barberClause}. You can still book it, but ${shopConsequence} — and ${checkWith}`
+                    : shopClause
+                        ? `${when}: ${shopClause}. You can still book it, but ${shopConsequence} for it.`
+                        : `${when}: ${barberClause}. You can still book it${isBookingSelf ? " — " : ", but "}${checkWith}`;
+                const confirmLabel = shopClause && !barberClause ? "Book outside opening hours"
+                    : isBookingSelf ? "Book anyway"
+                    : "Book outside hours";
+
+                return (
                 <div className="modal-overlay" onClick={() => setShowScheduleWarn(false)}>
                     <div className="user-form-modal" onClick={(e) => e.stopPropagation()}>
-                        <h2>Outside working hours</h2>
-                        <p>
-                            {isBookingSelf
-                                ? `${selectedTime} on ${selectedDate ? format(selectedDate, "EEEE, MMMM d") : ""} is outside your scheduled hours. You can still book it — do you want to work this slot?`
-                                : `${selectedTime} on ${selectedDate ? format(selectedDate, "EEEE, MMMM d") : ""} is outside ${selectedBarberName}'s scheduled hours. You can still book it, but make sure they've agreed to work this slot.`}
-                        </p>
+                        <h2>{heading}</h2>
+                        <p>{body}</p>
                         <div className="user-form-modal-actions">
                             <button className="user-form-btn-cancel" onClick={() => setShowScheduleWarn(false)}>Go back</button>
                             <button className="user-form-btn-confirm" onClick={confirmScheduleWarn}>
-                                {isBookingSelf ? "Book anyway" : "Book outside hours"}
+                                {confirmLabel}
                             </button>
                         </div>
                     </div>
                 </div>
-            )}
+                );
+            })()}
         </div>
     );
 }

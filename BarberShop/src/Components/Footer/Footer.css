@@ -19,6 +19,7 @@ footer {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-shrink: 0;
 }
 
 .main-logo-box {
@@ -45,12 +46,30 @@ footer {
     color: #1a1a1a;
 }
 
-/* HOURS */
+/* HOURS
+   The text is generated from the shop's actual opening hours now, so it is no longer a fixed short
+   string - a shop with three different sets of hours plus a closed day runs to about four times the
+   length of the one this replaced. Laid out as a wrapping row of whole segments so it degrades by
+   dropping a complete range onto the next line, never by splitting one down the middle. */
 .main-footer-hours {
     font-size: 14px;
     color: #aaa;
     text-align: center;
     margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 2px;
+    min-width: 0;
+}
+
+.main-footer-hours-part {
+    white-space: nowrap;
+}
+
+.main-footer-hours-sep {
+    margin: 0 0.45em;
+    opacity: 0.6;
 }
 
 /* CONTACT */
@@ -58,6 +77,9 @@ footer {
     display: flex;
     gap: 16px;
     color: #aaa;
+    /* Never squeezed by the hours beside it - a phone number broken across two lines isn't a phone
+       number any more, and these two items are the shortest things in the footer. */
+    flex-shrink: 0;
 }
 
     .main-footer-contact a {
@@ -65,6 +87,7 @@ footer {
         color: #aaa;
         text-decoration: none;
         transition: color 0.2s ease;
+        white-space: nowrap;
     }
 
         .main-footer-contact a:hover {

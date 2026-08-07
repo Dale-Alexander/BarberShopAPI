@@ -64,7 +64,13 @@ namespace BarberShopAPI.Controllers
                         && (
                             (c.EndDate == null && (
                                 (c.IsFullDay && c.StartDate >= todayDate) ||
-                                (!c.IsFullDay && c.StartDate >= todayDate && c.EndTime > currentTime)
+                                /* "Already over" is only a question about TODAY. Comparing a future
+                                 * closure's end time against the current time of day dropped it from the
+                                 * payload for the rest of the day - so from 14:01 onwards, a 13:00-14:00
+                                 * closure next Thursday was invisible to the picker and customers were
+                                 * offered slots inside it, only to be refused on submit. */
+                                (!c.IsFullDay && (c.StartDate > todayDate
+                                    || (c.StartDate == todayDate && c.EndTime > currentTime)))
                             )) ||
                             (c.EndDate != null && c.EndDate >= todayDate) // range: still ongoing or future
                         ))
@@ -83,7 +89,9 @@ namespace BarberShopAPI.Controllers
                     c.IsActive == true && (
                         (c.EndDate == null && (
                             (c.IsFullDay && c.StartDate >= todayDate) ||
-                            (!c.IsFullDay && c.StartDate >= todayDate && c.EndTime > currentTime)
+                            // Same "already over is only about today" fix as the barber closures above.
+                            (!c.IsFullDay && (c.StartDate > todayDate
+                                || (c.StartDate == todayDate && c.EndTime > currentTime)))
                         )) ||
                         (c.EndDate != null && c.EndDate >= todayDate) // range: still ongoing or future
                     ))
@@ -130,18 +138,37 @@ namespace BarberShopAPI.Controllers
 
                 // Expose the buffer, grace-after-close and lead-time/horizon so the customer slot picker
                 // greys out / disables the same slots the backend will reject (see ShopSettings).
+                // slotStepMin comes too: it decides which start times the picker even offers.
                 var settings = await _context.ShopSettings
-                    .Select(s => new { s.BufferMin, s.GraceMinutesAfterClose, s.MinAdvanceBookingMinutes, s.MaxAdvanceBookingDays })
+                    .Select(s => new { s.BufferMin, s.GraceMinutesAfterClose, s.MinAdvanceBookingMinutes, s.MaxAdvanceBookingDays, s.SlotStepMin })
                     .FirstAsync();
+
+                /* Shop hours ride on this endpoint rather than only on /api/Settings because the STAFF grid
+                 * is drawn from them, and this is the request the picker already makes. Sent to customers
+                 * as well even though their grid comes from the barber's shifts - the payload is small, and
+                 * splitting it by role would mean two shapes to keep in step for no gain. Nothing secret:
+                 * opening hours are the most public fact about a shop. */
+                var shopHours = await _context.ShopHours
+                    .OrderBy(h => h.DayOfWeek)
+                    .Select(h => new
+                    {
+                        dayOfWeek = (int)h.DayOfWeek,
+                        openTime = h.OpenTime,
+                        closeTime = h.CloseTime,
+                        isClosed = h.IsClosed
+                    })
+                    .ToListAsync();
 
                 return Ok(new
                 {
                     barbers,
                     shopClosures,
+                    shopHours,
                     bufferMin = settings.BufferMin,
                     graceMinutesAfterClose = settings.GraceMinutesAfterClose,
                     minAdvanceBookingMinutes = settings.MinAdvanceBookingMinutes,
-                    maxAdvanceBookingDays = settings.MaxAdvanceBookingDays
+                    maxAdvanceBookingDays = settings.MaxAdvanceBookingDays,
+                    slotStepMin = settings.SlotStepMin
                 });
             }
             catch(Exception ex)
@@ -178,8 +205,10 @@ namespace BarberShopAPI.Controllers
         }
         // The default schedule handed to a brand-new barber (and to a revived one with no schedule to
         // reuse). Moved to Common/DefaultSchedule.cs now that the admin seed needs the same hours - see
-        // that file for why it isn't copy-pasted into both.
-        private static BarberSchedule BuildDefaultSchedule() => DefaultSchedule.Build();
+        // that file for why it isn't copy-pasted into both. Built from the shop's opening hours so the
+        // new barber satisfies the shifts-within-shop-hours rule the schedule editor will hold them to.
+        private async Task<BarberSchedule> BuildDefaultSchedule() =>
+            DefaultSchedule.Build(await _context.ShopHours.ToListAsync());
 
         private bool IsUniqueConstraintViolation(DbUpdateException ex)
         /* important that this is private otherwise Swagger might think that it is an endpoint and it doesnt see
@@ -290,7 +319,7 @@ namespace BarberShopAPI.Controllers
                             .AnyAsync(s => s.BarberId == existingUser.Barber.Id && s.EffectiveTo == null);
                         if (!hasCurrentSchedule)
                         {
-                            var seed = BuildDefaultSchedule();
+                            var seed = await BuildDefaultSchedule();
                             seed.BarberId = existingUser.Barber.Id;
                             _context.BarberSchedules.Add(seed);
                         }
@@ -417,7 +446,7 @@ namespace BarberShopAPI.Controllers
                     // Seed the default schedule via the schedule's own Barber nav (Barber has no inverse
                     // collection). EF resolves BarberId from the same SaveChanges, so the barber is
                     // bookable immediately - the admin is routed to the schedule editor to refine it.
-                    var schedule = BuildDefaultSchedule();
+                    var schedule = await BuildDefaultSchedule();
                     schedule.Barber = barber;
                     _context.BarberSchedules.Add(schedule);
 

@@ -623,3 +623,19 @@
     background: #f59e0b;
     color: #0d1b2e;
 }
+
+/* Date, time and the override badge as one stacked value column, so the badge is under the time at
+   every width. Left-aligned in the normal table; the mobile card layout right-aligns its values, so the
+   column follows it there (see the max-width: 530px block). */
+.datetime-value {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+}
+
+@media (max-width: 530px) {
+    .datetime-value {
+        align-items: flex-end;
+    }
+}

@@ -37,6 +37,11 @@ namespace BarberShopAPI.Tests
             using var db = NewDb();
             var admin = db.AddUser(Role.ADMIN);
             var barber = db.AddBarber();
+            /* The shop is open 08:00-20:00 here so these tests can widen a barber's day as well as narrow
+             * it. Shifts may not run past closing time, so against the default 09:00-17:30 the widening
+             * cases below would be refused for breaking THAT rule and never reach the orphaning logic they
+             * exist to test. Nothing here is about the shop's hours - this just gets them out of the way. */
+            db.SetAllShopHours(new TimeOnly(8, 0), new TimeOnly(20, 0));
             // Current, open-ended hours: every day 09:00-17:30.
             var schedule = db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30));
             var booking = db.AddBooking(barber.Id, TestData.FutureAt(daysAhead, bookingHour), status);

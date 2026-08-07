@@ -52,6 +52,30 @@ namespace BarberShopAPI.Controllers
             }
         }
 
+        /* Req 2 from the schedule side: shop hours are the ceiling, so no shift may open before the shop
+         * does, run past when it closes, or exist at all on a day the shop is shut.
+         *
+         * Separate from ValidateShifts because that one is pure and this needs the hours from the database.
+         * Kept as its own step rather than folded in so the message can name the offending shift - "shifts
+         * must be within shop hours" leaves the admin hunting through seven days for which one is wrong.
+         *
+         * The same ShopHoursResolver.ShiftViolation answers this from the other direction when the HOURS
+         * are edited (SettingsController), so the two can't drift into disagreeing about what fits. */
+        private async Task ValidateShiftsWithinShopHours(List<ScheduleShiftViewModel> shifts)
+        {
+            if (shifts.Count == 0) return;
+            var hours = await _context.ShopHours.ToListAsync();
+            foreach (var s in shifts)
+            {
+                var day = (DayOfWeek)s.DayOfWeek;
+                var reason = ShopHoursResolver.ShiftViolation(
+                    ShopHoursResolver.ForDay(hours, day), s.StartTime, s.EndTime);
+                if (reason != null)
+                    throw new ValidationException(
+                        $"{day} {s.StartTime:HH\\:mm}-{s.EndTime:HH\\:mm} doesn't fit the shop's opening hours: {reason}.");
+            }
+        }
+
         private static List<BarberScheduleShift> ToShifts(List<ScheduleShiftViewModel> shifts) =>
             shifts.Select(s => new BarberScheduleShift
             {
@@ -97,9 +121,20 @@ namespace BarberShopAPI.Controllers
         {
             var grace = await _context.ShopSettings.Select(s => s.GraceMinutesAfterClose).FirstAsync();
             var now = ShopClock.Now;
+            /* Bookings staff deliberately placed outside this barber's shifts are not candidates. Without
+             * that filter every such booking was reported as stranded by EVERY schedule edit covering its
+             * date - the test below only asks whether it sits outside the PROPOSED hours, and a deliberate
+             * one never sat inside any hours to begin with. The admin cleared the flag, the next edit put
+             * it straight back, and it could never resolve itself: FindBackInsideHoursAsync only rescues
+             * bookings that land back INSIDE the new hours, which this kind never does.
+             *
+             * Only the barber-schedule flag excuses a booking here. OutsideShopHours is a different
+             * decision about a different boundary, and a booking overridden only for the shop's hours has
+             * no agreement behind it to work outside this barber's shifts. */
             var candidates = await _context.Bookings
                 .Include(b => b.User)
-                .Where(b => b.BarberId == barberId && b.Status == status && b.StartDateTime > now)
+                .Where(b => b.BarberId == barberId && b.Status == status && b.StartDateTime > now
+                            && !b.OutsideBarberSchedule)
                 .ToListAsync();
 
             // Resolve each booking against the PROPOSED hours (an in-memory version standing in for the one
@@ -267,6 +302,7 @@ namespace BarberShopAPI.Controllers
             try
             {
                 ValidateShifts(model.Shifts);
+                await ValidateShiftsWithinShopHours(model.Shifts);
 
                 var version = await _context.BarberSchedules
                     .Include(s => s.Shifts)
@@ -323,6 +359,7 @@ namespace BarberShopAPI.Controllers
             try
             {
                 ValidateShifts(model.Shifts);
+                await ValidateShiftsWithinShopHours(model.Shifts);
 
                 if (!await _context.Barbers.AnyAsync(b => b.Id == barberId))
                     return NotFound(new { message = "Barber not found" });

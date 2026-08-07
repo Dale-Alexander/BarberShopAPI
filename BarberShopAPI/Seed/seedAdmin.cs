@@ -190,14 +190,14 @@ namespace BarberShopAPI.Seed
 
             // A barber with no schedule is invisible to the picker and unbookable, and DeleteVersion
             // refuses to leave anyone with zero versions - so the row is never created without one.
-            var schedule = DefaultSchedule.Build();
+            var schedule = DefaultSchedule.Build(context.ShopHours.ToList());
             schedule.BarberId = barber.Id;
             context.BarberSchedules.Add(schedule);
             context.SaveChanges();
 
             Console.WriteLine(
                 $"Admin is now a bookable barber as \"{firstName} {lastName}\" (barber id {barber.Id}), "
-                + "with default hours of 09:00-17:30 every day. Adjust them in the Schedules page.");
+                + "with default hours matching the shop's opening hours. Adjust them in the Schedules page.");
         }
     }
 }

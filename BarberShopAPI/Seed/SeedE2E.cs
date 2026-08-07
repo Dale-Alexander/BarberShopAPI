@@ -129,6 +129,20 @@ namespace BarberShopAPI.Seed
             context.Services.RemoveRange(context.Services);
             context.Users.RemoveRange(context.Users);
             context.SaveChanges();
+
+            /* Restored rather than deleted, for the same reason ShopSettings is left alone - the rows come
+             * from HasData with fixed ids and re-inserting them would collide. Reset at all because these
+             * hours now gate everything downstream: they cap barber shifts and draw the staff slot grid, so
+             * a run that leaves them narrowed would make the NEXT run fail in the schedule editor and the
+             * picker, nowhere near the spec that changed them. The barbers seeded below take their hours
+             * from these, so the two can't disagree. */
+            foreach (var row in context.ShopHours)
+            {
+                row.OpenTime = new TimeOnly(9, 0);
+                row.CloseTime = new TimeOnly(17, 30);
+                row.IsClosed = false;
+            }
+            context.SaveChanges();
         }
 
         private static void AddBarber(BarberShopContext context, string fullName, string email, string password)
@@ -159,8 +173,9 @@ namespace BarberShopAPI.Seed
             context.SaveChanges();
 
             // Without a schedule version a barber is invisible to the picker and unbookable, so the row is
-            // never created without one. Default is 09:00-17:30 every day, same as a real seeded barber.
-            var schedule = DefaultSchedule.Build();
+            // never created without one. Hours come from the shop's own, same as a real seeded barber -
+            // which also keeps the seeded shifts inside the shifts-within-shop-hours rule.
+            var schedule = DefaultSchedule.Build(context.ShopHours.ToList());
             schedule.BarberId = barber.Id;
             schedule.EffectiveFrom = ShopClock.Today.AddYears(-1);
             context.BarberSchedules.Add(schedule);

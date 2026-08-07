@@ -99,18 +99,15 @@ namespace BarberShopAPI.Controllers
              * Outside those hours needs an explicit ConfirmOutsideHours - the shop staying open late for a
              * regular is real, but it has to be a decision someone made rather than something a request
              * drifted into. Having this apply on a reschedule but not on a create would have meant a slot
-             * you could book from scratch but couldn't move a booking into. */
-            var scheduleVersions = await _context.BarberSchedules
-                .Include(s => s.Shifts)
-                .Where(s => s.BarberId == model.BarberId
-                            && s.EffectiveFrom <= appointmentDate
-                            && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
-                .ToListAsync();
-            if (!ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, staffSettings.GraceMinutesAfterClose))
-            {
-                var refusal = OutsideHoursRefusal(model.ConfirmOutsideHours, barber.FullName);
-                if (refusal != null) return refusal;
-            }
+             * you could book from scratch but couldn't move a booking into.
+             *
+             * The same confirmation covers the shop's own opening hours, which staff may also step outside
+             * (Req 4). Whichever of the two actually failed is recorded on the booking below, so a later
+             * schedule edit can tell this apart from a booking the hours moved out from under. */
+            var hoursOverride = await EvaluateHoursAsync(
+                model.BarberId, appointmentDate, appointmentTime, endTime, staffSettings.GraceMinutesAfterClose);
+            var refusal = OutsideHoursRefusal(model.ConfirmOutsideHours, barber.FullName, hoursOverride);
+            if (refusal != null) return refusal;
 
             var closureDate = await _context.ShopClosures.FirstOrDefaultAsync(s =>
             s.IsActive == true && (s.BarberId == null || s.BarberId == model.BarberId) && ((s.EndDate == null && s.StartDate == appointmentDate) ||
@@ -174,7 +171,13 @@ namespace BarberShopAPI.Controllers
                     UserId = user.Id,
                     // Required (NOT NULL + unique) even though admin bookings aren't reached via a guest
                     // slug URL - without it this insert would violate the PublicId constraint.
-                    PublicId = Guid.NewGuid().ToString("N")
+                    PublicId = Guid.NewGuid().ToString("N"),
+                    /* What was overridden to place this, so a later schedule or hours change can tell a
+                     * deliberate booking from one it stranded. Both false for an ordinary slot, in which
+                     * case nobody overrode anything and OverriddenByUserId stays null. */
+                    OutsideShopHours = hoursOverride.OutsideShopHours,
+                    OutsideBarberSchedule = hoursOverride.OutsideBarberSchedule,
+                    OverriddenByUserId = hoursOverride.Any ? CallerUserId() : null
                 };
                 _context.Bookings.Add(booking);
                 await _context.SaveChangesAsync();
@@ -248,17 +251,27 @@ namespace BarberShopAPI.Controllers
             var appointmentTime = TimeOnly.FromDateTime(model.StartDateTime);
             var endTime = TimeOnly.FromDateTime(endDateTime);
 
-            // Customer-facing path: the whole appointment must fall within the barber's scheduled
-            // working hours for that date (up to GraceMinutesAfterClose past the day's last shift).
-            // Load only the version(s) that could govern this date; fails closed if none exists.
-            var scheduleVersions = await _context.BarberSchedules
-                .Include(s => s.Shifts)
-                .Where(s => s.BarberId == model.BarberId
-                            && s.EffectiveFrom <= appointmentDate
-                            && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
-                .ToListAsync();
-            if (!ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, settings.GraceMinutesAfterClose))
-                return BadRequest(new { message = "Outside the barber's working hours" });
+            /* Customer-facing path: the whole appointment must fall within the barber's scheduled working
+             * hours for that date AND within the shop's own opening hours (up to GraceMinutesAfterClose
+             * past either close). Fails closed if no schedule version or no hours row governs the date.
+             *
+             * The shop-hours half is belt-and-braces rather than a second gate the customer can trip on
+             * its own: Req 2 keeps every shift inside opening hours, so a slot inside a shift is already
+             * inside them. It earns its place for the cases that invariant can't reach - schedules that
+             * predate it, and a barber whose shifts were valid when set. There is no override here: a
+             * customer can never agree to either, so both are a flat refusal.
+             *
+             * Unlike the staff path, the two are NOT reported separately. To a customer "the shop is shut
+             * then" and "your barber isn't in then" are the same answer - pick another time - and naming
+             * which would only invite them to argue with it. */
+            var customerFit = await EvaluateHoursAsync(
+                model.BarberId, appointmentDate, appointmentTime, endTime, settings.GraceMinutesAfterClose);
+            if (customerFit.Any)
+                /* Names neither boundary. It used to say "outside the barber's working hours", which was
+                 * exact while that was the only check; now the shop's own hours can fail it too and that
+                 * wording would blame the barber for the shop being shut. Customers get one answer to both
+                 * - pick another time - so the message says that instead of guessing which to name. */
+                return BadRequest(new { message = "That time isn't available - please choose another" });
             var closureDate = await _context.ShopClosures.FirstOrDefaultAsync(s =>
             s.IsActive == true && (s.BarberId == null || s.BarberId == model.BarberId) && ((s.EndDate == null && s.StartDate == appointmentDate)||
             (s.EndDate != null && s.StartDate <= appointmentDate && s.EndDate >= appointmentDate)) && (s.IsFullDay || (s.StartTime <
@@ -439,16 +452,20 @@ namespace BarberShopAPI.Controllers
                 // Closures and schedule answer the same "is this slot still open?" question, so we re-check
                 // both here and cancel the booking the same way.
                 var graceMin = await _context.ShopSettings.Select(s => s.GraceMinutesAfterClose).FirstAsync();
-                var scheduleVersions = await _context.BarberSchedules
-                    .Include(s => s.Shifts)
-                    .Where(s => s.BarberId == booking.BarberId
-                                && s.EffectiveFrom <= appointmentDate
-                                && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
-                    .ToListAsync();
-                // Cancelling rather than grandfathering is the deliberate choice documented at the webhook's
-                // schedule-change guard - the two confirmation points must keep telling the same story.
-                if (!ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, graceMin))
+                var stillFits = await EvaluateHoursAsync(
+                    booking.BarberId, appointmentDate, appointmentTime, endTime, graceMin);
+                /* Cancelling rather than grandfathering is the deliberate choice documented at the webhook's
+                 * schedule-change guard - the two confirmation points must keep telling the same story.
+                 *
+                 * Except where the booking was PUT outside those hours on purpose. Then sitting outside them
+                 * is its normal state, not evidence anything changed, and cancelling would destroy the
+                 * arrangement at the moment the customer turned up to pay for it. A pending booking is
+                 * normally a customer's, who can't override anything - this matters for a staff booking
+                 * still awaiting cash. */
+                if (stillFits.OutsideBarberSchedule && !booking.OutsideBarberSchedule)
                     return await CancelAndReject(CancellationReason.ScheduleChange, "This slot now falls outside the barber's working hours and can no longer be confirmed");
+                if (stillFits.OutsideShopHours && !booking.OutsideShopHours)
+                    return await CancelAndReject(CancellationReason.ScheduleChange, "This slot now falls outside the shop's opening hours and can no longer be confirmed");
                 var existingPayment = await _context.Payments.FirstOrDefaultAsync(p => p.BookingId == booking.Id);
                 if (existingPayment != null) return BadRequest(new { message = "A payment already exists for this booking" });
 
@@ -808,34 +825,78 @@ namespace BarberShopAPI.Controllers
             return (from, to);
         }
 
-        /* Shared by the two staff booking paths for a slot that falls outside the target barber's working
-         * hours. Returns the response to send back, or null when the caller may proceed.
+        /* The two independent boundaries a staff booking can be placed outside of. Independent because
+         * they genuinely are: booking a barber outside their shift while the shop is open is an everyday
+         * favour, and it says nothing about whether anyone agreed to operate outside opening hours. Kept
+         * together in one value so a call site can't evaluate one and forget the other. */
+        private readonly record struct HoursOverride(bool OutsideShopHours, bool OutsideBarberSchedule)
+        {
+            public bool Any => OutsideShopHours || OutsideBarberSchedule;
+        }
+
+        /* Both "does this fit?" questions for a slot, asked in one place so the two can't be answered from
+         * different data. Grace applies to BOTH closes: Req 2 makes a shift ending at closing time the
+         * normal case, so applying grace only to the shift would let a booking run past the barber's day
+         * and then fail on the shop's - turning GraceMinutesAfterClose into a setting that breaks the last
+         * slot of every day instead of allowing it. */
+        private async Task<HoursOverride> EvaluateHoursAsync(
+            int barberId, DateOnly date, TimeOnly start, TimeOnly end, int graceMinutes)
+        {
+            var shopHours = await _context.ShopHours.ToListAsync();
+            var scheduleVersions = await _context.BarberSchedules
+                .Include(s => s.Shifts)
+                .Where(s => s.BarberId == barberId
+                            && s.EffectiveFrom <= date
+                            && (s.EffectiveTo == null || s.EffectiveTo >= date))
+                .ToListAsync();
+            return new HoursOverride(
+                !ShopHoursResolver.FitsShopHours(shopHours, date, start, end, graceMinutes),
+                !ScheduleResolver.FitsWithinAShift(scheduleVersions, date, start, end, graceMinutes));
+        }
+
+        // The caller's own user id, for recording who authorised an override. Never taken from the request.
+        private int? CallerUserId() =>
+            int.TryParse(User.FindFirst("id")?.Value, out var id) ? id : null;
+
+        /* Shared by the two staff booking paths for a slot outside the shop's hours, outside the target
+         * barber's hours, or both. Returns the response to send back, or null when the caller may proceed.
          *
          * The only question left is whether someone actually chose this. Without `confirmed` it's a 409
-         * naming the barber, so the UI can ask "outside their hours - are you sure?" and resend. 409 rather
-         * than 400 to match the closure and barber-deactivation flows, which use the same shape for "this
-         * needs a human to agree first". A caller that never asks simply never gets through.
+         * naming what is being overridden, so the UI can ask "are you sure?" and resend. 409 rather than
+         * 400 to match the closure and barber-deactivation flows, which use the same shape for "this needs
+         * a human to agree first". A caller that never asks simply never gets through.
+         *
+         * One confirmation covers both boundaries rather than two round trips: the admin is looking at one
+         * slot and making one decision about it. Which flags that decision sets is worked out here from
+         * what actually failed, not from anything the client sends - a request can ask to proceed, it
+         * can't nominate what it is excused from.
          *
          * There used to be a second check here - that a BARBER may only agree to this for their own chair,
          * not a colleague's. It's gone because it can no longer be reached: a barber creating a booking has
          * model.BarberId pinned to themselves, and a barber updating one is refused outright if they name a
-         * different barber. Both guards run before this. Leaving a dead branch behind would have been worse
-         * than removing it, since its message ("only an admin can book another barber outside their hours")
-         * now understates the real rule - only an admin can put a booking on another barber at all.
+         * different barber. Both guards run before this.
          *
-         * Deliberately does NOT flag the booking for review: it isn't a problem, it's a decision. If the
-         * barber's hours later change, SchedulesController's sweep will surface it again like any other
-         * booking left outside the new hours, which is the right moment to re-ask. */
-        private IActionResult? OutsideHoursRefusal(bool confirmed, string? barberName)
+         * Deliberately does NOT flag the booking for review: it isn't a problem, it's a decision - and
+         * Booking.OutsideBarberSchedule now keeps it from being mistaken for one later. */
+        private IActionResult? OutsideHoursRefusal(bool confirmed, string? barberName, HoursOverride flags)
         {
-            if (confirmed) return null;
+            if (!flags.Any || confirmed) return null;
 
             var who = string.IsNullOrWhiteSpace(barberName) ? "this barber" : barberName;
+            var message = flags switch
+            {
+                { OutsideShopHours: true, OutsideBarberSchedule: true } =>
+                    $"This slot is outside the shop's opening hours and outside {who}'s working hours.",
+                { OutsideShopHours: true } =>
+                    "This slot is outside the shop's opening hours.",
+                _ => $"This slot is outside {who}'s working hours."
+            };
             return Conflict(new
             {
                 requiresConfirmation = true,
-                outsideWorkingHours = true,
-                message = $"This slot is outside {who}'s working hours."
+                outsideWorkingHours = flags.OutsideBarberSchedule,
+                outsideShopHours = flags.OutsideShopHours,
+                message
             });
         }
 
@@ -906,6 +967,11 @@ namespace BarberShopAPI.Controllers
                     Amount = b.Payment.Amount,
                     PaymentMethod = b.Payment.Method.ToString(),
                     PaymentStatus = b.Payment.Status.ToString(),
+                    /* The barber's own table gets these too, and arguably needs them more than the admin's:
+                     * this is the barber seeing that someone booked them outside their shift, on the screen
+                     * where they check tomorrow's work. */
+                    b.OutsideShopHours,
+                    b.OutsideBarberSchedule,
                     Services = b.Services.Select(bs => new
                     {
                         ServiceName = bs.Service.Name
@@ -1014,7 +1080,9 @@ namespace BarberShopAPI.Controllers
                         BarberName = b.Barber.User.Name,
                         Phone = b.User.Phone,
                         NeedsReview = b.NeedsReview,
-                        ReviewReason = b.ReviewReason
+                        ReviewReason = b.ReviewReason,
+                        OutsideShopHours = b.OutsideShopHours,
+                        OutsideBarberSchedule = b.OutsideBarberSchedule
                     }).ToListAsync();
                 /* The reason you dont do .Include() for Payment and User is because you are selecting(.Select()).
                  * When you use .Select() EF Core is smart enough to figure out exactly what data it
@@ -1397,20 +1465,28 @@ Console.WriteLine(booking.User.Name); // would be null without Include()*/
                  * rescheduled into another out-of-hours slot and look dealt with while still being exactly
                  * the problem it was flagged for. It matters twice over on a reassignment, where `barberId`
                  * is the NEW barber - a 7pm booking must not survive being moved to someone who finishes
-                 * at 5. Fails closed: a barber with no schedule version covering the date is unbookable. */
-                var scheduleVersions = await _context.BarberSchedules
-                    .Include(s => s.Shifts)
-                    .Where(s => s.BarberId == barberId
-                                && s.EffectiveFrom <= appointmentDate
-                                && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
-                    .ToListAsync();
-                if (!ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, settings.GraceMinutesAfterClose))
+                 * at 5. Fails closed: a barber with no schedule version covering the date is unbookable.
+                 * The shop's own opening hours are checked alongside, on the same confirmation. */
+                var hoursOverride = await EvaluateHoursAsync(
+                    barberId, appointmentDate, appointmentTime, endTime, settings.GraceMinutesAfterClose);
+                if (hoursOverride.Any)
                 {
                     var barberName = await _context.Barbers.Where(b => b.Id == barberId)
                         .Select(b => b.User.Name + " " + b.User.Surname).FirstOrDefaultAsync();
-                    var refusal = OutsideHoursRefusal(request.ConfirmOutsideHours, barberName);
+                    var refusal = OutsideHoursRefusal(request.ConfirmOutsideHours, barberName, hoursOverride);
                     if (refusal != null) return refusal;
                 }
+
+                /* RECOMPUTED from where the booking is landing, never carried over from where it was.
+                 * Moving a deliberate 18:30 booking back to 10:00 has to clear its overrides, or it stays
+                 * excused from every future conflict sweep for the rest of its life while sitting in an
+                 * ordinary slot - the exact false-negative these flags exist to prevent, just inverted.
+                 * Assigned after the refusal above so a 409 leaves the booking untouched.
+                 * OverriddenBy follows the same rule: it names whoever last chose to override, and is
+                 * cleared with the flags when nothing is being overridden any more. */
+                booking.OutsideShopHours = hoursOverride.OutsideShopHours;
+                booking.OutsideBarberSchedule = hoursOverride.OutsideBarberSchedule;
+                booking.OverriddenByUserId = hoursOverride.Any ? CallerUserId() : null;
 
                 var closureDate = await _context.ShopClosures.FirstOrDefaultAsync(s =>
                 s.IsActive == true && (s.BarberId == null || s.BarberId == barberId) && ((

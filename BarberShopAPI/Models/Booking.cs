@@ -83,6 +83,32 @@ namespace BarberShopAPI.Models
         public bool NeedsReview { get; set; } = false;
         public string? ReviewReason { get; set; }
 
+        /* Staff deliberately placed this booking outside the shop's opening hours / outside the assigned
+         * barber's shifts. Set only on the staff paths (a customer can never reach either), and always
+         * RECOMPUTED on reschedule rather than carried - a booking moved back into normal hours must stop
+         * being exempt, or it is excused from every future check for the rest of its life.
+         *
+         * Two flags, not one, because the two are independent: staff routinely book outside one barber's
+         * shift while staying well inside shop hours, and a single "overridden" bit would then also excuse
+         * that booking from a later SHOP-hours check - where being outside really would be an accident
+         * nobody agreed to.
+         *
+         * They exist to answer the question the conflict sweeps could not: a booking sitting outside the
+         * hours says nothing on its own about whether the hours moved under it or someone put it there on
+         * purpose. Without them, SchedulesController.FindConflictsAsync reported every deliberate booking
+         * as stranded at every schedule edit that touched its date, forever - it can never clear itself,
+         * because FindBackInsideHoursAsync only rescues bookings that land back INSIDE the new hours. */
+        public bool OutsideShopHours { get; set; } = false;
+        public bool OutsideBarberSchedule { get; set; } = false;
+
+        /* Who confirmed that override, taken from the caller's token - never asked for, so it can't be
+         * skipped or mistyped. Null when nothing was overridden. Kept because an override commits SOMEONE
+         * ELSE to work: an admin booking a barber outside their shift is exactly the decision that gets
+         * disputed later, and "make sure they've agreed" is already what the confirmation says. */
+        public int? OverriddenByUserId { get; set; }
+        [ForeignKey("OverriddenByUserId")]
+        public virtual User? OverriddenBy { get; set; }
+
         /* Why this booking was cancelled (None until it is). Drives the customer-facing cancelled screen
          * and the cancellation email wording - e.g. BarberUnavailable when the assigned barber is
          * deactivated, ShopClosure when a closure lands on the slot. See CancellationReason. */

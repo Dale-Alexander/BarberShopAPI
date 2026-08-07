@@ -56,9 +56,13 @@ namespace BarberShopAPI.Tests.Infrastructure
                                                     * Hangfire creates its own schema like Hanfgire.Job, Hangfire.state etc. You dont want respawn deleting hangfire's internal tables*/
                 TablesToIgnore = new Respawn.Graph.Table[]
                 {
-                    // Kept rather than deleted+reseeded: the row is seeded with an explicit Id via HasData,
-                    // so re-inserting it would need IDENTITY_INSERT. ResetAsync restores its columns instead.
-                    "ShopSettings"
+                    // Kept rather than deleted+reseeded: the rows are seeded with explicit Ids via HasData,
+                    // so re-inserting them would need IDENTITY_INSERT. ResetAsync restores their columns
+                    // instead. ShopHours matters more than it looks: wiped, every weekday resolves to "no
+                    // hours", which fails closed - so every booking and schedule test would fail on missing
+                    // shop hours rather than on what it was testing.
+                    "ShopSettings",
+                    "ShopHours"
                 }
             });
         }
@@ -83,8 +87,12 @@ namespace BarberShopAPI.Tests.Infrastructure
                     GraceMinutesAfterClose = 0,
                     MinAdvanceBookingMinutes = 90,
                     MaxAdvanceBookingDays = 60,
-                    RefundCutoffHours = 24
-                WHERE Id = 1;");
+                    RefundCutoffHours = 24,
+                    SlotStepMin = 30
+                WHERE Id = 1;
+
+                UPDATE ShopHours
+                SET OpenTime = '09:00', CloseTime = '17:30', IsClosed = 0;");
 
             Factory.ResetSideEffects();/* Clears queued Hangfire Jobs and fake emails */
         }

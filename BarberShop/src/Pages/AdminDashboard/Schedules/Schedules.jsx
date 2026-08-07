@@ -1,4 +1,4 @@
-import { useState, useEffect, useContext, useCallback } from "react";
+import { useState, useEffect, useContext, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Plus, Trash2, Save, CalendarPlus } from "lucide-react";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
@@ -9,6 +9,7 @@ import LoadingSpinner from "../../../Components/LoadingSpinner/LoadingSpinner";
 import ErrorState from "../../../Components/ErrorState/ErrorState";
 import { getErrorMessage } from "../../../utils/errorMessage.js";
 import { formatPhone } from "../../../utils/phone.js";
+import useTimeFieldFlow from "../../../Hooks/useTimeFieldFlow";
 import "./Schedules.css";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -65,6 +66,25 @@ const Schedules = () => {
     const isBarber = user?.role === "BARBER";
     const { data: barbersData, loading: barbersLoading, error: barbersError } =
         useFetch(isBarber ? null : "/api/Barbers/admin", true);
+    /* Shop hours bound every shift, so the editor shows that bound instead of letting the admin type a
+     * time the save will refuse. /api/Settings is staff-readable, so a barber viewing their own hours
+     * gets it too. Not a substitute for the server check - the backend still names the offending shift,
+     * and a stale page could post anything - just a way to fail before the round trip. */
+    const { data: shopSettings } = useFetch("/api/Settings", true);
+    const shopHours = shopSettings?.shopHours ?? [];
+    const hoursForDay = (dow) => shopHours.find((h) => h.dayOfWeek === dow) ?? null;
+
+    /* Any minute, deliberately - a shift may end at 17:10 even where slots are offered every 15.
+     *
+     * The two are different things. A shift says when the barber is HERE; the slot step says which start
+     * times the picker OFFERS. Nothing on the server ties them: ValidateShifts only checks start<end and
+     * no overlap, and the shop-hours rule only checks the outer bound. Tying this input to slotStepMin
+     * made the editor stricter than the thing it edits - a rule the UI invented - and it bit immediately:
+     * a 15-minute step made 17:10 unreachable for no reason anyone could have looked up.
+     *
+     * A trailing part-slot is simply unbookable, which is the shop's business, not the editor's: at a
+     * 15-minute step a 17:10 finish just means nothing starts after 17:00 (or later, with grace). */
+    const shiftStepSeconds = 60;
     const { showToast } = useContext(ToastContext);
     const [searchParams, setSearchParams] = useSearchParams();
 
@@ -172,8 +192,14 @@ const Schedules = () => {
         setSearchParams((prev) => { prev.set("barberId", String(id)); return prev; }, { replace: true });
     };
 
+    /* A new shift starts as the shop's full opening hours for that weekday rather than a hardcoded
+     * 09:00-17:30, which the save would refuse outright on a shop that opens at 10. Falls back to the old
+     * pair only before settings load. */
     const addShift = (dow) => {
-        setDays((prev) => prev.map((r, i) => (i === dow ? [...r, { start: "09:00", end: "17:30" }] : r)));
+        const hours = hoursForDay(dow);
+        const start = hours && !hours.isClosed ? hours.openTime : "09:00";
+        const end = hours && !hours.isClosed ? hours.closeTime : "17:30";
+        setDays((prev) => prev.map((r, i) => (i === dow ? [...r, { start, end }] : r)));
     };
     const removeShift = (dow, idx) => {
         setDays((prev) => prev.map((r, i) => (i === dow ? r.filter((_, j) => j !== idx) : r)));
@@ -181,6 +207,11 @@ const Schedules = () => {
     const setShift = (dow, idx, field, value) => {
         setDays((prev) => prev.map((r, i) => (i === dow ? r.map((s, j) => (j === idx ? { ...s, [field]: value } : s)) : r)));
     };
+
+    // Popup-closing and next-field navigation for the week grid: start -> end -> next day.
+    const weekRef = useRef(null);
+    const { fieldProps: timeFieldProps, onValueChange: onTimeChange } = useTimeFieldFlow(weekRef);
+
 
     // Client mirror of the backend's ValidateShifts, so a bad grid is caught before the request.
     const shiftError = (() => {
@@ -285,7 +316,10 @@ const Schedules = () => {
                     <p className="page-subtitle">
                         {isBarber
                             ? "The hours and shifts you're rostered for. Your manager sets these — ask them if something needs changing."
-                            : "Set each barber's working hours, split shifts and seasonal changes"}
+                            /* Mentions the ceiling, because it is now the commonest way a save is refused
+                               and the rule is invisible until it bites - the fields cap at the shop's
+                               hours and a closed day offers no Add shift at all. */
+                            : "Set each barber's working hours, split shifts and seasonal changes. Shifts must fit inside the shop's opening hours (Settings)."}
                     </p>
                 </div>
             </div>
@@ -334,7 +368,7 @@ const Schedules = () => {
                             </p>
                         )}
 
-                        <div className="sched-week">
+                        <div className="sched-week" ref={weekRef}>
                             {DAYS.map((name, dow) => (
                                 <div className="sched-day" key={dow}>
                                     <div className="sched-day-name">{name}</div>
@@ -342,11 +376,17 @@ const Schedules = () => {
                                         {days[dow].length === 0 && <span className="sched-dayoff">Day off</span>}
                                         {days[dow].map((r, idx) => (
                                             <div className="sched-shift" key={idx}>
-                                                <input type="time" step={1800} value={r.start} disabled={isReadOnly}
-                                                    onChange={(e) => setShift(dow, idx, "start", e.target.value)} />
+                                                {/* min/max come from the shop's hours for THIS weekday - the same bound
+                                                    the save enforces, shown before the admin commits to a time. */}
+                                                <input type="time" step={shiftStepSeconds} value={r.start} disabled={isReadOnly}
+                                                    min={hoursForDay(dow)?.openTime} max={hoursForDay(dow)?.closeTime}
+                                                    {...timeFieldProps}
+                                                    onChange={(e) => { setShift(dow, idx, "start", e.target.value); onTimeChange(e); }} />
                                                 <span>–</span>
-                                                <input type="time" step={1800} value={r.end} disabled={isReadOnly}
-                                                    onChange={(e) => setShift(dow, idx, "end", e.target.value)} />
+                                                <input type="time" step={shiftStepSeconds} value={r.end} disabled={isReadOnly}
+                                                    min={hoursForDay(dow)?.openTime} max={hoursForDay(dow)?.closeTime}
+                                                    {...timeFieldProps}
+                                                    onChange={(e) => { setShift(dow, idx, "end", e.target.value); onTimeChange(e); }} />
                                                 {!isReadOnly && (
                                                     <button className="sched-icon-btn" title="Remove shift" onClick={() => removeShift(dow, idx)}>
                                                         <Trash2 size={15} />
@@ -354,7 +394,12 @@ const Schedules = () => {
                                                 )}
                                             </div>
                                         ))}
-                                        {!isReadOnly && (
+                                        {/* A day the shop never opens can hold no shift, so say so instead of offering
+                                            an "Add shift" that the save is guaranteed to refuse. */}
+                                        {!isReadOnly && hoursForDay(dow)?.isClosed && (
+                                            <span className="sched-dayoff">Shop closed — set opening hours in Settings</span>
+                                        )}
+                                        {!isReadOnly && !hoursForDay(dow)?.isClosed && (
                                             <button className="sched-add-shift" onClick={() => addShift(dow)}>
                                                 <Plus size={14} /> Add shift
                                             </button>

@@ -365,7 +365,14 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                         <section aria-label="Needs review">
                             <button
                                 onClick={toggleNeedsReview}
-                                title="Bookings whose money couldn't be reconciled automatically - check Stripe and reconcile by hand"
+                                /* Was "bookings whose money couldn't be reconciled automatically - check
+                                   Stripe". That was true when a failed refund was the only way in; it is
+                                   now one of five, and the flag is raised from fourteen places across
+                                   closures, schedule changes, barber departures, the cron job and four
+                                   email-failure paths. Sending the admin to Stripe for a booking that is
+                                   still live and only needs a decision wastes the trip. The mark-reviewed
+                                   modal was corrected for exactly this reason; this tooltip was missed. */
+                                title="Bookings that still need a human: an hours change or closure that stranded an appointment, a barber who left, an email that never sent, or a refund that failed"
                                 className={`bookings-admin-table-btn bookings-admin-table-btn-review ${filters.needsReview ? "review-active" : ""}`}
                             >
                                 <span className="bookings-admin-table-btn-icon"><AlertTriangle size={16} /></span>
@@ -461,8 +468,35 @@ const BookingsTable = ({ bookings,setBookings, resetFilters, applyFilters, filte
                                     </span>
                                 </td>
                                 <td className="table-data" data-label="Barber">{b.barberName || <span className="no-actions">&mdash;</span>}</td>
-                                <td className="table-data" data-label="Date & Time">{format(new Date(b.startDateTime), "dd-MM-yyyy")} <br />
-                                    {format(new Date(b.startDateTime), "HH:mm")}
+                                {/* The date, the time and the override note are one stacked block rather than
+                                    loose content in the cell. Below 530px every td becomes a flex row of
+                                    [label | value], and loose text plus a <span> would have laid the badge out
+                                    BESIDE the time instead of under it - the <br> does nothing between flex
+                                    items. Wrapping them keeps one value column that stacks the same way at
+                                    every width. */}
+                                <td className="table-data" data-label="Date & Time">
+                                    <span className="datetime-value">
+                                    <span>{format(new Date(b.startDateTime), "dd-MM-yyyy")}</span>
+                                    <span>{format(new Date(b.startDateTime), "HH:mm")}</span>
+                                    {/* Sits under the time because the time IS what was overridden. Without
+                                        it a 19:00 row in a shop that shuts at 17:30 reads as a mistake
+                                        someone should chase, and the only way to learn it was agreed was to
+                                        ask whoever made it. "Approved" is the whole point - it says settled,
+                                        not outstanding, which is exactly what separates it from the
+                                        needs-review marker two cells to the left. */}
+                                    {(b.outsideShopHours || b.outsideBarberSchedule) && (
+                                        <span
+                                            className="override-badge"
+                                            title={b.outsideShopHours && b.outsideBarberSchedule
+                                                ? "Booked outside the shop's opening hours and the barber's working hours - approved by staff"
+                                                : b.outsideShopHours
+                                                    ? "Booked outside the shop's opening hours - approved by staff"
+                                                    : "Booked outside the barber's working hours - approved by staff"}
+                                        >
+                                            {b.outsideShopHours ? "Outside shop hours" : "Outside working hours"} (Approved)
+                                        </span>
+                                    )}
+                                    </span>
                                 </td>
                                 {/* Was the bare number - no currency and no decimals, so a €25.50 booking
                                     read "25.5" in a column headed "Amount". Dash when nothing is on file

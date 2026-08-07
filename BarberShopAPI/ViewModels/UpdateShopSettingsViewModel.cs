@@ -28,5 +28,12 @@ namespace BarberShopAPI.ViewModels
         // Hours before the appointment within which a cancellation forfeits the refund. 0 = always refund; capped at a week.
         [Range(0, 168, ErrorMessage = "Refund cutoff must be between 0 and 168 hours")]
         public int RefundCutoffHours { get; set; }
+
+        /* Spacing of the slot times the picker offers. An allowed SET rather than a [Range]: the value has
+         * to divide 60 or the grid walks off the hour (a 25-minute step gives 09:00, 09:25, 09:50, 10:15),
+         * and that isn't a bound any range can express. Enforced here and not only in the dropdown, since
+         * the dropdown isn't what the endpoint trusts. */
+        [AllowedValues(5, 10, 15, 20, 30, ErrorMessage = "Slot step must be 5, 10, 15, 20 or 30 minutes")]
+        public int SlotStepMin { get; set; }
     }
 }

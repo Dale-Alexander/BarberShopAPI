@@ -85,6 +85,10 @@ namespace BarberShopAPI.Tests
             using (var db = NewDb())
             {
                 var barber = db.AddBarber();
+                // Open late enough for the "put the hours straight back" step below to reach 18:00 - a
+                // shift may not run past closing, so the default 17:30 close would refuse that edit and
+                // leave the booking genuinely stranded, which is the opposite of what this sets up.
+                db.SetAllShopHours(new TimeOnly(8, 0), new TimeOnly(20, 0));
                 scheduleId = db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30)).Id;
                 bookingId = db.AddBooking(barber.Id, TestData.FutureAt(14, 16), BookingStatus.COMPLETED).Id;
             }

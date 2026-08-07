@@ -215,8 +215,9 @@ stored i the browser's memory which the backend cant access*/
         }
         else {
             setBarbers([...(barbers ?? []), row]);
-            // A new barber is seeded with a default 09:00-17:30 schedule (see CreateBarber). Route the admin
-            // straight into the schedule editor to confirm/adjust it, so the default is never silently wrong.
+            // A new barber is seeded with the shop's own opening hours as their schedule (see CreateBarber
+            // and Common/DefaultSchedule) - full days, minus any day the shop is closed. Route the admin
+            // straight into the schedule editor to narrow it, so the default is never silently wrong.
             closeCreate();
             showToast("Barber added", "Set their working hours to finish setting them up.", "success");
             navigate(`/admin/schedules?barberId=${row.id}`);

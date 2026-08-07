@@ -380,6 +380,22 @@ const BarberBookings = () => {
                                         <td className="barber-bookings-table-data" data-label="Date & Time">
                                             <div className="datetime-cell">
                                                 {format(new Date(b.startDateTime), "dd-MM-yyyy HH:mm")}
+                                                {/* The barber arguably needs this more than the admin does:
+                                                    this is the screen where they check tomorrow's work, and
+                                                    an appointment outside their shift should say so rather
+                                                    than look like a scheduling error. */}
+                                                {(b.outsideShopHours || b.outsideBarberSchedule) && (
+                                                    <span
+                                                        className="override-badge"
+                                                        title={b.outsideShopHours && b.outsideBarberSchedule
+                                                            ? "Booked outside the shop's opening hours and your working hours - approved by staff"
+                                                            : b.outsideShopHours
+                                                                ? "Booked outside the shop's opening hours - approved by staff"
+                                                                : "Booked outside your working hours - approved by staff"}
+                                                    >
+                                                        {b.outsideShopHours ? "Outside shop hours" : "Outside working hours"} (Approved)
+                                                    </span>
+                                                )}
                                                 {/* Cancelled has to win over the date-derived label - a cancelled
                                                     future booking is not "Upcoming", nobody is turning up. */}
                                                 {isCancelled(b) ? (

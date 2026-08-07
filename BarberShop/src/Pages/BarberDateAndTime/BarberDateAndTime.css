@@ -245,6 +245,25 @@
     gap: 1.25rem;
 }
 
+/* The two cards are the same height, and the CALENDAR is what decides it - its height is fixed by the
+   weeks in the month, and it must not move because the slot list happens to be long.
+   That needs the slot card to contribute nothing to the row: a grid row sizes to its tallest item, so a
+   card holding 102 chips would otherwise set the height and stretch the calendar to match. This wrapper
+   is the grid item and stretches to whatever the calendar asks for; the card fills it absolutely, so its
+   contents are laid out inside a height they cannot change. The chips then fit that height by shrinking
+   (see --bp-slot-min) and, at the finest steps, by scrolling. */
+.bp-time-card-slot {
+    position: relative;
+}
+
+    .bp-time-card-slot > .bp-time-card {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+
 /* Calendar */
 .bp-calendar-card {
     background: #ffffff; /*#fff;*/
@@ -439,14 +458,61 @@
     margin-bottom: 1rem;
 }
 
+/* Auto-fitting rather than a fixed column count, because the number of chips is no longer fixed: the
+   slot step is a setting (ShopSettings.SlotStepMin), so a 09:00-17:30 day is 17 chips at 30 minutes and
+   102 at 5. A hardcoded repeat(3) squeezed those into three tall columns, and simply raising the count
+   would have made "08:00" wrap at narrow widths instead. minmax lets the row hold as many as fit and no
+   more, at every step and every breakpoint - which is also why the three breakpoint overrides that used
+   to re-specify this are gone.
+
+   The COLUMN COUNT is set inline from a measurement of this element (see BarberDateAndTime.jsx) - the
+   rule below is only the fallback for the first paint. It used to be a per-step pixel width, which was
+   guesswork: the right layout depends on the card's real size against the number of slots, and the step
+   alone can't tell a shop open 08:00-20:00 from one open 09:00-13:00.
+
+   grid-auto-rows: minmax(..., 1fr) spends whatever height is left over on the rows themselves, so the
+   last row ends at the bottom of the card rather than halfway up it. The minmax floor stops the finest
+   steps from squeezing rows into slivers - past that they scroll, which at 100+ chips is the only honest
+   option. */
 .bp-time-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+    grid-auto-rows: minmax(2rem, 1fr);
     gap: 0.5rem;
+    flex: 1;
+    min-height: 0;
+    align-content: stretch;
+    overflow-y: auto;
+    /* Reserve the scrollbar's width whether or not it is showing. Without it the bar appears only once
+       the list overflows, taking that width out of the track AFTER the columns were sized - which shaved
+       the right-hand column and clipped its chips. Stable gutter means the column maths sees the same
+       width in both states, which is also what keeps the measurement above from oscillating. */
+    scrollbar-gutter: stable;
+    /* Gap between the last column and the scrollbar. The gutter reserves the bar's own width but puts the
+       content flush against it, so at the finest steps the right-hand chips sat on top of the bar. */
+    padding-right: 0.4rem;
 }
 
+/* Staff-only toggle above the grid. Deliberately quiet - it's an escape hatch for opening specially,
+   not a mode most bookings need. */
+.bp-extended-hours {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-bottom: 0.85rem;
+    font-size: 0.78rem;
+    color: hsl(220, 10%, 45%);
+    cursor: pointer;
+    user-select: none;
+}
+
+    .bp-extended-hours input {
+        cursor: pointer;
+        accent-color: #c98a4c;
+    }
+
 .bp-time-chip {
-    padding: 8px 4px;
+    padding: 9px 4px;
     white-space:nowrap;
     border: 1px solid #ede9e0;
     border-radius: 8px;
@@ -488,6 +554,18 @@
         background: hsla(35, 90%, 50%, 0.06);
     }
 
+    /* The second, wider override: the SHOP is shut at this time, not just this barber off-rota. Only
+       reachable with the extended-hours toggle on, and it takes precedence over .outside-hours when both
+       apply. Deeper red-brown rather than a second amber, because it has to read as more than the amber
+       beside it - taking one commits the shop to opening, not just a barber to a shift. Same dashed
+       border so the pair still read as "allowed, but a decision" against the solid ordinary chip. */
+    .bp-time-chip.outside-shop-hours {
+        border-style: dashed;
+        border-color: #a33a1f;
+        color: #8c2f18;
+        background: hsla(12, 75%, 45%, 0.07);
+    }
+
         .bp-time-chip.outside-hours:hover:not(:disabled) {
             border-color: #a45f08;
             color: #a45f08;
@@ -500,27 +578,64 @@
             border-color: #c9770a;
         }
 
+        .bp-time-chip.outside-shop-hours:hover:not(:disabled) {
+            border-color: #8c2f18;
+            color: #8c2f18;
+        }
+
+        /* The shop-hours twin of the rule above, and it was missing - so a slot picked outside OPENING
+           hours kept its red wash while one picked outside a barber's shift turned black, and the two
+           states disagreed about what "selected" looks like. The dashed border stays in its own colour so
+           the chip still says which boundary it crosses while it is selected. */
+        .bp-time-chip.outside-shop-hours.selected {
+            background: hsl(220, 20%, 14%);
+            color: #fff;
+            border-color: #a33a1f;
+        }
+
 /* Legend under the slot grid, same shape as the calendar's (.bp-cal-legend) so the two read as one
    system. Staff-only, since the states it explains only ever appear for staff. */
+/* A grid rather than a wrapping flex row. With two notes, flex-wrap put them side by side at whatever
+   widths their text happened to be and then dropped the second one to a ragged second line as the card
+   narrowed - the dots never lined up with each other in either state. auto-fit columns give both notes
+   the same width, so their dots sit on the same two x positions when they fit side by side, and stack
+   into one aligned column under the grid when they don't. That is the same rule at every width, so narrow
+   screens need no separate case.
+   padding-right matches the slot grid's scrollbar gutter above, so the two share a right edge. */
 .bp-time-legend {
-    display: flex;
-    gap: 1.25rem;
-    margin-top: 1rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 0.35rem 1rem;
+    margin-top: 0.85rem;
+    padding-right: 0.4rem;
     font-size: 0.75rem;
+    line-height: 1.4;
     color: hsl(220, 10%, 50%);
-    flex-wrap: wrap;
 }
 
     .bp-time-legend span {
         display: flex;
-        align-items: center;
+        /* Top-aligned, not centred: a label that wraps to two lines would otherwise float its dot to the
+           middle of the block instead of beside the first line. */
+        align-items: flex-start;
         gap: 0.35rem;
     }
+
+        /* The dot is a fixed 10px circle; without this it is squeezed into an oval by a long label. */
+        .bp-time-legend .legend-dot {
+            flex: 0 0 auto;
+            margin-top: 0.25em;
+        }
 
     /* Hollow with a dashed amber ring, echoing the chip it stands for rather than being a plain fill. */
     .legend-dot.outside-hours {
         background: hsla(35, 90%, 50%, 0.06);
         border: 2px dashed #c9770a;
+    }
+
+    .legend-dot.outside-shop-hours {
+        background: hsla(12, 75%, 45%, 0.07);
+        border: 2px dashed #a33a1f;
     }
 
 .bp-time-placeholder {
@@ -746,14 +861,20 @@
         grid-template-columns: repeat(2, 1fr);
     }
 
+    /* Stacked, so there is no calendar beside the slot card to take a height from - the wrapper would
+       collapse to nothing and the absolutely-positioned card would vanish. Back to normal flow, sized by
+       its own content, with the grid free to be as tall as it needs. */
+    .bp-time-card-slot > .bp-time-card {
+        position: static;
+    }
+
+    .bp-time-grid {
+        max-height: 22rem;
+    }
+
     /* Date & Time: stack vertically */
     .bp-datetime-grid {
         grid-template-columns: 1fr;
-    }
-
-    /* Time grid: 4 columns on tablet */
-    .bp-time-grid {
-        grid-template-columns: repeat(4, 1fr);
     }
 
     /* Next button full width */
@@ -837,11 +958,6 @@
         flex-wrap: wrap;
     }
 
-    /* Time grid: 3 columns on mobile */
-    .bp-time-grid {
-        grid-template-columns: repeat(3, 1fr);
-    }
-
     .bp-time-chip {
         font-size: 11px;
         padding: 7px 2px;
@@ -866,9 +982,5 @@
         width: 26px;
         height: 26px;
         font-size: 11px;
-    }
-
-    .bp-time-grid {
-        grid-template-columns: repeat(2, 1fr);
     }
 }

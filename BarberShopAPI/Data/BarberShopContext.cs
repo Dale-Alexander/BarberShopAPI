@@ -29,6 +29,7 @@ namespace BarberShopAPI.Data
         public DbSet<Payment> Payments { get; set; }
         public DbSet<ShopClosure> ShopClosures { get; set; }
         public DbSet<ShopSettings> ShopSettings { get; set; }
+        public DbSet<ShopHours> ShopHours { get; set; }
         public DbSet<BarberSchedule> BarberSchedules { get; set; }
         public DbSet<BarberScheduleShift> BarberScheduleShifts { get; set; }
 
@@ -53,6 +54,16 @@ namespace BarberShopAPI.Data
             shopClosure.Property(sc => sc.IsActive).HasDefaultValue(true);
 
             modelBuilder.Entity<Booking>().HasIndex(b => new { b.BarberId, b.StartDateTime }).IsUnique();
+
+            /* Booking already points at User once (the customer). OverriddenBy is a SECOND path to the same
+             * table, so it has to be spelled out: EF would otherwise pair it with Booking.User and, worse,
+             * SQL Server refuses two cascade paths from one table. Restrict, not cascade - deleting the
+             * staff member who authorised an override must never take the customer's booking with it. */
+            modelBuilder.Entity<Booking>()
+                .HasOne(b => b.OverriddenBy)
+                .WithMany()
+                .HasForeignKey(b => b.OverriddenByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
 
             var user = modelBuilder.Entity<User>();
 
@@ -215,7 +226,25 @@ namespace BarberShopAPI.Data
             // until an admin sets it from the dashboard; admin bookings default to 30 min; grace of
             // 0 keeps the strict "must finish by closing" rule.
             modelBuilder.Entity<ShopSettings>().HasData(
-                new ShopSettings { Id = 1, BufferMin = 0, DefaultAdminBookingDurationMin = 30, GraceMinutesAfterClose = 0, MinAdvanceBookingMinutes = 90, MaxAdvanceBookingDays = 60, RefundCutoffHours = 24 });
+                new ShopSettings { Id = 1, BufferMin = 0, DefaultAdminBookingDurationMin = 30, GraceMinutesAfterClose = 0, MinAdvanceBookingMinutes = 90, MaxAdvanceBookingDays = 60, RefundCutoffHours = 24, SlotStepMin = 30 });
+
+            /* All seven days open 09:00-17:30 - the same hours DefaultSchedule gives a new barber and the
+             * same ones the day-one schedule seed used. Deliberately permissive rather than realistic (no
+             * closed Sunday, even though the shop will want one): these hours become a CEILING over every
+             * existing barber shift the moment they exist, so seeding anything narrower than the shifts
+             * already in the database would put every barber in violation on day one and lock the admin out
+             * of the schedule editor until they fixed hours they never set. The migration widens these
+             * further to cover whatever the live data actually holds; narrowing them is the admin's job,
+             * and doing it by hand is what surfaces the barbers who need adjusting first. */
+            for (int d = 0; d < 7; d++)
+                modelBuilder.Entity<ShopHours>().HasData(new ShopHours
+                {
+                    Id = d + 1,
+                    DayOfWeek = (DayOfWeek)d,
+                    OpenTime = new TimeOnly(9, 0),
+                    CloseTime = new TimeOnly(17, 30),
+                    IsClosed = false
+                });
 
             base.OnModelCreating(modelBuilder);
         }

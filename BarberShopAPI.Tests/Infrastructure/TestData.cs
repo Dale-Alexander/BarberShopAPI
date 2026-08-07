@@ -208,5 +208,32 @@ namespace BarberShopAPI.Tests.Infrastructure
             configure(settings);
             db.SaveChanges();
         }
+
+        /// <summary>
+        /// Narrow or close the shop on one weekday. Every day is 09:00-17:30 and open after a reset, which
+        /// is what AddSchedule's default shifts assume - so a test only touches this when the point IS the
+        /// shop's hours.
+        /// </summary>
+        public static void SetShopHours(
+            this BarberShopContext db, DayOfWeek day, TimeOnly? open = null, TimeOnly? close = null, bool? isClosed = null)
+        {
+            var row = db.ShopHours.Single(h => h.DayOfWeek == day);
+            if (open != null) row.OpenTime = open.Value;
+            if (close != null) row.CloseTime = close.Value;
+            if (isClosed != null) row.IsClosed = isClosed.Value;
+            db.SaveChanges();
+        }
+
+        /// <summary>Widen every weekday, for tests that need a slot outside the default 09:00-17:30.</summary>
+        public static void SetAllShopHours(this BarberShopContext db, TimeOnly open, TimeOnly close)
+        {
+            foreach (var row in db.ShopHours)
+            {
+                row.OpenTime = open;
+                row.CloseTime = close;
+                row.IsClosed = false;
+            }
+            db.SaveChanges();
+        }
     }
 }

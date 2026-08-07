@@ -264,7 +264,18 @@ namespace BarberShopAPI.Controllers
                                             && s.EffectiveFrom <= appointmentDate
                                             && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
                                 .ToListAsync();
-                            var outsideSchedule = !ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, graceMin);
+                            var shopHours = await _context.ShopHours.ToListAsync();
+                            /* The booking's own overrides excuse it from the boundary it was deliberately
+                             * placed outside: staff already decided it belongs there, so sitting outside is
+                             * its normal state rather than evidence the hours moved. Kept in step with
+                             * confirm-cash, the other PENDING -> COMPLETED point, which makes the same
+                             * exception - the two must not disagree about whether a slot is still real.
+                             * Shop hours are re-checked here as well as shifts (Req 3): an admin can narrow
+                             * opening hours during the ~15 minutes a booking sits PENDING. */
+                            var outsideSchedule = !booking.OutsideBarberSchedule
+                                && !ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, graceMin);
+                            var outsideShopHours = !booking.OutsideShopHours
+                                && !ShopHoursResolver.FitsShopHours(shopHours, appointmentDate, appointmentTime, endTime, graceMin);
 
                             // The assigned barber can also be deactivated mid-payment, and it's the same
                             // "is this slot still real?" question. Deactivation does cancel the barber's future
@@ -277,7 +288,7 @@ namespace BarberShopAPI.Controllers
                             // check too.)
                             var barberInactive = !await _context.Barbers.AnyAsync(b => b.Id == booking.BarberId && b.isActive);
 
-                            if (barberInactive || closure != null || outsideSchedule)
+                            if (barberInactive || closure != null || outsideSchedule || outsideShopHours)
                             {
                                 // Refund first, outside the DB transaction: cancelling before the money is
                                 // confirmed back would risk the "booking dead but money kept" state. The
@@ -298,7 +309,9 @@ namespace BarberShopAPI.Controllers
                                         ? "The barber was deactivated after payment"
                                         : closure != null
                                             ? "Slot was closed after payment"
-                                            : "Slot fell outside the barber's working hours after payment";
+                                            : outsideSchedule
+                                                ? "Slot fell outside the barber's working hours after payment"
+                                                : "Slot fell outside the shop's opening hours after payment";
                                     booking.FlagForReview(
                                         $"{failedRefundCause} but the automatic refund failed (PaymentIntent {paymentIntent.Id}) - refund it in Stripe by hand.");
                                     await _context.SaveChangesAsync();

@@ -40,5 +40,14 @@ namespace BarberShopAPI.Models
          * has too little time to rebook). Enforced in BookingCanceller and mirrored by the staff booking
          * tables (BookingsTable.jsx / BarberBookings.jsx). Never applies to shop-side or forced refunds. */
         public int RefundCutoffHours { get; set; }
+
+        /* Granularity (minutes) of the slot times the picker OFFERS - 09:00, 09:15, 09:30 at a step of 15.
+         * Presentation only: no booking rule anywhere requires a start to land on this grid, because the
+         * backend validates an arbitrary DateTime against shifts, closures and overlaps rather than against
+         * a slot list. So changing it can never put the picker out of step with what the server accepts.
+         *
+         * Constrained to divisors of 60 (see UpdateShopSettingsViewModel) - a step like 25 walks off the
+         * hour and turns the grid into nonsense by mid-afternoon. */
+        public int SlotStepMin { get; set; }
     }
 }

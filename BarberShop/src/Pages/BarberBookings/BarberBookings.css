@@ -414,3 +414,12 @@
         gap: 8px;
     }
 }
+/* Stacked at every width, not only inside the narrow-screen block further up: the override badge has to
+   sit under the time rather than trailing it on the same line. The narrow rule still switches the
+   alignment to flex-end, it just no longer has to establish the column as well. */
+.barber-bookings-table .datetime-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+}
