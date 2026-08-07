@@ -44,13 +44,16 @@ Check how the booking-needs-review flow works and see if everything works as you
 
 Check if the stats/chart on the dashboard and the booking table with pagination work well with both admin and barber
 
-Time between each slot(not buffer) as a setting
-
-Different shop schedules per day as a setting and each barber can implement their own schedule 
-
 Is description in Services required/should you remove it/or nullable? 
 
 Check the "if you had to start over what would you do" list in the A5 booklet in the very last page and see if you can implement some of them.
+
+There is a reviewReason that says a booking is left pending but the money has been sent because the webhook hasnt even arrived in an hour so the booking is left paid.
+You need to mark it yourself as confirmed. How are you going to do this, create another endpoint that accepts only flagged bookings and making it confirmed, probably,
+what about the payment row.
+
+In production, apparently you have to enable which event types Stripe sends you like charge.refund.updated, payment_intent.succeeded etc. You have to 
+do this on stripe dashboard. 
 
 If you ever need to fire an admin:
 
