@@ -137,7 +137,9 @@ a known floor.
       admin lands back on the table. `needs-review.spec.js`
       **Mutation-tested.** Set `NeedsReview = false` in `UpdateBooking`: the spec went red waiting for
       the Needs Review button that never appeared. Fix restored.
-- [ ] ~~B8. A booking flagged for a *failed refund*~~ — **moved to Not reachable, see below.**
+- [ ] ~~B8. A booking flagged for a *failed refund*~~ — **not being written; see the bottom of the file.**
+      No longer impossible (the app handles the async refund failure now), but what a browser would add
+      over B1–B7 is the rendering of a worklist row they already cover.
 
 ## C. Excluding and re-including a barber's bookings
 
@@ -357,9 +359,12 @@ it. All three are covered in `EmailFailureReviewTests` / `WebhookRefundTests`.
 
 ---
 
-## Not reachable from a browser — do not attempt
+## Not worth driving from a browser — do not attempt
 
-Add to this list rather than fighting a scenario that can't be driven. Each entry should say why.
+Add to this list rather than fighting a scenario. Each entry must say why, and the why matters: most of
+these **cannot** be driven, but an entry can also earn its place by being drivable and not worth the
+spec. Say which, because "impossible" quietly becoming "we decided not to" is how a suite ends up with
+gaps nobody remembers choosing.
 
 - Stripe webhook signature failures — no browser involvement; covered in `WebhookRefundTests`.
 - Email send failures and their retry-exhaustion flags — the flag IS visible (it lands in the
@@ -369,14 +374,25 @@ Add to this list rather than fighting a scenario that can't be driven. Each entr
   `EmailFailureReviewTests`.
 - The 2-hour reminder email — scheduled by Hangfire for two hours before the appointment, so driving it
   means either waiting or reaching into Hangfire's storage. Neither belongs in a browser spec.
-- **B8, "flagged for a failed refund" — still not reachable, for a new reason.** The old note said this
-  needed a card path that could reach localhost. That now exists (section F), so it was retried — and
-  it still can't be driven, because **Stripe test mode has no synchronous refund failure**. The one
-  refund-failure test card, `4000 0000 0000 5126`, fails ASYNCHRONOUSLY: the refund comes back
-  `succeeded` and flips to `failed` later, in a `charge.refund.updated` event. Every failed-refund
-  branch in this codebase reads the immediate response from `StripeRefunds.RefundIdempotentlyAsync`, so
-  none of them ever sees it. Covered from the other side in `WebhookRefundTests` and
-  `RefundFailureReviewTests`.
+- **B8, "flagged for a failed refund" — no longer impossible. Deliberately not written.** This entry has
+  had three different reasons in its life, and only the current one is a judgement rather than a wall.
+  First it needed a card path that could reach localhost; section F built that. Then it was impossible
+  for a real reason: **Stripe test mode has no synchronous refund failure** — the one refund-failure test
+  card, `4000 0000 0000 5126`, fails ASYNCHRONOUSLY, coming back `succeeded` and flipping to `failed`
+  later in a `charge.refund.updated` event — and every failed-refund branch here read the immediate
+  response from `StripeRefunds.RefundIdempotentlyAsync`, so nothing in the app ever saw it. There was no
+  behaviour to assert on.
+  **That is fixed (see below), so the scenario is now producible in principle.** Two things stand between
+  that and a spec:
+  1. `stripe listen` runs with `--events payment_intent.succeeded` (`sink-server.js`), so refund events
+     never reach the API in an e2e run. One line, if it were wanted.
+  2. **Nobody has measured how long test mode takes to flip that refund to `failed`.** Seconds and a spec
+     is writable; minutes and it belongs here for the same reason as email retry exhaustion. Measure it
+     with `stripe listen` unfiltered before assuming either way.
+  **Not worth writing even if the timing is fine.** All a browser could add is that a flagged booking
+  appears on the worklist with a readable note — which B1–B7 already prove, on the same screen, through
+  the same mechanism. The branch itself has five tests in `RefundFailureReviewTests`. That would be a
+  slow, timing-dependent spec re-testing the rendering of a row.
   **This also surfaced a real gap, which was not a testing problem — now fixed.** Nothing in the
   application handled the async refund-failure event at all, and the reason was structural:
   `WebHookController` casts `stripeEvent.Data.Object as PaymentIntent` and returns early when that is
@@ -390,8 +406,6 @@ Add to this list rather than fighting a scenario that can't be driven. Each entr
   this account sends and the newer `refund.failed` both land in it. Covered by five tests in
   `RefundFailureReviewTests`, **mutation-tested** by disabling the branch — the three flagging tests
   went red, the two "accept and ignore" ones stayed green, which is the right split.
-  Still B8's own answer, though: **no browser spec, now or ever.** There is no screen in this flow, and
-  the worklist row it produces is already covered by B1–B7.
   Two follow-ups deliberately left out of that change: `Payment.Status` stays `REFUNDED` (a truthful
   value needs a new enum member, which moves the three `EmailService` branches that read it), and the
   customer gets no second email — they have one promising a refund, and the correction is a phone call.
