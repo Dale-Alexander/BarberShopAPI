@@ -32,6 +32,8 @@ import { ToastContext } from "../../Context/ToastContext.jsx";
 import Navlinks from "../../Components/NavLinks/Navlinks";
 import { BookingDetailsContext } from "../../Context/BookingDetailsContext.jsx";
 import { getErrorMessage } from "../../utils/errorMessage.js";
+// Were defined here; moved so the schedule editor's gap finder uses the same pair (see utils/time.js).
+import { toMin, toHHMM, FALLBACK_OPEN_MIN, FALLBACK_CLOSE_MIN } from "../../utils/time.js";
 
 /* Fallback slot granularity, used only until barbers-with-bookings answers with the configured
  * ShopSettings.SlotStepMin. There is no fixed slot list: slots are generated per (barber, date) from
@@ -41,17 +43,6 @@ import { getErrorMessage } from "../../utils/errorMessage.js";
  * grid, since the server validates an arbitrary DateTime against shifts, closures and overlaps. So a
  * change here can't put the picker out of step with what the server will accept. */
 const DEFAULT_SLOT_STEP_MIN = 30;
-
-/* Fallback shop hours, for the same window before the payload arrives. Matches the seeded row. */
-const FALLBACK_OPEN_MIN = 9 * 60;
-const FALLBACK_CLOSE_MIN = 17 * 60 + 30;
-
-const toMin = (hhmm) => {
-    const [h, m] = hhmm.split(":").map(Number);
-    return h * 60 + m;
-};
-const toHHMM = (min) =>
-    `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
 
 /* A "yyyy-MM-dd" from the API as LOCAL midnight.
  *
