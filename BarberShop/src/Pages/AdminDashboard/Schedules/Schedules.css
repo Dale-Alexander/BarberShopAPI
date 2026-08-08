@@ -200,11 +200,25 @@
 }
 .sched-add-shift:hover { border-color: var(--green-500); color: var(--green-500); }
 
-.sched-error {
-    color: #e74c3c;
-    font-size: 0.85rem;
-    margin-top: 0.75rem;
+/* The offending shift itself, so a day with two shifts says WHICH one the message below is about. */
+.sched-shift--invalid { border-color: #e74c3c; }
+
+/* Third grid child of .sched-day (name | shifts, then this under the shifts). Explicit grid-column
+   because auto-placement would drop it into column 1, under the day name.
+
+   Per day, not per week: this replaces a single .sched-error under the whole seven-row grid, which on
+   anything shorter than a tall desktop was off the bottom of the screen while the admin was typing - the
+   error existed but the only way to see it was to scroll away from the field it was about. */
+.sched-day-errors {
+    grid-column: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
 }
+
+/* .form-error (TeamMembers.css) carries the colour and size; it sets margin-top for the field layouts it
+   was written for, which would double up on this column's own gap. */
+.sched-day-errors .form-error { margin-top: 0; }
 
 .sched-actions {
     display: flex;
@@ -315,6 +329,8 @@
 
 @media (max-width: 600px) {
     .sched-day { grid-template-columns: 1fr; gap: 0.5rem; }
+    /* One column here, so the desktop rule above would push the errors off the grid entirely. */
+    .sched-day-errors { grid-column: 1; }
 }
 
 /* Shown on a "these fit again" row when something OTHER than the hours still shuts the slot, so the admin

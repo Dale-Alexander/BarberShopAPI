@@ -9,6 +9,7 @@ import LoadingSpinner from "../../../Components/LoadingSpinner/LoadingSpinner";
 import ErrorState from "../../../Components/ErrorState/ErrorState";
 import { getErrorMessage } from "../../../utils/errorMessage.js";
 import { formatPhone } from "../../../utils/phone.js";
+import { toMin, toHHMM, FALLBACK_OPEN_MIN, FALLBACK_CLOSE_MIN } from "../../../utils/time.js";
 import useTimeFieldFlow from "../../../Hooks/useTimeFieldFlow";
 import "./Schedules.css";
 
@@ -192,14 +193,64 @@ const Schedules = () => {
         setSearchParams((prev) => { prev.set("barberId", String(id)); return prev; }, { replace: true });
     };
 
-    /* A new shift starts as the shop's full opening hours for that weekday rather than a hardcoded
-     * 09:00-17:30, which the save would refuse outright on a shop that opens at 10. Falls back to the old
-     * pair only before settings load. */
-    const addShift = (dow) => {
+    /* The free spans on a weekday: the shop's window for that day with every existing shift cut out of it.
+     *
+     * Real interval subtraction rather than "start after the last shift", because a stored shift can
+     * already sit partly OUTSIDE the shop's hours - the hours may have moved since it was rostered - and
+     * assuming the shifts are contained in the window would hand back a span that is already occupied.
+     *
+     * Shifts that are themselves broken (blank, or start >= end) are ignored rather than subtracted: they
+     * describe no interval, and treating a backwards one as a range would blank out the wrong part of the
+     * day. They already carry their own error in the row. */
+    const freeGaps = (dow, ranges) => {
         const hours = hoursForDay(dow);
-        const start = hours && !hours.isClosed ? hours.openTime : "09:00";
-        const end = hours && !hours.isClosed ? hours.closeTime : "17:30";
-        setDays((prev) => prev.map((r, i) => (i === dow ? [...r, { start, end }] : r)));
+        const open = hours && !hours.isClosed ? toMin(hours.openTime) : FALLBACK_OPEN_MIN;
+        const close = hours && !hours.isClosed ? toMin(hours.closeTime) : FALLBACK_CLOSE_MIN;
+        if (close <= open) return [];
+
+        const taken = ranges
+            .filter((r) => r.start && r.end && r.start < r.end)
+            .map((r) => [toMin(r.start), toMin(r.end)])
+            .sort((a, b) => a[0] - b[0]);
+
+        const gaps = [];
+        let cursor = open;
+        for (const [s, e] of taken) {
+            if (s > cursor) gaps.push([cursor, Math.min(s, close)]);
+            cursor = Math.max(cursor, e);
+            if (cursor >= close) break;
+        }
+        if (cursor < close) gaps.push([cursor, close]);
+        return gaps.filter(([s, e]) => e > s);
+    };
+
+    /* The widest free span, which is the one the admin means in every realistic split-shift case: with
+     * 09:00-13:00 rostered the only gap is the afternoon, with 14:00-17:30 it's the morning, and with a
+     * midday shift it's the longer of the two sides rather than whichever happens to come first.
+     *
+     * No minimum size. A five-minute gap yields a five-minute shift, which is silly but legal - the server
+     * only asks that a shift start before it ends. Requiring more would be a rule the editor invented and
+     * nothing else enforces, the same trap the shiftStepSeconds note above describes. */
+    const largestGap = (dow, ranges) => {
+        const gaps = freeGaps(dow, ranges);
+        if (gaps.length === 0) return null;
+        return gaps.reduce((best, g) => (g[1] - g[0] > best[1] - best[0] ? g : best));
+    };
+
+    /* A new shift fills the largest free gap instead of the shop's whole day. Seeding it with the full day
+     * meant that on any day that already had a shift, the very act of adding one produced an overlap error
+     * - the editor handed you a broken grid and then told you off for it.
+     *
+     * Sorted on insert, not appended: shifts arrive sorted (see versionToDays) and a morning shift added
+     * after an afternoon one would otherwise render out of order. */
+    const addShift = (dow) => {
+        setDays((prev) => prev.map((r, i) => {
+            if (i !== dow) return r;
+            const gap = largestGap(dow, r);
+            if (!gap) return r; // no room; the button is replaced by a reason in this state
+            return [...r, { start: toHHMM(gap[0]), end: toHHMM(gap[1]) }]
+                .sort((a, b) => a.start.localeCompare(b.start));
+        }));
     };
     const removeShift = (dow, idx) => {
         setDays((prev) => prev.map((r, i) => (i === dow ? r.filter((_, j) => j !== idx) : r)));
@@ -213,22 +264,56 @@ const Schedules = () => {
     const { fieldProps: timeFieldProps, onValueChange: onTimeChange } = useTimeFieldFlow(weekRef);
 
 
-    // Client mirror of the backend's ValidateShifts, so a bad grid is caught before the request.
-    const shiftError = (() => {
-        for (let dow = 0; dow < 7; dow++) {
-            const ranges = [...days[dow]].sort((a, b) => a.start.localeCompare(b.start));
-            for (let i = 0; i < ranges.length; i++) {
-                if (!ranges[i].start || !ranges[i].end || ranges[i].start >= ranges[i].end)
-                    return `${DAYS[dow]}: each shift must start before it ends`;
-                if (i > 0 && ranges[i].start < ranges[i - 1].end)
-                    return `${DAYS[dow]}: shifts can't overlap`;
-            }
-        }
+    /* Client mirror of ShopHoursResolver.ShiftViolation - the same four reasons in the same words, so an
+     * inline message here and the server's rejection can't drift into disagreeing about what fits. Both
+     * sides carry "HH:mm" (SettingsController.HoursPayload formats them that way), so comparing these as
+     * strings is comparing them as times. */
+    const shopHoursViolation = (dow, start, end) => {
+        const h = hoursForDay(dow);
+        if (!h) return "the shop has no hours set for this day";
+        if (h.isClosed) return "the shop is closed on this day";
+        if (start < h.openTime) return `it starts before the shop opens (${h.openTime})`;
+        if (end > h.closeTime) return `it ends after the shop closes (${h.closeTime})`;
         return null;
-    })();
+    };
+
+    /* One message per offending SHIFT, indexed to match days[dow], so each one prints in its own day's row
+     * and outlines its own field. The week is seven tall rows: a single error under the whole grid sits off
+     * the bottom of the screen while you're typing in Friday, which is what made it useless.
+     *
+     * The shop-hours rule used to arrive as a browser tooltip, from min/max on the time inputs. Native
+     * constraint validation draws its own bubble - unstyleable, worded by the browser rather than by us,
+     * and gone the moment the field loses focus, so the reason disappeared exactly when the admin turned to
+     * fix it. The bound it was communicating is now named in the message instead.
+     *
+     * Mirrors the backend's two checks in the order it runs them: ValidateShifts (start before end, no
+     * overlap), then ValidateShiftsWithinShopHours. The shop-hours half is SKIPPED until /api/Settings has
+     * answered - with no hours loaded every day would read "the shop has no hours set" on first paint, and
+     * Save would be disabled before the admin had done anything wrong. */
+    const hoursLoaded = shopHours.length > 0;
+    const dayErrors = days.map((ranges, dow) => {
+        const errors = ranges.map(() => null);
+        // Overlap is a question about the order shifts RUN in, so it's judged on a sorted copy - but each
+        // message is filed against the shift's ORIGINAL index, which is the one the row renders.
+        const order = ranges.map((r, idx) => ({ ...r, idx })).sort((a, b) => a.start.localeCompare(b.start));
+        order.forEach((r, i) => {
+            if (!r.start || !r.end || r.start >= r.end) {
+                errors[r.idx] = "This shift must start before it ends.";
+                return;
+            }
+            if (i > 0 && r.start < order[i - 1].end) {
+                errors[r.idx] = `This shift overlaps the one ending at ${order[i - 1].end}.`;
+                return;
+            }
+            const reason = hoursLoaded ? shopHoursViolation(dow, r.start, r.end) : null;
+            if (reason) errors[r.idx] = `${r.start}–${r.end} doesn't fit the shop's opening hours: ${reason}.`;
+        });
+        return errors;
+    });
+    const hasShiftError = dayErrors.some((e) => e.some(Boolean));
 
     const handleSave = async (confirmOrphaned = false) => {
-        if (shiftError || isReadOnly || !selectedVersion) return;
+        if (hasShiftError || isReadOnly || !selectedVersion) return;
         setSaving(true);
         try {
             const res = await adminAxios.put(`/api/Schedules/version/${selectedVersion.id}`,
@@ -374,17 +459,28 @@ const Schedules = () => {
                                     <div className="sched-day-name">{name}</div>
                                     <div className="sched-day-shifts">
                                         {days[dow].length === 0 && <span className="sched-dayoff">Day off</span>}
-                                        {days[dow].map((r, idx) => (
-                                            <div className="sched-shift" key={idx}>
-                                                {/* min/max come from the shop's hours for THIS weekday - the same bound
-                                                    the save enforces, shown before the admin commits to a time. */}
+                                        {days[dow].map((r, idx) => {
+                                            /* Shown to the admin on an ENDED version too, not just an editable one.
+                                               An ended version's shifts can genuinely stop fitting the shop's hours
+                                               once those hours move, and the admin still needs to see it: "Create
+                                               change" seeds the new season from whatever's in the editor, and
+                                               hasShiftError disables that button - so hiding the reason here would
+                                               leave a dead button with nothing on screen explaining it.
+                                               A barber is the one viewer this stays off for: they can't act on it,
+                                               and the read-only note already tells them whose job it is. */
+                                            const invalid = !isBarber && !!dayErrors[dow][idx];
+                                            return (
+                                            /* No min/max on these deliberately: the shop's bound is enforced by
+                                               dayErrors and printed under this row. Left to the browser it came back
+                                               as a native validation bubble - see the comment on dayErrors. */
+                                            <div className={`sched-shift${invalid ? " sched-shift--invalid" : ""}`} key={idx}>
                                                 <input type="time" step={shiftStepSeconds} value={r.start} disabled={isReadOnly}
-                                                    min={hoursForDay(dow)?.openTime} max={hoursForDay(dow)?.closeTime}
+                                                    aria-invalid={invalid}
                                                     {...timeFieldProps}
                                                     onChange={(e) => { setShift(dow, idx, "start", e.target.value); onTimeChange(e); }} />
                                                 <span>–</span>
                                                 <input type="time" step={shiftStepSeconds} value={r.end} disabled={isReadOnly}
-                                                    min={hoursForDay(dow)?.openTime} max={hoursForDay(dow)?.closeTime}
+                                                    aria-invalid={invalid}
                                                     {...timeFieldProps}
                                                     onChange={(e) => { setShift(dow, idx, "end", e.target.value); onTimeChange(e); }} />
                                                 {!isReadOnly && (
@@ -393,23 +489,39 @@ const Schedules = () => {
                                                     </button>
                                                 )}
                                             </div>
-                                        ))}
+                                            );
+                                        })}
                                         {/* A day the shop never opens can hold no shift, so say so instead of offering
                                             an "Add shift" that the save is guaranteed to refuse. */}
                                         {!isReadOnly && hoursForDay(dow)?.isClosed && (
                                             <span className="sched-dayoff">Shop closed — set opening hours in Settings</span>
                                         )}
+                                        {/* Same treatment as the closed-day line above: when a shift can't be
+                                            added, say why instead of offering a button that would produce a
+                                            broken row. Here the day's shifts already cover every open
+                                            minute, so there is nowhere left to put one. */}
                                         {!isReadOnly && !hoursForDay(dow)?.isClosed && (
-                                            <button className="sched-add-shift" onClick={() => addShift(dow)}>
-                                                <Plus size={14} /> Add shift
-                                            </button>
+                                            largestGap(dow, days[dow]) == null ? (
+                                                <span className="sched-dayoff">No free time left in the shop's hours</span>
+                                            ) : (
+                                                <button className="sched-add-shift" onClick={() => addShift(dow)}>
+                                                    <Plus size={14} /> Add shift
+                                                </button>
+                                            )
                                         )}
                                     </div>
+                                    {/* Third grid child, pinned under this day's shifts rather than under the whole
+                                        week - see the comment on dayErrors for why that placement is the point. */}
+                                    {!isBarber && dayErrors[dow].some(Boolean) && (
+                                        <div className="sched-day-errors">
+                                            {dayErrors[dow].map((msg, idx) => msg && (
+                                                <span className="form-error" key={idx}>{msg}</span>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
-
-                        {shiftError && !isReadOnly && <p className="sched-error">{shiftError}</p>}
 
                         {!isReadOnly && (
                             <div className="sched-actions">
@@ -417,7 +529,7 @@ const Schedules = () => {
                                     so onClick={handleSave} handed it React's click event. That made the
                                     request body circular, JSON.stringify threw inside axios, and the save
                                     never reached the server - it just showed a generic error toast. */}
-                                <button className="btn-primary" onClick={() => handleSave()} disabled={saving || !!shiftError}>
+                                <button className="btn-primary" onClick={() => handleSave()} disabled={saving || hasShiftError}>
                                     <Save size={16} /> {saving ? "Saving…" : "Save changes"}
                                 </button>
                                 {canDelete && (
@@ -454,7 +566,7 @@ const Schedules = () => {
                                         onChange={(e) => setNewFrom(e.target.value)} />
                                 </label>
                                 {/* Same reason as the save button above - confirmOrphaned must not be the click event. */}
-                                <button className="btn-primary" onClick={() => handleCreateVersion()} disabled={creating || !!shiftError || !newFromValue}>
+                                <button className="btn-primary" onClick={() => handleCreateVersion()} disabled={creating || hasShiftError || !newFromValue}>
                                     {creating ? "Creating…" : "Create change"}
                                 </button>
                             </div>
