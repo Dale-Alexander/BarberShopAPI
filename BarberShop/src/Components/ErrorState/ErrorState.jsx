@@ -4,8 +4,9 @@ import "./ErrorState.css";
 /* Inline error state for a failed page-load fetch. A toast is the wrong tool here: it vanishes after a
    few seconds and leaves the misleading empty UI ("No services yet") behind, whereas this replaces the
    content so a failed load never masquerades as "no data". onRetry wires straight to useFetch's reFetch.
-   Colours inherit from the page (border/text via currentColor) so it reads on both the dark admin pages
-   and the light customer booking page; only the warning icon is a fixed amber. */
+   Text takes --surface-fg (see index.css), which each shell sets to suit its own background, so this
+   reads on both the dark admin pages and the light customer booking page; the retry button's border
+   follows that via currentColor, and only the warning icon is a fixed amber. */
 const ErrorState = ({
     title = "Couldn't load this",
     message = "Something went wrong while loading. Please try again.",

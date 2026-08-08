@@ -6,7 +6,10 @@
     gap: 0.75rem;
     padding: 3rem 1.5rem;
     text-align: center;
-    color: inherit;
+    /* --surface-fg (index.css) resolves to a light colour on the dark admin shell and a dark one
+       inside .user-app, so this reads on both. It must NOT be plain `inherit`: nothing in the admin
+       ancestor chain sets a colour, so inheriting meant black text on the near-black page. */
+    color: var(--surface-fg, inherit);
 }
 
 .error-state--inline {

@@ -63,6 +63,13 @@
     --h4: 20px;
     --h5: 16px;
     --h6: 14px;
+    /* Base text colour for whatever surface a component sits on. The document default is black, and
+       nothing in the app ever set a `color` on body/#root/.admin-app - only a background - so any
+       component that inherited its colour rendered black on the near-black admin shell (this is the
+       same trap .modal-content below had to patch locally). Components that want to work on both
+       shells read this instead of `inherit`. The dark shell is the default because body/#root paint
+       --primary-500; .user-app flips it for the light customer pages. */
+    --surface-fg: var(--grey-100);
     --background: #F5F0E8;
     --calendar-bg: #FFFDF7;
     --time-bg: #F9F4EA;
@@ -104,6 +111,8 @@ body{
 .user-app{
     min-height:100vh;
     background-color:#f9f8f6;
+    /* Light surface, so flip the shared text colour back to dark for anything inside that reads it. */
+    --surface-fg: var(--text-dark-300);
 }
 
 
