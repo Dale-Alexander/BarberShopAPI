@@ -10,15 +10,13 @@ import ErrorState from "../../../Components/ErrorState/ErrorState";
 import { getErrorMessage } from "../../../utils/errorMessage.js";
 import { formatPhone } from "../../../utils/phone.js";
 import { toMin, toHHMM, FALLBACK_OPEN_MIN, FALLBACK_CLOSE_MIN } from "../../../utils/time.js";
+// Were defined here; shared so the Settings hours-conflict list names a version in the same words as
+// the chips below, since its whole job is to tell the admin which chip to open.
+import { todayStr, fmtDate, versionState, versionLabel } from "../../../utils/scheduleVersion.js";
 import useTimeFieldFlow from "../../../Hooks/useTimeFieldFlow";
 import "./Schedules.css";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const todayStr = () => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
-const fmtDate = (iso) => new Date(iso + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 // Local-midnight arithmetic, matching todayStr's format. Date handles month/year rollover for us.
 const addDays = (iso, n) => {
     const d = new Date(iso + "T00:00:00");
@@ -39,23 +37,6 @@ const versionToDays = (version) => {
 const daysToShifts = (days) =>
     days.flatMap((ranges, dow) => ranges.map((r) => ({ dayOfWeek: dow, startTime: `${r.start}:00`, endTime: `${r.end}:00` })));
 
-// How a version relates to today, for labelling and edit-locking.
-const versionState = (v) => {
-    const t = todayStr();
-    if (v.effectiveTo == null) return v.effectiveFrom > t ? "upcoming" : "active";
-    if (v.effectiveTo < t) return "ended";
-    return v.effectiveFrom > t ? "upcoming" : "active";
-};
-/* Every label leads with "Hours" on purpose. These chips sit right under a barber's name, and the old
-   "Active now" read as a statement about the BARBER (as in, currently employed / on shift) rather than
-   about which set of working hours is in force. Naming the thing removes the ambiguity, and keeping the
-   three labels parallel makes the row scan as one timeline. */
-const versionLabel = (v) => {
-    const s = versionState(v);
-    if (s === "active") return "Schedule in effect now";
-    if (s === "upcoming") return `Schedule from ${fmtDate(v.effectiveFrom)}`;
-    return `Schedule until ${fmtDate(v.effectiveTo)}`;
-};
 
 const Schedules = () => {
     const { user } = useContext(AuthContext);
