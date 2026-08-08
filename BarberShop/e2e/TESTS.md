@@ -1,5 +1,20 @@
 # Scenario queue
 
+> **⚠ The suite cannot run right now, and C10–C13 have never executed once.**
+>
+> `BarberShop_E2E` has an empty `__EFMigrationsHistory` alongside tables that already exist — the schema
+> was built by `EnsureCreated`, never by migrations. So `dotnet ef database update` dies on *"There is
+> already an object named 'Services'"*, and the API can't even serve `/api/Barbers` against it
+> (`Invalid column name 'SlotStepMin'`). Every spec in this directory is blocked, not just the new ones.
+>
+> Fixing it means dropping and recreating that database, then `dotnet ef database update`. That is safe
+> by design — `--seed-e2e` wipes it on every run and refuses any database whose name doesn't contain
+> "E2E" — but it is a destructive step and nobody has taken it yet.
+>
+> **C10–C13 are therefore unverified.** They are reasoning about what should happen, written against the
+> code and the conventions in this file; they are not passing tests, and none has been mutation-tested.
+> Expect to correct details on their first real run, and do not tick them off until they go green.
+
 The work list for browser tests. **One scenario per spec, tick it off only when it passes.**
 
 Each line is a customer-or-admin-visible outcome.
@@ -146,7 +161,8 @@ a known floor.
 The two directions of the same lever: work is taken away from a barber, then given back.
 
 C1–C5 are in `schedule-conflicts.spec.js`, C6–C7 in `accepting-bookings.spec.js`, C8–C9 in
-`barber-access.spec.js`.
+`barber-access.spec.js`, C10–C11 back in `schedule-conflicts.spec.js`, C12–C13 in
+`barber-reactivated.spec.js`.
 
 Unlike section B, C1–C5 are **not** arranged through the API. The warning modal IS the subject — C1 and
 C2 are entirely about what an admin sees *before* anything is saved — so the hours are edited in the
@@ -186,6 +202,35 @@ spinner, no error, until the page is reloaded. `openSchedules()` takes the id an
 - [x] C9. Deactivating a barber signs them out (TokenVersion bumps) — prove the session actually dies.
       `barber-access.spec.js`
       Proves the session was live FIRST, or it would also pass for one that never worked.
+- [ ] C10. Creating a seasonal change over existing bookings warns before writing, and the create dialog
+      stands down instead of stacking under the conflict. `schedule-conflicts.spec.js`
+      **NEVER RUN — see the banner at the top of this file.** C1–C5 cover the save and delete paths; the
+      create path (`POST /api/schedules/barber/{id}`) had no coverage. Also asserts nothing was written,
+      the same guarantee C1 makes. The stacking half matters because the conflict's own button re-posts
+      the create with `confirmOrphaned` — two modals open would leave "Save anyway" returning to a dialog
+      for a change that had just been made.
+- [ ] C11. A seasonal change copies the version's SAVED shifts, not unsaved edits in the editor.
+      `schedule-conflicts.spec.js`
+      **NEVER RUN.** Guards a behaviour change: the create used to post the editor's state, so a
+      half-finished edit nobody had committed was baked into a new season — and once the control became a
+      modal it did so with the week hidden behind the overlay. Asserts the new version carries the saved
+      hour, that the original version is untouched (Create must not double as a Save), and that the modal
+      says the draft won't travel. No booking involved: C10 owns the conflict, this owns which hours get
+      copied.
+- [ ] C12. Reactivating a barber lands the admin in that barber's schedule editor.
+      `barber-reactivated.spec.js`
+      **NEVER RUN.** A revived barber keeps their surviving schedule untouched, while `UpdateShopHours`
+      ignores deactivated barbers when vetoing an hours change — so they can come back with shifts
+      outside the shop's hours. The editor flags them inline on open; this is what gets the admin there.
+      Driven through the Team screen on purpose: `reviveBarber()` posts straight to the API and would
+      skip every line under test. Asserts the editor opened on THAT barber, since the URL alone would
+      pass for a page that fell back to the first in the roster.
+- [ ] C13. Reactivating a barber who has stranded bookings shows that list first; dismissing it performs
+      the handoff. `barber-reactivated.spec.js`
+      **NEVER RUN.** The back-on-duty list renders on the Team page, so navigating immediately would
+      unmount it and lose the only place those bookings are gathered. Asserts the URL is still `/admin/team`
+      while the list is up — if that ever goes green with the URL already moved, the list is rendering on a
+      page that is unmounting. Also asserts nothing was cleared, as C4 does for the widening-hours twin.
 
 ### Barber sessions
 
