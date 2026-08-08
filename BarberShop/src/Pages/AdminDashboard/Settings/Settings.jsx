@@ -1,5 +1,7 @@
 import { useState, useEffect, useContext, useRef } from "react";
+import { Link } from "react-router-dom";
 import { Save } from "lucide-react";
+import { versionLabel } from "../../../utils/scheduleVersion.js";
 import useFetch from "../../../Hooks/useFetch";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
 import { ToastContext } from "../../../Context/ToastContext";
@@ -286,6 +288,22 @@ const Settings = () => {
                                 {hoursConflicts.conflicts.map((c, i) => (
                                     <li key={i}>
                                         <strong>{c.barberName || `Barber ${c.barberId}`}</strong> — {c.day} {c.shift}: {c.reason}
+                                        {/* Which of that barber's schedules holds the shift, in the same words
+                                            as the version chips on the editor. Without it the admin opens the
+                                            barber, lands on the version in effect today - which the editor
+                                            preselects - finds the day already correct, and has nothing telling
+                                            them the shift is on a seasonal change they haven't looked at. */}
+                                        <span className="settings-hours-conflict-where">
+                                            {versionLabel(c)}
+                                            {/* ?barberId is the existing create-barber handoff; ?versionId picks
+                                                the offending version. Without the second the editor opens on
+                                                the schedule in force today, which is the screen showing the day
+                                                as already correct - so the link would land on the same
+                                                misdirection this message exists to clear up. */}
+                                            <Link to={`/admin/schedules?barberId=${c.barberId}&versionId=${c.scheduleId}`}>
+                                                Open schedule
+                                            </Link>
+                                        </span>
                                     </li>
                                 ))}
                             </ul>

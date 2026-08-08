@@ -54,5 +54,17 @@ namespace BarberShopAPI.ViewModels
         public string Day { get; set; } = "";
         public string Shift { get; set; } = "";
         public string Reason { get; set; } = "";
+
+        /* WHICH of the barber's schedule versions the offending shift sits in. A barber can have a schedule
+           in force today and a seasonal change queued for next month, and the check covers both - so naming
+           only the barber sent the admin to the version in effect now, where the day was already correct,
+           with nothing to say the real culprit was a version they hadn't opened. The client turns these into
+           the same words the version chips on the schedule editor use, so the message names the chip. */
+        public DateOnly EffectiveFrom { get; set; }
+        public DateOnly? EffectiveTo { get; set; }
+
+        // The version's own id, so the client can link straight to it rather than to the barber, whose
+        // editor opens on the schedule in force today - the very screen that shows the day as already fine.
+        public int ScheduleId { get; set; }
     }
 }

@@ -129,15 +129,30 @@ namespace BarberShopAPI.Controllers
             /* Current and future versions only. An expired version governs no date from today on, so a
              * shift inside it can't be violated by hours that only apply going forward - and refusing an
              * hours change over a schedule nobody works any more would be unfixable, since superseded
-             * versions are edited, never deleted. */
+             * versions are edited, never deleted.
+             *
+             * ACTIVE barbers only, for the same "must be fixable" reason. A deactivated barber keeps their
+             * schedule rows (the reactivate flow reuses them rather than handing someone their old job back
+             * on a generic default), so without this filter a barber who left months ago still vetoes an
+             * hours change - and the admin cannot clear it, because the schedule editor's barber dropdown
+             * lists only active barbers. The refusal named someone the UI gives you no way to open.
+             *
+             * Safe to exclude because the shop's hours are enforced against BOOKINGS separately, not via
+             * the barber's schedule: EvaluateHoursAsync checks FitsShopHours and FitsWithinAShift as two
+             * independent gates, and the webhook re-checks at confirmation. So a dormant shift that no
+             * longer fits cannot produce a booking, and if the barber is ever reactivated the schedule
+             * editor flags the offending shift inline the moment it is opened. */
             var today = ShopClock.Today;
             var versions = await _context.BarberSchedules
-                .Include(s => s.Shifts)
-                .Where(s => s.EffectiveTo == null || s.EffectiveTo >= today)
+                .Where(s => s.Barber!.isActive
+                            && (s.EffectiveTo == null || s.EffectiveTo >= today))
                 .Select(s => new
                 {
+                    ScheduleId = s.Id,
                     s.BarberId,
                     BarberName = s.Barber!.User.Name + " " + s.Barber.User.Surname,
+                    s.EffectiveFrom,
+                    s.EffectiveTo,
                     Shifts = s.Shifts.Select(sh => new { sh.DayOfWeek, sh.StartTime, sh.EndTime }).ToList()
                 })
                 .ToListAsync();
@@ -155,7 +170,10 @@ namespace BarberShopAPI.Controllers
                         BarberName = v.BarberName?.Trim(),
                         Day = sh.DayOfWeek.ToString(),
                         Shift = $"{sh.StartTime:HH\\:mm}-{sh.EndTime:HH\\:mm}",
-                        Reason = reason
+                        Reason = reason,
+                        EffectiveFrom = v.EffectiveFrom,
+                        EffectiveTo = v.EffectiveTo,
+                        ScheduleId = v.ScheduleId
                     });
                 }
 
@@ -164,9 +182,14 @@ namespace BarberShopAPI.Controllers
                 {
                     message = "These hours would leave barber schedules outside the shop's opening hours. "
                             + "Adjust the schedules below first, then change the hours.",
+                    /* Keyed by VERSION as well as day/shift - ScheduleId is the version's identity, so it
+                       implies the barber too. The same shift can legitimately appear in a barber's current
+                       schedule and again in a seasonal change that hasn't started yet, and those are two
+                       separate things to go and fix: collapsing them would leave the admin correcting one,
+                       retrying, and being refused by the other. */
                     conflicts = conflicts
-                        .OrderBy(c => c.BarberName).ThenBy(c => c.Day)
-                        .DistinctBy(c => new { c.BarberId, c.Day, c.Shift })
+                        .OrderBy(c => c.BarberName).ThenBy(c => c.EffectiveFrom).ThenBy(c => c.Day)
+                        .DistinctBy(c => new { c.ScheduleId, c.Day, c.Shift })
                         .ToList()
                 });
 

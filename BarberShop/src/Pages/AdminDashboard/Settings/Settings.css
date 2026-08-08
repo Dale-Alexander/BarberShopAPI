@@ -260,7 +260,24 @@
     }
 
     .settings-hours-conflicts li {
-        margin-bottom: 0.25rem;
+        margin-bottom: 0.5rem;
+    }
+
+/* The version the offending shift belongs to, plus the way in. Its own muted line under the conflict
+   rather than more text on the same one: the sentence above says what is wrong, this says where to go. */
+.settings-hours-conflict-where {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-top: 2px;
+    font-size: 0.8rem;
+    color: var(--muted-fg, #a0a0a0);
+}
+
+    .settings-hours-conflict-where a {
+        color: var(--green-500);
+        text-decoration: underline;
     }
 
 /* Stack the row on narrow screens - five columns in 400px gives each time field about 60px. */

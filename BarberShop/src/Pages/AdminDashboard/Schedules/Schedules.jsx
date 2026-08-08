@@ -115,7 +115,13 @@ const Schedules = () => {
             setVersions(res.data);
             // Prefer an explicit version (e.g. just-created), else the one active today, else the last.
             const active = res.data.find((v) => versionState(v) === "active");
-            const pick = preferVersionId ?? active?.id ?? res.data[res.data.length - 1]?.id ?? null;
+            /* Checked against what actually came back rather than trusted. This id can arrive from the URL
+               (the Settings hours-conflict link), so it may be stale, edited, or another barber's - and
+               selecting a version that isn't in the list leaves the editor on a blank week with every
+               control disabled and nothing explaining why. Ids are unique across barbers, so a mismatch
+               simply falls through to the version in force today. */
+            const preferred = res.data.some((v) => v.id === preferVersionId) ? preferVersionId : null;
+            const pick = preferred ?? active?.id ?? res.data[res.data.length - 1]?.id ?? null;
             setSelectedVersionId(pick);
         } catch (err) {
             showToast("Couldn't load schedule", getErrorMessage(err));
@@ -152,8 +158,21 @@ const Schedules = () => {
         setBarberId(initial);
     }, [activeBarbers, barberId, searchParams, isBarber, user?.barberId]);
 
+    /* Which version to open on, handed over by the Settings hours-conflict link. That message names one
+       specific schedule - often a seasonal change that hasn't started yet - so landing on the version in
+       force today would show the offending day as already correct, which is the confusion the link exists
+       to remove.
+
+       A ref read at mount, not state read in the effect: the effect must keep its two dependencies, and
+       this is a handoff rather than a standing preference. Spent on first use, so picking another barber
+       afterwards behaves normally (loadVersions would ignore it anyway - it validates the id against that
+       barber's own versions). */
+    const linkedVersionId = useRef(Number(searchParams.get("versionId")) || null);
+
     useEffect(() => {
-        if (barberId != null) loadVersions(barberId);
+        if (barberId == null) return;
+        loadVersions(barberId, linkedVersionId.current);
+        linkedVersionId.current = null;
     }, [barberId, loadVersions]);
 
     // Seed the day editor whenever the selected version changes.
