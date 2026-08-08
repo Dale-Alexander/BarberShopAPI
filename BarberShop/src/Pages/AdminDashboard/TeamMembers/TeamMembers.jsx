@@ -27,7 +27,9 @@ const TeamMembers = () => {
      * re-submit with confirmCancelBookings. Null = no conflict pending. */
     const [deactivateConflict, setDeactivateConflict] = useState(null);
     /* The reverse of that: after reactivating a barber, the bookings their departure left flagged, so the
-       admin can go and clear the ones that are now fine. { barberName, bookings[] }. */
+       admin can go and clear the ones that are now fine. { barberName, bookings[], barberId }.
+       barberId rides along because dismissing this is what sends the admin on to the schedule editor -
+       see closeBackOnDuty. */
     const [backOnDuty, setBackOnDuty] = useState(null);
     const [email, setEmail] = useState("");
     // Server-side "email already in use" (409). Shown inline under the Email field rather than as a
@@ -169,6 +171,15 @@ stored i the browser's memory which the backend cant access*/
         }
     }
 
+    /* Dismissing the back-on-duty list is what completes the reactivation handoff, so every way out of that
+       modal - backdrop, X, "Got it" - goes through here. Wired individually, one of the three would sooner
+       or later be the one that quietly skipped the navigation. */
+    const closeBackOnDuty = () => {
+        const barberId = backOnDuty?.barberId;
+        setBackOnDuty(null);
+        if (barberId != null) navigate(`/admin/schedules?barberId=${barberId}`);
+    };
+
     const handleCreate = async(e) => {
         e.preventDefault();
         // The submit button is disabled until these pass, so this is just a safety net.
@@ -198,6 +209,10 @@ stored i the browser's memory which the backend cant access*/
         const barber = await adminAxios.post("/api/barbers/create-barber",formData);
         const row = barber.data;
         if (isReactivate) {
+            // Read before closeCreate() below, which clears reactivateBarber. Safe either way - this
+            // closure holds its own render's value - but not something a later reader should have to
+            // work out from the ordering.
+            const revivedId = reactivateBarber.id;
             // Same row, brought back to life - merge the server's canonical values in place instead of
             // appending, then follow the barber to the tab they just moved to.
             setBarbers(barbers.map(b => b.id === reactivateBarber.id
@@ -208,10 +223,31 @@ stored i the browser's memory which the backend cant access*/
                     acceptsNewBookings: row.acceptsNewBookings !== false }
                 : b));
             setActiveTab("active");
+            closeCreate();
+            /* Same handoff the create branch below makes, and for a sharper reason: a revived barber keeps
+               the schedule that survived deactivation, untouched (BarbersController's revive branch only
+               seeds a default when there's NO current version). The shop's opening hours may well have
+               moved while they were away - UpdateShopHours deliberately ignores deactivated barbers, since
+               refusing over someone the editor gives you no way to open would be a trap - so those hours
+               can come back not fitting. The editor names each offending shift inline the moment it opens,
+               which is no use to an admin who never goes there. This takes them.
+               Unconditional, not only-when-broken: hours worth re-reading is the normal case for someone
+               returning after time away, whether or not anything is technically wrong. */
+            showToast("Barber reactivated", "Check their hours are still right.", "success");
+
             /* Bookings their departure stranded are fine again now they're back, but the flags stay -
                the notes may have picked up other problems while they were away, and only the admin can
-               judge that. So list them and let them clear each one by hand. */
-            if (row.backOnDuty?.length) setBackOnDuty({ barberName: row.firstName, bookings: row.backOnDuty });
+               judge that. So list them and let them clear each one by hand.
+
+               When there IS such a list it has to be read before we navigate: it renders on this page, so
+               leaving immediately would unmount it and lose the only place those bookings are gathered
+               together. Dismissing it does the navigation instead (closeBackOnDuty). */
+            if (row.backOnDuty?.length) {
+                setBackOnDuty({ barberName: row.firstName, bookings: row.backOnDuty, barberId: revivedId });
+            } else {
+                navigate(`/admin/schedules?barberId=${revivedId}`);
+            }
+            return;
         }
         else {
             setBarbers([...(barbers ?? []), row]);
@@ -223,7 +259,6 @@ stored i the browser's memory which the backend cant access*/
             navigate(`/admin/schedules?barberId=${row.id}`);
             return;
         }
-        closeCreate();
     }
     catch(err){
         /* Inline-under-the-field only makes sense when the admin can edit the field. While reactivating
@@ -766,11 +801,11 @@ stored i the browser's memory which the backend cant access*/
 
             {/* Counterpart to the modal above: that one stranded bookings, this one un-strands them. */}
             {backOnDuty && (
-                <div className="modal-overlay" onClick={() => setBackOnDuty(null)}>
+                <div className="modal-overlay" onClick={closeBackOnDuty}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
                         <div className="modal-header">
                             <h2>These bookings are fine again</h2>
-                            <button className="modal-close" onClick={() => setBackOnDuty(null)}><X size={20} /></button>
+                            <button className="modal-close" onClick={closeBackOnDuty}><X size={20} /></button>
                         </div>
                         <div className="modal-body">
                             <p style={{ color: "var(--muted-fg)", lineHeight: 1.6, marginBottom: 16 }}>
@@ -801,7 +836,7 @@ stored i the browser's memory which the backend cant access*/
                             </ul>
                         </div>
                         <div className="modal-footer">
-                            <button className="btn-primary" onClick={() => setBackOnDuty(null)}>Got it</button>
+                            <button className="btn-primary" onClick={closeBackOnDuty}>Got it</button>
                         </div>
                     </div>
                 </div>
