@@ -92,6 +92,71 @@
     justify-content: flex-end;
 }
 
+/* Sticky save bar - see the comment where it's rendered for why it replaced a Save at the page bottom.
+   `bottom: -1px` rather than 0 so the rounded card doesn't leave a hairline of page showing beneath it on
+   fractional-scale displays. */
+.settings-savebar {
+    position: sticky;
+    bottom: -1px;
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid hsl(220, 20%, 26%);
+    border-radius: 10px;
+    /* Opaque, not the translucent card tint: content scrolls UNDER this, and anything see-through turns
+       the label into a smear of whatever field is passing behind it. */
+    background: hsl(220, 25%, 16%);
+    box-shadow: 0 -6px 20px hsl(220, 30%, 6%, 0.55);
+}
+
+.settings-savebar__text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 0.88rem;
+    color: var(--grey-100);
+}
+
+.settings-savebar__hint {
+    font-size: 0.8rem;
+    color: var(--muted-fg, #a0a0a0);
+}
+
+.settings-savebar__hint--error {
+    color: #e74c3c;
+}
+
+.settings-savebar__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.settings-savebar__actions .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Below 480px the two buttons side by side leave each too narrow to read; give the row its own line and
+   let them share it. */
+@media (max-width: 479px) {
+    .settings-savebar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .settings-savebar__actions > * {
+        flex: 1;
+        justify-content: center;
+    }
+}
+
 /* Below 480px a right-aligned button next to nothing looks stranded; give it the full row instead. */
 @media (max-width: 479px) {
     .settings-actions .btn-primary {
@@ -165,6 +230,14 @@
     color: var(--muted-fg, #a0a0a0);
 }
 
+/* Sixth child of the five-column row, so it wraps onto a second line - pinned to the columns the time
+   fields occupy so it reads as belonging to them rather than to the day name. Per row, not one line
+   under the whole grid: seven rows is enough that a single error at the bottom was off-screen while the
+   admin was still in the field that caused it. */
+.settings-hours-error {
+    grid-column: 3 / -1;
+}
+
 /* The refusal listing which barber schedules stick out past the proposed hours. Styled as a warning
    panel, not an error toast: it's a to-do list the admin works through, so it has to stay on screen. */
 .settings-hours-conflicts {
@@ -207,5 +280,10 @@
 
     .settings-hours-sep {
         display: none;
+    }
+
+    /* Two columns here, so the desktop `3 / -1` would fall outside the grid. */
+    .settings-hours-error {
+        grid-column: 1 / -1;
     }
 }

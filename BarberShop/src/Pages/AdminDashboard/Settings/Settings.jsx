@@ -28,15 +28,36 @@ const Settings = () => {
     const [hoursConflicts, setHoursConflicts] = useState(null);
     const { showToast } = useContext(ToastContext);
 
+    /* What the server currently holds, so "is there anything to save" is a COMPARISON rather than a dirty
+       flag that every onChange has to remember to set - a flag drifts the moment a field is added. Held in
+       state rather than read off the useFetch `data`, because `data` isn't refetched after a save: derived
+       from it, the save bar would stay open forever after saving. Refreshed on load and on every success. */
+    const [savedRules, setSavedRules] = useState(null);
+
+    const ruleSnapshot = (d) => ({
+        bufferMin: d.bufferMin ?? 0,
+        defaultAdminDuration: d.defaultAdminBookingDurationMin ?? 30,
+        graceAfterClose: d.graceMinutesAfterClose ?? 0,
+        minAdvance: d.minAdvanceBookingMinutes ?? 90,
+        maxAdvance: d.maxAdvanceBookingDays ?? 60,
+        refundCutoff: d.refundCutoffHours ?? 24,
+        slotStep: d.slotStepMin ?? 30,
+    });
+    const applyRules = (r) => {
+        setBufferMin(r.bufferMin);
+        setDefaultAdminDuration(r.defaultAdminDuration);
+        setGraceAfterClose(r.graceAfterClose);
+        setMinAdvance(r.minAdvance);
+        setMaxAdvance(r.maxAdvance);
+        setRefundCutoff(r.refundCutoff);
+        setSlotStep(r.slotStep);
+    };
+
     useEffect(() => {
         if (data) {
-            setBufferMin(data.bufferMin ?? 0);
-            setDefaultAdminDuration(data.defaultAdminBookingDurationMin ?? 30);
-            setGraceAfterClose(data.graceMinutesAfterClose ?? 0);
-            setMinAdvance(data.minAdvanceBookingMinutes ?? 90);
-            setMaxAdvance(data.maxAdvanceBookingDays ?? 60);
-            setRefundCutoff(data.refundCutoffHours ?? 24);
-            setSlotStep(data.slotStepMin ?? 30);
+            const rules = ruleSnapshot(data);
+            applyRules(rules);
+            setSavedRules(rules);
             setShopHours(data.shopHours ?? []);
         }
     }, [data]);
@@ -56,10 +77,16 @@ const Settings = () => {
 
     /* An open day whose times are back to front has no bookable minute in it, and the server rejects it -
        so catch it here rather than after a round trip. Closed days are exempt: their times are ignored and
-       kept only so reopening the day restores what was there before. */
-    const hoursError = shopHours.some((d) => !d.isClosed && d.openTime >= d.closeTime)
-        ? "Opening time must be before closing time."
-        : null;
+       kept only so reopening the day restores what was there before.
+
+       Judged per DAY rather than once for the whole week, so the message can print in the row it's about.
+       The single error this replaced sat under all seven rows: on a short viewport it was off the bottom
+       of the screen while the admin was in the field that caused it, so fixing it meant scrolling away
+       from the thing being fixed. Mirrors ShopHoursDayViewModel.Validate, which is the rule the PUT
+       applies day by day too. */
+    const dayHoursError = (d) =>
+        !d.isClosed && d.openTime >= d.closeTime ? "Opening time must be before closing time." : null;
+    const hasHoursError = shopHours.some((d) => dayHoursError(d));
 
     const handleSaveHours = async () => {
         try {
@@ -115,13 +142,11 @@ const Settings = () => {
                 refundCutoffHours: refundCutoffValue,
                 slotStepMin: Number(slotStep),
             });
-            setBufferMin(res.data.bufferMin);
-            setDefaultAdminDuration(res.data.defaultAdminBookingDurationMin);
-            setGraceAfterClose(res.data.graceMinutesAfterClose);
-            setMinAdvance(res.data.minAdvanceBookingMinutes);
-            setMaxAdvance(res.data.maxAdvanceBookingDays);
-            setRefundCutoff(res.data.refundCutoffHours);
-            setSlotStep(res.data.slotStepMin);
+            // Re-seed from the response AND re-baseline, so the save bar closes. Doing only the first
+            // would leave it open against a stale baseline with nothing left to save.
+            const saved = ruleSnapshot(res.data);
+            applyRules(saved);
+            setSavedRules(saved);
             showToast("Settings saved", "Your booking rules have been updated.", "success");
         }
         catch (err) {
@@ -149,6 +174,26 @@ const Settings = () => {
     const refundCutoffError = rangeErr(refundCutoff, 0, 168, "Refund cutoff");
     const canSave = !bufferError && !durationError && !graceError
         && !minAdvanceError && !maxAdvanceError && !refundCutoffError;
+
+    /* Compared as strings on purpose: the inputs hold e.type="number"'s VALUE, which is a string ("30"),
+       while the server sends a number (30). Comparing raw would report every untouched field as edited the
+       moment anything else on the page changed. An emptied field ("" vs "30") still reads as a change,
+       which is right - it's a change the range validators then refuse. */
+    const currentRules = {
+        bufferMin, defaultAdminDuration, graceAfterClose,
+        minAdvance, maxAdvance, refundCutoff, slotStep,
+    };
+    /* Opening hours are deliberately NOT part of this. They're the first section on the page with their own
+       Save directly under the grid - and that save is a different request to a different endpoint, one that
+       can be refused with the list of barber schedules in the way, which renders inside the section. A bar
+       that mentioned them would either duplicate a button whose failure appears somewhere else, or nag
+       about a save that's already sitting a row below the field being edited. */
+    const rulesDirty = savedRules != null
+        && Object.keys(currentRules).some((k) => String(currentRules[k]) !== String(savedRules[k]));
+
+    const handleDiscard = () => {
+        if (savedRules) applyRules(savedRules);
+    };
 
     if (loading) {
         return <LoadingSpinner message="Loading Settings" color="#e0e0e0" />;
@@ -179,6 +224,85 @@ const Settings = () => {
                 rather than six unrelated numbers. Each section is a full-width card; the fields inside
                 flow in a responsive grid (see .settings-grid). */}
             <div className="settings-content-area">
+                {/* First, deliberately. It's the section that gets edited most, it's the only one with its
+                    own Save (different endpoint, and a refusal that lists the barber schedules in the way -
+                    which renders below), and it's the ceiling every barber's shifts have to fit inside, so
+                    it reads as the setting the rest of the page hangs off. Being first also means its Save
+                    is reachable without scrolling, which is why the sticky bar below leaves it alone. */}
+                <section className="settings-section">
+                    <div className="settings-section-head">
+                        <h2 className="settings-section-title">Opening hours</h2>
+                        <p className="settings-section-desc">
+                            When the shop is open, per day. Barbers' working hours must fit inside these, so
+                            you'll need to adjust their schedules before shortening a day past their shifts.
+                        </p>
+                    </div>
+                    <div className="settings-hours" ref={hoursGridRef}>
+                        {shopHours.map((d) => {
+                            const dayError = dayHoursError(d);
+                            return (
+                            <div className="settings-hours-row" key={d.dayOfWeek}>
+                                <span className="settings-hours-day">{DAY_NAMES[d.dayOfWeek]}</span>
+                                <label className="settings-hours-closed">
+                                    <input
+                                        type="checkbox"
+                                        checked={d.isClosed}
+                                        onChange={(e) => setDay(d.dayOfWeek, { isClosed: e.target.checked })}
+                                    />
+                                    <span>Closed</span>
+                                </label>
+                                {/* Left in place but disabled while closed, rather than hidden: the times are
+                                    kept server-side too, so reopening a day brings back the hours it used to
+                                    have instead of an empty form. */}
+                                <input
+                                    className={`form-input settings-hours-time${dayError ? " form-input--invalid" : ""}`}
+                                    type="time"
+                                    value={d.openTime}
+                                    disabled={d.isClosed}
+                                    aria-invalid={!!dayError}
+                                    {...timeFieldProps}
+                                    onChange={(e) => { setDay(d.dayOfWeek, { openTime: e.target.value }); onTimeChange(e); }}
+                                />
+                                <span className="settings-hours-sep">to</span>
+                                <input
+                                    className={`form-input settings-hours-time${dayError ? " form-input--invalid" : ""}`}
+                                    type="time"
+                                    value={d.closeTime}
+                                    disabled={d.isClosed}
+                                    aria-invalid={!!dayError}
+                                    {...timeFieldProps}
+                                    onChange={(e) => { setDay(d.dayOfWeek, { closeTime: e.target.value }); onTimeChange(e); }}
+                                />
+                                {/* Sixth child of the row grid, placed under the time fields it's about. */}
+                                {dayError && <span className="form-error settings-hours-error">{dayError}</span>}
+                            </div>
+                            );
+                        })}
+                    </div>
+                    {hoursConflicts && (
+                        <div className="settings-hours-conflicts">
+                            <p>{hoursConflicts.message}</p>
+                            <ul>
+                                {hoursConflicts.conflicts.map((c, i) => (
+                                    <li key={i}>
+                                        <strong>{c.barberName || `Barber ${c.barberId}`}</strong> — {c.day} {c.shift}: {c.reason}
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+                    <div className="settings-actions">
+                        <button
+                            className="btn-primary"
+                            onClick={handleSaveHours}
+                            disabled={savingHours || hasHoursError || shopHours.length === 0}
+                        >
+                            <Save size={16} />
+                            {savingHours ? " Saving..." : " Save opening hours"}
+                        </button>
+                    </div>
+                </section>
+
                 <section className="settings-section">
                     <div className="settings-section-head">
                         <h2 className="settings-section-title">Appointment timing</h2>
@@ -263,74 +387,6 @@ const Settings = () => {
 
                 <section className="settings-section">
                     <div className="settings-section-head">
-                        <h2 className="settings-section-title">Opening hours</h2>
-                        <p className="settings-section-desc">
-                            When the shop is open, per day. Barbers' working hours must fit inside these, so
-                            you'll need to adjust their schedules before shortening a day past their shifts.
-                        </p>
-                    </div>
-                    <div className="settings-hours" ref={hoursGridRef}>
-                        {shopHours.map((d) => (
-                            <div className="settings-hours-row" key={d.dayOfWeek}>
-                                <span className="settings-hours-day">{DAY_NAMES[d.dayOfWeek]}</span>
-                                <label className="settings-hours-closed">
-                                    <input
-                                        type="checkbox"
-                                        checked={d.isClosed}
-                                        onChange={(e) => setDay(d.dayOfWeek, { isClosed: e.target.checked })}
-                                    />
-                                    <span>Closed</span>
-                                </label>
-                                {/* Left in place but disabled while closed, rather than hidden: the times are
-                                    kept server-side too, so reopening a day brings back the hours it used to
-                                    have instead of an empty form. */}
-                                <input
-                                    className="form-input settings-hours-time"
-                                    type="time"
-                                    value={d.openTime}
-                                    disabled={d.isClosed}
-                                    {...timeFieldProps}
-                                    onChange={(e) => { setDay(d.dayOfWeek, { openTime: e.target.value }); onTimeChange(e); }}
-                                />
-                                <span className="settings-hours-sep">to</span>
-                                <input
-                                    className="form-input settings-hours-time"
-                                    type="time"
-                                    value={d.closeTime}
-                                    disabled={d.isClosed}
-                                    {...timeFieldProps}
-                                    onChange={(e) => { setDay(d.dayOfWeek, { closeTime: e.target.value }); onTimeChange(e); }}
-                                />
-                            </div>
-                        ))}
-                    </div>
-                    {hoursError && <span className="form-error">{hoursError}</span>}
-                    {hoursConflicts && (
-                        <div className="settings-hours-conflicts">
-                            <p>{hoursConflicts.message}</p>
-                            <ul>
-                                {hoursConflicts.conflicts.map((c, i) => (
-                                    <li key={i}>
-                                        <strong>{c.barberName || `Barber ${c.barberId}`}</strong> — {c.day} {c.shift}: {c.reason}
-                                    </li>
-                                ))}
-                            </ul>
-                        </div>
-                    )}
-                    <div className="settings-actions">
-                        <button
-                            className="btn-primary"
-                            onClick={handleSaveHours}
-                            disabled={savingHours || !!hoursError || shopHours.length === 0}
-                        >
-                            <Save size={16} />
-                            {savingHours ? " Saving..." : " Save opening hours"}
-                        </button>
-                    </div>
-                </section>
-
-                <section className="settings-section">
-                    <div className="settings-section-head">
                         <h2 className="settings-section-title">Customer booking window</h2>
                         <p className="settings-section-desc">
                             How near and how far ahead customers can book. Staff bookings ignore both.
@@ -404,12 +460,42 @@ const Settings = () => {
                     </div>
                 </section>
 
-                <div className="settings-actions">
-                    <button className="btn-primary" onClick={handleSave} disabled={saving || !canSave}>
-                        <Save size={16} />
-                        {saving ? " Saving..." : " Save"}
-                    </button>
-                </div>
+                {/* Replaces a lone Save at the very bottom of the page. Four tall sections meant that
+                    changing the first field put the only way to save it several screens away, with nothing
+                    on screen to say it existed - so the change looked applied when it wasn't.
+
+                    Sticky rather than fixed: it flows in the layout, so at the bottom of the page it takes
+                    its own space instead of covering the last section. Sticks because .admin-app is
+                    overflow-x: CLIP, not hidden - clip doesn't create a scroll container, so the document
+                    stays the scroller (the same property the sidebar relies on; see index.css).
+
+                    Only rendered when something is actually unsaved, which is what keeps a permanent bar
+                    from eating vertical space on a page you're only reading. */}
+                {rulesDirty && (
+                    <div className="settings-savebar" role="region" aria-label="Unsaved changes">
+                        <div className="settings-savebar__text">
+                            <strong>Unsaved changes</strong>
+                            {/* The offending field can be several screens up by the time the bar is read,
+                                so say why the button is dead rather than leaving it looking broken. */}
+                            {!canSave && (
+                                <span className="settings-savebar__hint settings-savebar__hint--error">
+                                    Fix the highlighted fields before saving.
+                                </span>
+                            )}
+                        </div>
+                        <div className="settings-savebar__actions">
+                            <button type="button" className="btn-secondary" onClick={handleDiscard} disabled={saving}>
+                                Discard
+                            </button>
+                            {/* "booking rules", not "Save": opening hours are the one thing on this page it
+                                doesn't commit, and they have their own button in their own section. */}
+                            <button className="btn-primary" onClick={handleSave} disabled={saving || !canSave}>
+                                <Save size={16} />
+                                {saving ? " Saving..." : " Save booking rules"}
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
         </>
     );
