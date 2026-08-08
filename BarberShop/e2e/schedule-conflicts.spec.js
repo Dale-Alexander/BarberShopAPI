@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { ADMIN_STATE } from "../playwright.config.js";
 import { BARBER_ONE, BARBER_TWO, SERVICES } from "./fixtures.js";
 import {
-    adminApi, guestApi, findBarberId, findServiceId, slotInDays, dayNameOf,
+    adminApi, guestApi, findBarberId, findServiceId, slotInDays, dayNameOf, dateOf,
     createPendingBooking, confirmAsCash, findBookingIdByStart,
     getSchedule, setShifts, FULL_WEEK_SHIFTS,
     createScheduleVersion, deleteScheduleVersion,
@@ -240,5 +240,94 @@ test.describe("narrowing and restoring a barber's hours", () => {
         expect(flagged, "the stranded booking should be in the worklist").toBeTruthy();
         expect(flagged.status).toBe("COMPLETED");
         expect(current.id).toBeTruthy();
+    });
+
+    /* C10. The third way to strand a booking, and the one C1-C5 never covered: CREATING a seasonal change
+       whose hours don't cover bookings already taken from its start date onward. Same 409, reached
+       through a different endpoint (POST /api/schedules/barber/{id}).
+
+       Driven from the page header rather than the foot of the page: "Schedule a seasonal change" used to
+       be a card below the seven-day grid, and is a modal opened from the header now. That move is the
+       other half of what this proves - the create dialog must STAND DOWN when the conflict modal takes
+       over, because the conflict's own button re-posts the create with confirmOrphaned. Two modals
+       stacked would leave "Save anyway" returning to a dialog for a change that had just been made. */
+    test("creating a seasonal change over an existing booking warns, and closes its own dialog", async ({ page }) => {
+        const startDateTime = slotInDays(36, 16, 0); // inside 09:00-17:30, outside the 12:00 below
+        const bookingId = await bookAndPay(startDateTime);
+
+        /* Narrowed through the API so it is SAVED. The create copies the version's saved shifts, never the
+           editor's draft - an uncommitted edit must not be baked into a new season - so narrowing in the
+           grid without saving would leave this creating a 09:00-17:30 copy and no conflict at all. */
+        const narrowed = FULL_WEEK_SHIFTS.map((s) =>
+            s.DayOfWeek === new Date(startDateTime).getDay() ? { ...s, EndTime: "12:00:00" } : s);
+        expect((await setShifts(api, scheduleId, narrowed)).status()).toBe(200);
+        await clearAllFlags(api); // that save flags the booking; the create is what this spec is about
+
+        await openSchedules(page, barberId);
+        await page.getByRole("button", { name: "Schedule a change" }).click();
+        const createModal = page.locator(".modal-content", { hasText: "Schedule a seasonal change" });
+        await expect(createModal).toBeVisible();
+
+        // From the booking's own date, so the version it creates governs that booking.
+        await createModal.locator("input[type='date']").fill(dateOf(startDateTime));
+        await createModal.getByRole("button", { name: "Create change" }).click();
+
+        const modal = page.locator(".sched-orphan-modal");
+        await expect(modal.getByRole("heading", { name: "Bookings outside the new hours" })).toBeVisible({ timeout: 15_000 });
+        await expect(modal.locator(".sched-orphan-list li", { hasText: "4:00 PM" })).toBeVisible();
+
+        // The create dialog stood down rather than stacking underneath the conflict.
+        await expect(createModal).toHaveCount(0);
+
+        /* And nothing has been written yet - same guarantee C1 makes for the save path. A create that had
+           already run would leave a second version behind for the admin to unpick. */
+        const versions = await getSchedule(api, barberId);
+        expect((Array.isArray(versions) ? versions : versions.versions).length).toBe(1);
+        expect(await needsReviewCount(api)).toBe(0);
+        expect(bookingId).toBeTruthy();
+    });
+
+    /* C11. The companion to C10, and the reason it had to be rewritten: a seasonal change is copied from
+       the version's SAVED shifts, never from what happens to be sitting in the editor.
+
+       It used to post the editor's state. That quietly baked an uncommitted edit into a brand-new season -
+       and since the control became a modal, it did so with the week hidden behind the overlay, so the
+       admin couldn't even see what was being copied. Two writes with two buttons: Save edits this version,
+       Create branches from what this version actually says.
+
+       No booking here on purpose. C10 owns the conflict; this owns which HOURS get copied, and a booking
+       would only add a way for it to fail for C10's reasons. */
+    test("a seasonal change copies the saved hours, not unsaved edits in the editor", async ({ page }) => {
+        // Resolved once: three calls to slotInDays could straddle midnight and disagree about the day.
+        const slot = slotInDays(37);
+        const from = dateOf(slot);
+        const dow = new Date(slot).getDay();
+
+        await openSchedules(page, barberId);
+        // Narrowed in the grid and deliberately NOT saved - the draft the create must ignore.
+        await setDayEndTime(page, dayNameOf(slot), "12:00");
+
+        await page.getByRole("button", { name: "Schedule a change" }).click();
+        const createModal = page.locator(".modal-content", { hasText: "Schedule a seasonal change" });
+
+        /* The admin is TOLD the draft won't travel. Silently ignoring it would trade one surprise for
+           another - they'd get a new season built from hours they could no longer see. */
+        await expect(createModal.locator(".sched-new-note")).toContainText("unsaved changes");
+
+        await createModal.locator("input[type='date']").fill(from);
+        await createModal.getByRole("button", { name: "Create change" }).click();
+        await expect(page.getByText("Schedule change created")).toBeVisible({ timeout: 15_000 });
+
+        /* The new version carries 17:30 - the SAVED hour - not the 12:00 left in the editor. This is the
+           whole assertion; everything above is arrangement. */
+        const versions = await getSchedule(api, barberId);
+        const list = Array.isArray(versions) ? versions : versions.versions;
+        const created = list.find((v) => v.effectiveFrom.startsWith(from));
+        expect(created, `no version starting ${from}. Got: ${list.map((v) => v.effectiveFrom).join(", ")}`).toBeTruthy();
+        expect(created.shifts.find((s) => s.dayOfWeek === dow).endTime).toMatch(/^17:30/);
+
+        // And the editor's own version was left alone - Create must not have doubled as a Save.
+        const original = list.find((v) => v.id !== created.id);
+        expect(original.shifts.find((s) => s.dayOfWeek === dow).endTime).toMatch(/^17:30/);
     });
 });

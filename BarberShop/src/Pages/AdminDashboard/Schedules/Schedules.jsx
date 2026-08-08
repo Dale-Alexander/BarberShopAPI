@@ -1,6 +1,6 @@
 import { useState, useEffect, useContext, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Plus, Trash2, Save, CalendarPlus } from "lucide-react";
+import { Plus, Trash2, Save, CalendarPlus, X } from "lucide-react";
 import { adminAxios } from "../../../Hooks/AxiosInterceptor";
 import useFetch from "../../../Hooks/useFetch";
 import { ToastContext } from "../../../Context/ToastContext";
@@ -78,6 +78,14 @@ const Schedules = () => {
     const [saving, setSaving] = useState(false);
     const [newFrom, setNewFrom] = useState(todayStr());
     const [creating, setCreating] = useState(false);
+    /* "Schedule a seasonal change" is a modal opened from the page header, not the card it used to be at
+       the foot of the page: that card sat BELOW the seven-day grid, so starting a new season meant
+       scrolling past the whole week to find it. Same placement as the create actions on Team and
+       Services. */
+    const [showNewVersion, setShowNewVersion] = useState(false);
+    // Mousedown target, so a drag that starts inside the modal and releases on the backdrop doesn't
+    // close it - the same guard the Team and Services create modals use.
+    const newVersionOverlayRef = useRef(null);
     // Set when a save/create would strand confirmed future bookings: { kind, message, affected[] }.
     const [orphanConflict, setOrphanConflict] = useState(null);
     /* The other direction: bookings that were flagged for falling outside the hours and now fit again,
@@ -291,7 +299,9 @@ const Schedules = () => {
      * answered - with no hours loaded every day would read "the shop has no hours set" on first paint, and
      * Save would be disabled before the admin had done anything wrong. */
     const hoursLoaded = shopHours.length > 0;
-    const dayErrors = days.map((ranges, dow) => {
+    // Takes the day-array to judge rather than closing over `days`: the editor's draft and the version's
+    // SAVED shifts are both run through it, and they can disagree (see savedDayErrors below).
+    const computeDayErrors = (source) => source.map((ranges, dow) => {
         const errors = ranges.map(() => null);
         // Overlap is a question about the order shifts RUN in, so it's judged on a sorted copy - but each
         // message is filed against the shift's ORIGINAL index, which is the one the row renders.
@@ -310,7 +320,38 @@ const Schedules = () => {
         });
         return errors;
     });
+    const dayErrors = computeDayErrors(days);
     const hasShiftError = dayErrors.some((e) => e.some(Boolean));
+
+    /* What "Schedule a change" copies: the version's SAVED shifts, not the editor's draft.
+     *
+     * It used to post `days`, which meant a half-finished edit nobody had committed was silently baked
+     * into a brand-new season - and the orphan check then warned about bookings stranded by hours that
+     * existed nowhere but this browser tab. Worse since the control became a modal: the week is behind
+     * the overlay, so the admin can't even see what's being copied. The two writes have separate
+     * buttons and should stay separate - Save edits this version, Create starts a new one from what
+     * this version actually says. */
+    const savedDays = versionToDays(selectedVersion);
+
+    /* The create's own gate, judged on what it copies. For a current or future version this can never
+     * fire: UpdateShopHours refuses any hours change that would leave a live schedule outside them, with
+     * no override. It stays because that veto has two deliberate exclusions, and both reach this screen:
+     *   - ENDED versions ("refusing an hours change over a schedule nobody works any more would be
+     *     unfixable"), which an admin may still copy a new season from; and
+     *   - a barber who was DEACTIVATED while the hours moved, whose current version can be outside them
+     *     by the time they're reactivated and selectable again.
+     * The two need different messages - see the modal - because only the second is fixable in place. */
+    const savedHasShiftError = computeDayErrors(savedDays).some((e) => e.some(Boolean));
+
+    /* Compared on a sorted copy: versionToDays sorts, and addShift keeps the editor sorted on insert, but
+       retyping a start time can leave `days` out of order without changing what it means. */
+    const sameShifts = (a, b) => a.every((ranges, dow) => {
+        const x = [...ranges].sort((p, q) => p.start.localeCompare(q.start));
+        const y = [...b[dow]].sort((p, q) => p.start.localeCompare(q.start));
+        return x.length === y.length && x.every((r, i) => r.start === y[i].start && r.end === y[i].end);
+    });
+    // Drives the modal's heads-up. Silently ignoring the draft would swap one surprise for another.
+    const editorDirty = selectedVersion != null && !sameShifts(days, savedDays);
 
     const handleSave = async (confirmOrphaned = false) => {
         if (hasShiftError || isReadOnly || !selectedVersion) return;
@@ -337,17 +378,18 @@ const Schedules = () => {
     const handleCreateVersion = async (confirmOrphaned = false) => {
         // isBarber, like the isReadOnly/canDelete guards on save and delete: the button is hidden either
         // way, this just keeps all three write paths refusing on the same terms.
-        if (creating || isBarber) return;
+        if (creating || isBarber || !selectedVersion || savedHasShiftError) return;
         setCreating(true);
         try {
-            // Seed the new season from whatever's currently in the editor, so the admin refines from the
-            // existing hours rather than a blank week.
+            // Seeded from the selected version's SAVED shifts (see savedDays) so the admin refines from
+            // hours the shop has actually committed to, rather than a blank week OR an uncommitted draft.
             const res = await adminAxios.post(`/api/Schedules/barber/${barberId}`, {
                 effectiveFrom: newFromValue,
-                shifts: daysToShifts(days),
+                shifts: daysToShifts(savedDays),
                 confirmOrphaned,
             });
             setOrphanConflict(null);
+            setShowNewVersion(false);
             showToast(
                 "Schedule change created",
                 `New hours take effect from ${fmtDate(newFromValue)}. The previous schedule ends the day before.`,
@@ -356,6 +398,10 @@ const Schedules = () => {
             await loadVersions(barberId, res.data.id);
         } catch (err) {
             if (err.response?.status === 409 && err.response.data?.requiresConfirmation) {
+                /* Stand this modal down as the conflict one takes over - otherwise the two stack, and
+                   "Save anyway" would return to a create dialog for a change that has just been made.
+                   That button calls handleCreateVersion(true), which no longer needs this open. */
+                setShowNewVersion(false);
                 setOrphanConflict({ kind: "create", ...err.response.data });
             } else {
                 showToast("Couldn't create schedule change", getErrorMessage(err));
@@ -395,7 +441,7 @@ const Schedules = () => {
 
     return (
         <>
-            <div className="page-header">
+            <div className="page-header page-header--inline">
                 <div className="page-header-text">
                     <h1 className="page-title">{isBarber ? "My Schedule" : "Schedules"}</h1>
                     <p className="page-subtitle">
@@ -407,6 +453,19 @@ const Schedules = () => {
                             : "Set each barber's working hours, split shifts and seasonal changes. Shifts must fit inside the shop's opening hours (Settings)."}
                     </p>
                 </div>
+                {/* Gated the same way the card it replaced was: hidden from barbers (it's a write), and
+                    only once a version is on screen, since the new season is seeded from it. Deliberately
+                    NOT gated on isReadOnly - an admin can start a new season from an ended version just as
+                    easily as from the current one. */}
+                {!isBarber && !versionsLoading && selectedVersion && (
+                    <button
+                        className="create-barber"
+                        onClick={() => { setNewFrom(earliestNewFrom); setShowNewVersion(true); }}
+                    >
+                        <CalendarPlus size={16} />
+                        SCHEDULE A CHANGE
+                    </button>
+                )}
             </div>
 
             <div className="sched-content">
@@ -543,13 +602,32 @@ const Schedules = () => {
                             </div>
                         )}
 
-                        {/* Sits OUTSIDE the !isReadOnly block above on purpose - an admin can start a new
-                            season from an ended version as easily as from the current one. But it is still
-                            a write, so a barber must not see it. */}
-                        {!isBarber && (
-                        <div className="sched-new">
-                            <h3><CalendarPlus size={18} /> Schedule a seasonal change</h3>
-                            <p>Create a new set of hours that takes over from a future date. It starts as a copy of the hours above — edit and save it after it's created. The latest schedule automatically ends the day before.</p>
+                    </>
+                ) : null}
+            </div>
+
+            {/* Was a permanent card below the week grid; it's the header button's modal now. Everything it
+                said is still said, just at the moment the admin asks for it instead of costing a scroll
+                past seven day-rows on every visit. */}
+            {showNewVersion && !isBarber && selectedVersion && (
+                <div className="modal-overlay"
+                    onMouseDown={(e) => (newVersionOverlayRef.current = e.target)}
+                    onClick={(e) => { if (newVersionOverlayRef.current === e.currentTarget) setShowNewVersion(false); }}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2>Schedule a seasonal change</h2>
+                            <button className="modal-close" onClick={() => setShowNewVersion(false)}><X size={20} /></button>
+                        </div>
+                        <div className="modal-body">
+                            {/* "the currently selected schedule", not "the hours above": the week grid is behind
+                                this modal rather than above it, and naming the selection is what makes it clear
+                                WHICH version is being copied when several chips are on screen. The copy is taken
+                                from whatever is in the editor - including edits that haven't been saved yet. */}
+                            <p className="sched-new-intro">
+                                Create a new set of hours that takes over from a future date. It starts as a copy
+                                of the hours present in the currently selected schedule — edit and save it after
+                                it's created. The latest schedule automatically ends the day before.
+                            </p>
                             {/* Only worth saying when it isn't just "not in the past" - i.e. when a change is
                                 already queued and IT is what sets the floor. Wording deliberately echoes the
                                 backend's rejection message so the two can't appear to disagree. */}
@@ -559,22 +637,47 @@ const Schedules = () => {
                                     so a new change can only start from {fmtDate(earliestNewFrom)}.
                                 </p>
                             )}
-                            <div className="sched-new-row">
-                                <label className="sched-field">
-                                    <span>Starts from</span>
-                                    <input type="date" min={earliestNewFrom} value={newFromValue}
-                                        onChange={(e) => setNewFrom(e.target.value)} />
-                                </label>
-                                {/* Same reason as the save button above - confirmOrphaned must not be the click event. */}
-                                <button className="btn-primary" onClick={() => handleCreateVersion()} disabled={creating || hasShiftError || !newFromValue}>
-                                    {creating ? "Creating…" : "Create change"}
-                                </button>
-                            </div>
+                            <label className="sched-field">
+                                <span>Starts from</span>
+                                <input type="date" min={earliestNewFrom} value={newFromValue}
+                                    onChange={(e) => setNewFrom(e.target.value)} />
+                            </label>
+                            {/* Unsaved edits are NOT copied (see savedDays), so say so rather than letting the
+                                admin assume the draft behind this overlay is what's being branched from. */}
+                            {editorDirty && !savedHasShiftError && (
+                                <p className="sched-new-note">
+                                    You have unsaved changes to this schedule. The new schedule is copied from
+                                    the <strong>saved</strong> hours, not your current edits — save them first
+                                    if you want them carried over.
+                                </p>
+                            )}
+                            {/* Why "Create change" is dead. Two different situations, and only one of them is
+                                something the admin can act on from this screen - an ended version's shifts are
+                                read-only, so telling them to go and fix the highlighted rows would be advice
+                                they cannot take. */}
+                            {savedHasShiftError && (
+                                <p className="sched-new-hint">
+                                    {isReadOnly
+                                        ? `These hours no longer fit the shop's opening hours, so they can't be
+                                           copied into a new schedule. Pick a different schedule to copy from, or
+                                           update the shop's opening hours in Settings.`
+                                        : `Fix the highlighted shifts and save them before creating a change —
+                                           the new schedule is copied from this schedule's saved hours.`}
+                                </p>
+                            )}
                         </div>
-                        )}
-                    </>
-                ) : null}
-            </div>
+                        <div className="modal-footer">
+                            <button className="btn-secondary" onClick={() => setShowNewVersion(false)} disabled={creating}>
+                                Cancel
+                            </button>
+                            {/* Same reason as the save button - confirmOrphaned must not be the click event. */}
+                            <button className="btn-primary" onClick={() => handleCreateVersion()} disabled={creating || savedHasShiftError || !newFromValue}>
+                                {creating ? "Creating…" : "Create change"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {orphanConflict && (
                 <div className="modal-overlay" onClick={() => setOrphanConflict(null)}>

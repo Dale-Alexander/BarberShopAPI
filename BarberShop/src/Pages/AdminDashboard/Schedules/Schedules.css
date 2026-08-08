@@ -227,8 +227,7 @@
     margin-top: 1.25rem;
 }
 
-.sched-actions .btn-primary,
-.sched-new .btn-primary {
+.sched-actions .btn-primary {
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
@@ -237,32 +236,23 @@
 /* .btn-secondary already supplies the dark surface and light text; only the destructive tint is ours. */
 .sched-delete { color: #e74c3c; }
 
-.sched-new {
-    margin-top: 2rem;
-    padding: 1.25rem;
-    border: 1px solid hsl(220, 20%, 20%);
-    border-radius: 12px;
-    background: var(--card-bg, #1f2a40);
-}
-
-.sched-new h3 {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 1rem;
-    margin: 0 0 0.5rem;
-    color: var(--grey-100);
-}
-
-.sched-new p {
+/* ── "Schedule a seasonal change" modal ──────────────────────────────────────────────────────
+   These three were a card at the foot of the page, under the seven-day grid - so reaching the one
+   control that starts a new season meant scrolling past the whole week every time. It's opened from
+   the page header now (same place Team and Services put their create actions) and the surface,
+   header and footer come from the shared .modal-content in index.css. */
+.sched-new-intro {
     font-size: 0.85rem;
     color: var(--muted-fg);
     margin: 0 0 1rem;
     line-height: 1.5;
 }
 
-/* Says which already-scheduled version is setting the floor on the date picker below. */
-.sched-new-floor {
+/* Two heads-up blocks in the same modal, sharing one amber treatment: which already-scheduled version is
+   setting the floor on the date picker, and (sched-new-note) that the editor holds unsaved edits which the
+   create deliberately will NOT copy. */
+.sched-new-floor,
+.sched-new-note {
     margin: 0 0 1rem;
     padding: 0.6rem 0.75rem;
     background: hsla(38, 92%, 62%, 0.08);
@@ -273,11 +263,14 @@
     color: var(--muted-fg);
 }
 
-.sched-new-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-end;
-    gap: 1rem;
+/* Why "Create change" is dead. The shift it's complaining about is behind the modal, so unlike the old
+   card - which sat in the same scroll as the day that was wrong - there'd otherwise be nothing on
+   screen explaining it. */
+.sched-new-hint {
+    margin: 0.9rem 0 0;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: #e74c3c;
 }
 
 /* Same surface as the shared .modal-content, so this modal and the ones on Team/Services match. */
