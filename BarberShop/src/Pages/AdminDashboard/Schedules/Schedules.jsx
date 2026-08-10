@@ -83,6 +83,11 @@ const Schedules = () => {
        scrolling past the whole week to find it. Same placement as the create actions on Team and
        Services. */
     const [showNewVersion, setShowNewVersion] = useState(false);
+    /* Removing a version deletes its shifts outright (the DB cascades) and can't be undone, and the only
+       thing that ever stopped to ask was the orphaned-bookings 409 - which only fires when bookings happen
+       to be in the way. Otherwise a single click destroyed a version silently. Riskier now that the button
+       sits in the header beside the benign "Schedule a change", where a misclick is easy. */
+    const [confirmDelete, setConfirmDelete] = useState(false);
     // Mousedown target, so a drag that starts inside the modal and releases on the backdrop doesn't
     // close it - the same guard the Team and Services create modals use.
     const newVersionOverlayRef = useRef(null);
@@ -100,6 +105,16 @@ const Schedules = () => {
      * shift / Save / Remove-schedule controls. */
     const isReadOnly = isBarber || (selectedVersion ? versionState(selectedVersion) === "ended" : true);
     const canDelete = !isBarber && selectedVersion && selectedVersion.effectiveTo == null && (versions ?? []).length > 1;
+
+    /* The version that reopens when this one is removed, named in the confirmation so the admin can see
+       what they're going back to rather than being told only what's going away. Mirrors DeleteVersion's
+       own pick - the barber's other versions ordered by EffectiveFrom, latest first - so the dialog can't
+       promise one version and the server restore a different one. */
+    const priorVersion = canDelete
+        ? (versions ?? [])
+            .filter((v) => v.id !== selectedVersion.id)
+            .reduce((latest, v) => (latest == null || v.effectiveFrom > latest.effectiveFrom ? v : latest), null)
+        : null;
 
     /* Earliest date a new seasonal change may start, mirroring CreateVersion's two guards exactly:
      *   - nothing may start in the past (EffectiveFrom < ShopClock.Today), and
@@ -353,6 +368,10 @@ const Schedules = () => {
     // Drives the modal's heads-up. Silently ignoring the draft would swap one surprise for another.
     const editorDirty = selectedVersion != null && !sameShifts(days, savedDays);
 
+    // Back to the version's saved shifts - the same seed the version-change effect uses, so discarding and
+    // reselecting the chip land on identical state.
+    const handleDiscard = () => setDays(versionToDays(selectedVersion));
+
     const handleSave = async (confirmOrphaned = false) => {
         if (hasShiftError || isReadOnly || !selectedVersion) return;
         setSaving(true);
@@ -414,6 +433,9 @@ const Schedules = () => {
     const handleDelete = async (confirmOrphaned = false) => {
         if (!canDelete) return;
         setSaving(true);
+        // Stood down here rather than in the click handler so the 409 path closes it too - otherwise the
+        // orphan modal would stack on top of a confirmation for a delete already in flight.
+        setConfirmDelete(false);
         try {
             const res = await adminAxios.delete(
                 `/api/Schedules/version/${selectedVersion.id}?confirmOrphaned=${confirmOrphaned}`);
@@ -441,7 +463,10 @@ const Schedules = () => {
 
     return (
         <>
-            <div className="page-header page-header--inline">
+            {/* Not page-header--inline (nowrap) any more: this header carries TWO buttons now, and pinning
+                them to the title's line squeezed both to unreadable widths on a phone. The wrapping base
+                header drops .page-header-actions under the title as a group instead. */}
+            <div className="page-header">
                 <div className="page-header-text">
                     <h1 className="page-title">{isBarber ? "My Schedule" : "Schedules"}</h1>
                     <p className="page-subtitle">
@@ -458,13 +483,36 @@ const Schedules = () => {
                     NOT gated on isReadOnly - an admin can start a new season from an ended version just as
                     easily as from the current one. */}
                 {!isBarber && !versionsLoading && selectedVersion && (
-                    <button
-                        className="create-barber"
-                        onClick={() => { setNewFrom(earliestNewFrom); setShowNewVersion(true); }}
-                    >
-                        <CalendarPlus size={16} />
-                        SCHEDULE A CHANGE
-                    </button>
+                    <div className="page-header-actions">
+                        <button
+                            className="create-barber"
+                            onClick={() => { setNewFrom(earliestNewFrom); setShowNewVersion(true); }}
+                        >
+                            <CalendarPlus size={16} />
+                            SCHEDULE A CHANGE
+                        </button>
+                        {/* Was at the very foot of the page under the seven day rows, which is exactly
+                            where "Schedule a change" used to be and was moved from for the same reason:
+                            you couldn't see it without scrolling past the whole week. Second of the pair,
+                            so the routine action reads first and the destructive one doesn't lead. It
+                            keeps the outline treatment rather than a second solid fill, which would make
+                            the two look equally encouraged. */}
+                        {canDelete && (
+                            <button
+                                className="sched-remove"
+                                onClick={() => setConfirmDelete(true)}
+                                disabled={saving}
+                            >
+                                <Trash2 size={16} />
+                                {/* "Remove this schedule" is the wrong words for a season that hasn't
+                                    started - nothing has been worked under it, so there's nothing to
+                                    remove yet; you're calling off a plan. */}
+                                {versionState(selectedVersion) === "upcoming"
+                                    ? "CANCEL THIS CHANGE"
+                                    : "REMOVE THIS SCHEDULE"}
+                            </button>
+                        )}
+                    </div>
                 )}
             </div>
 
@@ -496,6 +544,17 @@ const Schedules = () => {
                         </div>
                     )}
                 </div>
+
+                {/* Why the Remove button isn't in the header on this chip. Without it the button simply
+                    vanishes as you click along the timeline, which reads as a bug rather than a rule -
+                    and the rule isn't guessable: removal is an UNDO of the newest change, so it walks
+                    backwards from the end rather than picking any version off the row. */}
+                {!isBarber && !versionsLoading && selectedVersion && !canDelete && (versions ?? []).length > 1 && (
+                    <p className="sched-remove-note">
+                        Only the latest schedule can be removed — that restores the one before it. Earlier
+                        schedules are kept as a record of the hours already worked.
+                    </p>
+                )}
 
                 {versionsLoading ? (
                     <LoadingSpinner message="Loading schedule" color="#e0e0e0" inline />
@@ -582,23 +641,35 @@ const Schedules = () => {
                             ))}
                         </div>
 
-                        {!isReadOnly && (
-                            <div className="sched-actions">
-                                {/* Wrapped, not passed bare: handleSave's first parameter is confirmOrphaned,
-                                    so onClick={handleSave} handed it React's click event. That made the
-                                    request body circular, JSON.stringify threw inside axios, and the save
-                                    never reached the server - it just showed a generic error toast. */}
-                                <button className="btn-primary" onClick={() => handleSave()} disabled={saving || hasShiftError}>
-                                    <Save size={16} /> {saving ? "Saving…" : "Save changes"}
-                                </button>
-                                {canDelete && (
-                                    /* Wrapped for the same reason as the save button above: handleDelete's
-                                       first parameter is now confirmOrphaned, so passing it bare would send
-                                       React's click event as the confirmation flag. */
-                                    <button className="btn-secondary sched-delete" onClick={() => handleDelete()} disabled={saving}>
-                                        <Trash2 size={16} /> Remove this schedule
+                        {/* Was a plain row of buttons at the foot of the page. The week is seven tall rows,
+                            so editing Monday put the only way to save it below the fold with nothing on
+                            screen saying it existed - the same problem the Settings save bar was built for,
+                            and it now shares those styles. Only rendered against an actual unsaved edit, so
+                            reading a barber's hours costs no vertical space. */}
+                        {!isReadOnly && editorDirty && (
+                            <div className="savebar" role="region" aria-label="Unsaved changes">
+                                <div className="savebar__text">
+                                    <strong>Unsaved changes</strong>
+                                    {/* The offending shift can be several rows up by the time the bar is
+                                        read, so say why Save is dead rather than leaving it looking broken. */}
+                                    {hasShiftError && (
+                                        <span className="savebar__hint savebar__hint--error">
+                                            Fix the highlighted shifts before saving.
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="savebar__actions">
+                                    <button type="button" className="btn-secondary" onClick={handleDiscard} disabled={saving}>
+                                        Discard
                                     </button>
-                                )}
+                                    {/* Wrapped, not passed bare: handleSave's first parameter is confirmOrphaned,
+                                        so onClick={handleSave} handed it React's click event. That made the
+                                        request body circular, JSON.stringify threw inside axios, and the save
+                                        never reached the server - it just showed a generic error toast. */}
+                                    <button className="btn-primary" onClick={() => handleSave()} disabled={saving || hasShiftError}>
+                                        <Save size={16} /> {saving ? "Saving…" : "Save changes"}
+                                    </button>
+                                </div>
                             </div>
                         )}
 
@@ -673,6 +744,53 @@ const Schedules = () => {
                             {/* Same reason as the save button - confirmOrphaned must not be the click event. */}
                             <button className="btn-primary" onClick={() => handleCreateVersion()} disabled={creating || savedHasShiftError || !newFromValue}>
                                 {creating ? "Creating…" : "Create change"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Deliberately says nothing about whether the restored hours still fit the shop's opening
+                hours - they may not, since ended versions are exempt from the UpdateShopHours veto. That
+                warning wouldn't change the answer (you want the version gone either way, and the restored
+                one is editable the moment it's back), and the editor prints the real thing straight after:
+                per-day errors naming the exact violation on the exact rows. A confirmation line nobody acts
+                on only teaches people to click through the one that matters - the orphaned-bookings modal
+                below, which genuinely should stop them. */}
+            {confirmDelete && canDelete && (
+                <div className="modal-overlay" onClick={() => setConfirmDelete(false)}>
+                    {/* Its own class, not .sched-orphan-modal, even though they share a surface: this is the
+                        "are you sure" step and that one is the bookings-in-the-way step, and they can appear
+                        back to back in the same flow. One class for both would make them indistinguishable
+                        to anything selecting on it - which is exactly what the E2E specs do. */}
+                    <div className="sched-confirm-modal" onClick={(e) => e.stopPropagation()}>
+                        <h2>
+                            {versionState(selectedVersion) === "upcoming"
+                                ? "Cancel this scheduled change?"
+                                : "Remove this schedule?"}
+                        </h2>
+                        <p>
+                            <strong>{versionLabel(selectedVersion)}</strong> and its shifts will be deleted.
+                            {priorVersion && (
+                                <>
+                                    {" "}<strong>{versionLabel(priorVersion)}</strong> becomes this barber's
+                                    current schedule again, covering every date from{" "}
+                                    {fmtDate(priorVersion.effectiveFrom)} onwards.
+                                </>
+                            )}
+                            {" "}This can't be undone.
+                        </p>
+                        <div className="sched-orphan-actions">
+                            <button className="btn-secondary" onClick={() => setConfirmDelete(false)} disabled={saving}>
+                                Keep it
+                            </button>
+                            {/* Wrapped for the same reason as the save button: handleDelete's first
+                                parameter is confirmOrphaned, so passing it bare would send React's click
+                                event as the confirmation flag. */}
+                            <button className="sched-remove" onClick={() => handleDelete()} disabled={saving}>
+                                {saving
+                                    ? "Removing…"
+                                    : versionState(selectedVersion) === "upcoming" ? "Cancel change" : "Remove schedule"}
                             </button>
                         </div>
                     </div>

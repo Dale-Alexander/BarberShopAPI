@@ -105,6 +105,8 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+    /* Gap between the last day and the sticky save bar below it. */
+    margin-bottom: 1.25rem;
 }
 
 .sched-day {
@@ -220,21 +222,47 @@
    was written for, which would double up on this column's own gap. */
 .sched-day-errors .form-error { margin-top: 0; }
 
-.sched-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    margin-top: 1.25rem;
-}
+/* Save / Discard live in the shared sticky .savebar (index.css) now - the row of buttons that used to sit
+   here was below seven tall day rows, so it was off-screen the moment you edited anything.
 
-.sched-actions .btn-primary {
+   Removing a schedule, in the page header beside "Schedule a change", and again as the confirm dialog's
+   commit button. Outlined rather than filled: it sits next to a solid green primary, and two solid buttons
+   competing in a header reads as two equally-encouraged choices. Metrics match .create-barber so the pair
+   line up. #e74c3c is too dark to read as text on this page, hence the lighter foreground over its own
+   translucent wash. */
+.sched-remove {
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 8px;
+    background: hsla(6, 78%, 57%, 0.12);
+    color: hsl(6, 80%, 70%);
+    border: 1px solid hsla(6, 78%, 57%, 0.45);
+    padding: 8px 16px;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    font-family: inherit;
+    width: fit-content;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
 }
 
-/* .btn-secondary already supplies the dark surface and light text; only the destructive tint is ours. */
-.sched-delete { color: #e74c3c; }
+.sched-remove:hover:not(:disabled) {
+    background: hsla(6, 78%, 57%, 0.22);
+    border-color: hsla(6, 78%, 57%, 0.75);
+}
+
+.sched-remove:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Why the Remove button isn't in the header while an earlier chip is selected. Muted and small - it
+   answers a question the admin only asks once, and it shouldn't compete with the week below it. */
+.sched-remove-note {
+    margin: -0.75rem 0 1.25rem;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    color: var(--muted-fg);
+}
 
 /* ── "Schedule a seasonal change" modal ──────────────────────────────────────────────────────
    These three were a card at the foot of the page, under the seven-day grid - so reaching the one
@@ -273,8 +301,11 @@
     color: #e74c3c;
 }
 
-/* Same surface as the shared .modal-content, so this modal and the ones on Team/Services match. */
-.sched-orphan-modal {
+/* Same surface as the shared .modal-content, so these modals and the ones on Team/Services match.
+   .sched-confirm-modal is the delete "are you sure" step - same surface, separate class, because it and
+   the orphan modal can appear one after the other in a single flow. */
+.sched-orphan-modal,
+.sched-confirm-modal {
     background: hsl(220, 25%, 14%);
     border-radius: 12px;
     padding: 1.75rem;
@@ -285,9 +316,12 @@
     gap: 1rem;
 }
 
-.sched-orphan-modal h2 { font-size: 1.15rem; margin: 0; color: hsl(210, 20%, 90%); }
-.sched-orphan-modal p { margin: 0; font-size: 0.9rem; color: var(--muted-fg); line-height: 1.5; }
-.sched-orphan-modal strong { color: hsl(210, 20%, 90%); }
+.sched-orphan-modal h2,
+.sched-confirm-modal h2 { font-size: 1.15rem; margin: 0; color: hsl(210, 20%, 90%); }
+.sched-orphan-modal p,
+.sched-confirm-modal p { margin: 0; font-size: 0.9rem; color: var(--muted-fg); line-height: 1.5; }
+.sched-orphan-modal strong,
+.sched-confirm-modal strong { color: hsl(210, 20%, 90%); }
 
 .sched-orphan-list {
     list-style: none;
