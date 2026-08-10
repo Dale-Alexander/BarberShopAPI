@@ -28,6 +28,10 @@ const Settings = () => {
     const [shopHours, setShopHours] = useState([]);
     const [savingHours, setSavingHours] = useState(false);
     const [hoursConflicts, setHoursConflicts] = useState(null);
+    /* The hours as the server currently holds them, so Discard has something to go back to and Save knows
+       whether there's anything to send. Same reasoning as savedRules below - a comparison rather than a
+       dirty flag every onChange has to remember to set - and refreshed from the PUT's response on success. */
+    const [savedHours, setSavedHours] = useState(null);
     const { showToast } = useContext(ToastContext);
 
     /* What the server currently holds, so "is there anything to save" is a COMPARISON rather than a dirty
@@ -61,6 +65,7 @@ const Settings = () => {
             applyRules(rules);
             setSavedRules(rules);
             setShopHours(data.shopHours ?? []);
+            setSavedHours(data.shopHours ?? []);
         }
     }, [data]);
 
@@ -69,6 +74,29 @@ const Settings = () => {
     /* "17:31" -> "17:31:00", and left alone if it already carries seconds. The API's TimeOnly binding
        needs them; a <input type="time"> never supplies them at minute precision. */
     const withSeconds = (t) => (t && t.split(":").length === 2 ? `${t}:00` : t);
+
+    /* The other direction, for comparing only. The API sends TimeOnly as "09:00:00" while a time input
+       reports "09:00", so comparing the two raw would report every untouched day as edited the moment the
+       page re-rendered - and the Discard button would never go away. */
+    const hhmm = (t) => (t ?? "").slice(0, 5);
+
+    /* Same approach as rulesDirty below: a comparison against what the server holds, not a flag each
+       onChange has to remember to set. Drives both the Discard button and whether Save has anything to
+       send - a Save with nothing to save is a round trip that can only fail. */
+    const hoursDirty = savedHours != null && shopHours.some((d) => {
+        const saved = savedHours.find((s) => s.dayOfWeek === d.dayOfWeek);
+        return saved == null
+            || saved.isClosed !== d.isClosed
+            || hhmm(saved.openTime) !== hhmm(d.openTime)
+            || hhmm(saved.closeTime) !== hhmm(d.closeTime);
+    });
+
+    const handleDiscardHours = () => {
+        if (savedHours) setShopHours(savedHours);
+        // The refusal listed schedules blocking hours the admin has just thrown away, so it no longer
+        // describes anything on screen.
+        setHoursConflicts(null);
+    };
 
     // Popup-closing and next-field navigation for the seven pairs of time inputs below.
     const hoursGridRef = useRef(null);
@@ -107,7 +135,10 @@ const Settings = () => {
                     isClosed: d.isClosed,
                 })),
             });
+            // Re-seed AND re-baseline, so Discard disappears and Save goes quiet. Doing only the first
+            // would leave both sitting there against a stale baseline with nothing left to send.
             setShopHours(res.data);
+            setSavedHours(res.data);
             showToast("Opening hours saved", "The shop's opening hours have been updated.", "success");
         }
         catch (err) {
@@ -310,10 +341,23 @@ const Settings = () => {
                         </div>
                     )}
                     <div className="settings-actions">
+                        {/* Only once the grid differs from what the server holds - there's nothing to
+                            discard before that, and a permanent Discard next to a permanent Save reads as
+                            if the page is always in an unsaved state. */}
+                        {hoursDirty && (
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={handleDiscardHours}
+                                disabled={savingHours}
+                            >
+                                Discard
+                            </button>
+                        )}
                         <button
                             className="btn-primary"
                             onClick={handleSaveHours}
-                            disabled={savingHours || hasHoursError || shopHours.length === 0}
+                            disabled={savingHours || hasHoursError || shopHours.length === 0 || !hoursDirty}
                         >
                             <Save size={16} />
                             {savingHours ? " Saving..." : " Save opening hours"}
@@ -482,26 +526,21 @@ const Settings = () => {
                     changing the first field put the only way to save it several screens away, with nothing
                     on screen to say it existed - so the change looked applied when it wasn't.
 
-                    Sticky rather than fixed: it flows in the layout, so at the bottom of the page it takes
-                    its own space instead of covering the last section. Sticks because .admin-app is
-                    overflow-x: CLIP, not hidden - clip doesn't create a scroll container, so the document
-                    stays the scroller (the same property the sidebar relies on; see index.css).
-
-                    Only rendered when something is actually unsaved, which is what keeps a permanent bar
-                    from eating vertical space on a page you're only reading. */}
+                    The .savebar styles are shared with the Schedules week grid (see index.css), which had
+                    the identical problem below its seven day rows. */}
                 {rulesDirty && (
-                    <div className="settings-savebar" role="region" aria-label="Unsaved changes">
-                        <div className="settings-savebar__text">
+                    <div className="savebar" role="region" aria-label="Unsaved changes">
+                        <div className="savebar__text">
                             <strong>Unsaved changes</strong>
                             {/* The offending field can be several screens up by the time the bar is read,
                                 so say why the button is dead rather than leaving it looking broken. */}
                             {!canSave && (
-                                <span className="settings-savebar__hint settings-savebar__hint--error">
+                                <span className="savebar__hint savebar__hint--error">
                                     Fix the highlighted fields before saving.
                                 </span>
                             )}
                         </div>
-                        <div className="settings-savebar__actions">
+                        <div className="savebar__actions">
                             <button type="button" className="btn-secondary" onClick={handleDiscard} disabled={saving}>
                                 Discard
                             </button>
