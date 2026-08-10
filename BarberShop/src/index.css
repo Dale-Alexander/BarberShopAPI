@@ -185,6 +185,31 @@ body{
 /* Team + Services: keep the Add button pinned to the right even on small screens (don't wrap it). */
 .page-header--inline{ flex-wrap:nowrap; }
 
+/* Headers carrying more than one control (Schedules: Schedule a change + Remove this schedule).
+
+   A COLUMN, not a row. The second button only exists for some versions, so in a right-aligned row it
+   shunted "Schedule a change" sideways every time it appeared or disappeared - which is on every click
+   along the version chips. Stacked, the primary keeps one fixed spot and the optional one comes and goes
+   beneath it without moving anything.
+
+   align-items:stretch (with width:auto below, since both buttons set their own fit-content) so the pair
+   share the wider one's width instead of sitting ragged against the right edge. */
+.page-header-actions{
+    display:flex;
+    flex-direction:column;
+    align-items:stretch;
+    width:fit-content;
+    gap:10px;
+}
+.page-header-actions > *{
+    width:auto;
+    justify-content:center;
+}
+/* Under 480px the header is already stacked under the title; let the buttons have the full row. */
+@media (max-width:479px){
+    .page-header-actions{ width:100%; }
+}
+
 ::-webkit-scrollbar {
     width: 10px;
   }
@@ -315,26 +340,110 @@ body{
     gap: 8px;
     width: fit-content;
     cursor: pointer;
+    /* Transparent rather than absent: .btn-secondary carries a 1px border, and the two stand side by side
+       in every modal footer and save bar. Without this the secondary is 2px taller than the primary. */
+    border: 1px solid transparent;
 }
 
     .btn-primary:hover {
         opacity: 0.9;
     }
 
+/* Was hsl(220,25%,18%) with no border, which on the surfaces it actually sits on - modals at 14%, the save
+   bar at 16% - is a 2-4% lightness difference and nothing else. "Cancel" / "Discard" read as a hole in the
+   panel rather than a button, and the old hover (--muted, 20%) was barely a change either. Lifted to 24%
+   with an explicit border so the shape is visible before you hover it. */
 .btn-secondary {
     color: hsl(210, 20%, 90%);
-    background: hsl(220, 25%, 18%);
+    background: hsl(220, 25%, 24%);
+    border: 1px solid hsl(220, 20%, 34%);
     padding: 8px 20px;
     border-radius: 0.5rem;
     font-size: 0.875rem;
     font-weight: 500;
-    transition: background 0.2s;
+    transition: background 0.2s, border-color 0.2s;
     cursor: pointer;
 }
 
     .btn-secondary:hover {
-        background: var(--muted);
+        background: hsl(220, 25%, 30%);
+        border-color: hsl(220, 20%, 42%);
     }
+
+    .btn-secondary:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+/* ── Sticky unsaved-changes bar ───────────────────────────────────────────────────────────────
+   Shared by the two long-form editors - Settings' booking rules and the Schedules week grid. Both pages
+   are several screens tall, so a Save sitting in page flow is below the fold the moment you edit anything
+   near the top: the change looks applied when it isn't. Every other admin editor saves from a modal
+   footer, which is always on screen, so those don't need this.
+
+   Sticky rather than fixed: it flows in the layout, so at the bottom of the page it takes its own space
+   instead of covering the last section. Sticks because .admin-app is overflow-x: CLIP, not hidden - clip
+   doesn't create a scroll container, so the document stays the scroller (the same property the sidebar
+   relies on).
+
+   Rendered only while something is actually unsaved, which is what keeps it from eating vertical space on
+   a page you're only reading. `bottom: -1px` rather than 0 so the rounded card doesn't leave a hairline of
+   page showing beneath it on fractional-scale displays. */
+.savebar {
+    position: sticky;
+    bottom: -1px;
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid hsl(220, 20%, 26%);
+    border-radius: 10px;
+    /* Opaque, not the translucent card tint: content scrolls UNDER this, and anything see-through turns
+       the label into a smear of whatever field is passing behind it. */
+    background: hsl(220, 25%, 16%);
+    box-shadow: 0 -6px 20px hsl(220, 30%, 6%, 0.55);
+}
+
+.savebar__text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 0.88rem;
+    color: var(--grey-100);
+}
+
+.savebar__hint {
+    font-size: 0.8rem;
+    color: var(--muted-fg, #a0a0a0);
+}
+
+.savebar__hint--error {
+    color: #e74c3c;
+}
+
+.savebar__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+/* Below 480px the two buttons side by side leave each too narrow to read; give the row its own line and
+   let them share it. */
+@media (max-width: 479px) {
+    .savebar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .savebar__actions > * {
+        flex: 1;
+        justify-content: center;
+    }
+}
   
   /* Track */
   ::-webkit-scrollbar-track {
