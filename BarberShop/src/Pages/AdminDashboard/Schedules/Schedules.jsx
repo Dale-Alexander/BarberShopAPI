@@ -106,15 +106,6 @@ const Schedules = () => {
     const isReadOnly = isBarber || (selectedVersion ? versionState(selectedVersion) === "ended" : true);
     const canDelete = !isBarber && selectedVersion && selectedVersion.effectiveTo == null && (versions ?? []).length > 1;
 
-    /* The version that reopens when this one is removed, named in the confirmation so the admin can see
-       what they're going back to rather than being told only what's going away. Mirrors DeleteVersion's
-       own pick - the barber's other versions ordered by EffectiveFrom, latest first - so the dialog can't
-       promise one version and the server restore a different one. */
-    const priorVersion = canDelete
-        ? (versions ?? [])
-            .filter((v) => v.id !== selectedVersion.id)
-            .reduce((latest, v) => (latest == null || v.effectiveFrom > latest.effectiveFrom ? v : latest), null)
-        : null;
 
     /* Earliest date a new seasonal change may start, mirroring CreateVersion's two guards exactly:
      *   - nothing may start in the past (EffectiveFrom < ShopClock.Today), and
@@ -769,16 +760,17 @@ const Schedules = () => {
                                 ? "Cancel this scheduled change?"
                                 : "Remove this schedule?"}
                         </h2>
+                        {/* Dated from the version being REMOVED, never from the one being restored.
+                            Two reasons. Its label ("Schedule until 30 Jun") stops being true the instant
+                            it reopens open-ended, and its effectiveFrom can be the 2020-01-01 sentinel the
+                            back-fill migration gives every pre-existing barber - a date chosen to be
+                            safely past, not one to show anybody. The removed version's own start is always
+                            a real date somebody picked, and it's the one that answers the actual question:
+                            from when do the old hours apply again. */}
                         <p>
                             <strong>{versionLabel(selectedVersion)}</strong> and its shifts will be deleted.
-                            {priorVersion && (
-                                <>
-                                    {" "}<strong>{versionLabel(priorVersion)}</strong> becomes this barber's
-                                    current schedule again, covering every date from{" "}
-                                    {fmtDate(priorVersion.effectiveFrom)} onwards.
-                                </>
-                            )}
-                            {" "}This can't be undone.
+                            The schedule before it takes over again from{" "}
+                            {fmtDate(selectedVersion.effectiveFrom)} onwards. This can't be undone.
                         </p>
                         <div className="sched-orphan-actions">
                             <button className="btn-secondary" onClick={() => setConfirmDelete(false)} disabled={saving}>
