@@ -205,13 +205,20 @@ test.describe("narrowing and restoring a barber's hours", () => {
        wording is its own ("the hours this restores", not "the new hours") because nothing new is being
        proposed. */
     test("removing a schedule version warns about bookings outside the hours it restores", async ({ page }) => {
-        // A later version with LATE hours, and a booking inside them that the 17:30 original won't cover.
+        /* Arranged the other way up from how this first read. It used to give the NEW version late 20:00
+           hours and leave the original at 17:30 - but a shift may not run past the shop's closing time,
+           and the fixture shop closes at 17:30, so that create is refused now and the spec never reached
+           its own subject. Narrowing the ORIGINAL instead proves the identical thing - removal restores
+           hours that no longer cover a booking - with every version inside the shop's opening hours. */
+        const narrow = FULL_WEEK_SHIFTS.map((s) => ({ ...s, EndTime: "12:00:00" }));
+        expect((await setShifts(api, scheduleId, narrow)).status()).toBe(200);
+
+        // The later version puts the afternoon back, and the booking below is taken under it.
         const from = slotInDays(34, 0, 0).split("T")[0];
-        const late = FULL_WEEK_SHIFTS.map((s) => ({ ...s, EndTime: "20:00:00" }));
-        const created = await createScheduleVersion(api, barberId, { effectiveFrom: from, shifts: late });
+        const created = await createScheduleVersion(api, barberId, { effectiveFrom: from, shifts: FULL_WEEK_SHIFTS });
         expect(created.status(), await created.text()).toBe(200);
 
-        const startDateTime = slotInDays(35, 19, 0); // inside 20:00, outside the restored 17:30
+        const startDateTime = slotInDays(35, 16, 0); // inside the new 17:30, outside the restored 12:00
         const bookingId = await bookAndPay(startDateTime);
 
         const versions = await getSchedule(api, barberId);
@@ -222,13 +229,24 @@ test.describe("narrowing and restoring a barber's hours", () => {
         await page.locator(".sched-version-chip").last().click();
         /* By its exact name, not /Remove/: every shift row carries a "Remove shift" icon button whose
            title becomes its accessible name, so a loose match hits one of those first and quietly edits
-           the week instead of deleting the version. */
-        await page.getByRole("button", { name: "Remove this schedule" }).click();
+           the week instead of deleting the version.
+
+           "Cancel this change", not "Remove this schedule": this version starts 34 days out, so it hasn't
+           begun - nothing has been worked under it and the button says so. The control also lives in the
+           page header now rather than below the seven-day grid. */
+        await page.getByRole("button", { name: "Cancel this change" }).click();
+
+        /* The delete asks first. It used to fire straight from the click, so a version and its shifts went
+           in one press with no undo - the orphan modal below only appears when bookings happen to be in the
+           way. Its own class, because both dialogs are on screen in this flow one after the other. */
+        const confirm = page.locator(".sched-confirm-modal");
+        await expect(confirm.getByRole("heading", { name: "Cancel this scheduled change?" })).toBeVisible();
+        await confirm.getByRole("button", { name: "Cancel change" }).click();
 
         const modal = page.locator(".sched-orphan-modal");
         await expect(modal.getByRole("heading", { name: "Bookings outside the restored hours" })).toBeVisible({ timeout: 15_000 });
         await expect(modal).toContainText("the hours this restores");
-        await expect(modal.locator(".sched-orphan-list li", { hasText: "7:00 PM" })).toBeVisible();
+        await expect(modal.locator(".sched-orphan-list li", { hasText: "4:00 PM" })).toBeVisible();
 
         // Confirm, and the booking lands in the worklist rather than being cancelled.
         await page.getByRole("button", { name: "Remove anyway" }).click();
