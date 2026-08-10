@@ -529,6 +529,39 @@ namespace BarberShopAPI.Tests
             Assert.Contains("can't start in the past", (await ReadJson(response)).GetProperty("message").GetString());
         }
 
+        /* The create path's half of the "these fit again" report. Covered on PUT since it was built, but a
+         * new version replaces the current one's hours for every date it governs, so it can rescue bookings
+         * the same way an edit can - and the admin needs telling, because widening never stops to ask. */
+        [Fact]
+        public async Task Creating_a_version_reports_the_bookings_that_fit_again()
+        {
+            var (barberId, scheduleId, bookingId) = await ArrangeBarberWithLateBooking();
+
+            // Strand the 16:00 booking first, so it is genuinely in the worklist carrying the hours note.
+            var narrowed = await Client.PutAsync($"/api/schedules/version/{scheduleId}",
+                Body(new { shifts = AllDays(9, 0, 15, 0), confirmOrphaned = true }));
+            Assert.Equal(HttpStatusCode.OK, narrowed.StatusCode);
+
+            /* A new season starting BEFORE the booking, with hours that cover it again. Nothing is stranded
+             * by this, so it saves without a 409 - which is exactly the case the report exists for. */
+            var created = await Client.PostAsync($"/api/schedules/barber/{barberId}",
+                Body(new
+                {
+                    effectiveFrom = ShopClock.Today.AddDays(10),
+                    shifts = AllDays(9, 0, 17, 30),
+                    confirmOrphaned = false
+                }));
+
+            Assert.Equal(HttpStatusCode.OK, created.StatusCode);
+            var listed = (await ReadJson(created)).GetProperty("backInsideHours").EnumerateArray().ToList();
+            Assert.Single(listed);
+            Assert.Equal(bookingId, listed[0].GetProperty("id").GetInt32());
+
+            // Reported, never cleared - same rule as the edit path. The note may carry other problems.
+            using var db = NewDb();
+            Assert.True((await db.Bookings.SingleAsync(b => b.Id == bookingId)).NeedsReview);
+        }
+
         // ---------------------------------------------------------------------------------------------
         // DELETE /api/schedules/version/{id}
         // ---------------------------------------------------------------------------------------------
@@ -684,6 +717,80 @@ namespace BarberShopAPI.Tests
             Assert.Equal(CancellationReason.ScheduleChange, booking.CancellationReason);
             Assert.False(booking.NeedsReview);
             Assert.Empty(Factory.EnqueuedEmailJobs());
+        }
+
+        /* Removal walks BACKWARDS from the end of the chain - it is an undo of the newest change, not a
+         * free-standing "delete this one". A superseded version is refused outright, which is what keeps
+         * the chain contiguous: taking one out of the middle would leave a stretch of dates governed by
+         * nothing, and no rule the server could apply would say which neighbour should cover it. */
+        [Fact]
+        public async Task A_superseded_version_cannot_be_deleted()
+        {
+            int adminId, priorScheduleId;
+            using (var db = NewDb())
+            {
+                var admin = db.AddUser(Role.ADMIN);
+                var barber = db.AddBarber();
+                var prior = db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30), ShopClock.Today.AddDays(9));
+                db.AddSchedule(barber.Id, ShopClock.Today.AddDays(10), null);
+
+                adminId = admin.Id;
+                priorScheduleId = prior.Id;
+            }
+            Client.Authenticate(adminId, Role.ADMIN, tokenVersion: 0);
+
+            var response = await Client.DeleteAsync($"/api/schedules/version/{priorScheduleId}");
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Contains("Only the current schedule",
+                (await ReadJson(response)).GetProperty("message").GetString());
+
+            // Refused means refused: both versions are still there and the chain is unchanged.
+            using var assertDb = NewDb();
+            Assert.Equal(2, await assertDb.BarberSchedules.CountAsync());
+            Assert.NotNull(await assertDb.BarberSchedules.FirstOrDefaultAsync(s => s.Id == priorScheduleId));
+        }
+
+        /* The delete path's half of the "these fit again" report - the counterpart to the 409 above. An undo
+         * restores the prior hours, and those can be WIDER than the ones being removed, so the same action
+         * that strands nothing may rescue bookings a previous mistake flagged. */
+        [Fact]
+        public async Task Deleting_a_version_reports_the_bookings_that_fit_again()
+        {
+            int adminId, currentScheduleId, bookingId;
+            using (var db = NewDb())
+            {
+                var admin = db.AddUser(Role.ADMIN);
+                var barber = db.AddBarber();
+                db.SetAllShopHours(new TimeOnly(8, 0), new TimeOnly(20, 0));
+                // Prior version is WIDE; the current one is narrow and is what stranded the booking.
+                db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30), ShopClock.Today.AddDays(9),
+                    Enumerable.Range(0, 7).Select(d => ((DayOfWeek)d, new TimeOnly(8, 0), new TimeOnly(20, 0))).ToArray());
+                var current = db.AddSchedule(barber.Id, ShopClock.Today.AddDays(10), null,
+                    Enumerable.Range(0, 7).Select(d => ((DayOfWeek)d, new TimeOnly(9, 0), new TimeOnly(12, 0))).ToArray());
+                bookingId = db.AddBooking(barber.Id, TestData.FutureAt(20, 16), BookingStatus.COMPLETED).Id;
+
+                adminId = admin.Id;
+                currentScheduleId = current.Id;
+            }
+            Client.Authenticate(adminId, Role.ADMIN, tokenVersion: 0);
+
+            /* Flag it through the real path rather than by hand, so it carries the marker the report filters
+             * on. Re-saving the current version's own hours strands the 16:00 booking against them. */
+            var flagged = await Client.PutAsync($"/api/schedules/version/{currentScheduleId}",
+                Body(new { shifts = AllDays(9, 0, 12, 0), confirmOrphaned = true }));
+            Assert.Equal(HttpStatusCode.OK, flagged.StatusCode);
+
+            var removed = await Client.DeleteAsync($"/api/schedules/version/{currentScheduleId}");
+
+            // Restoring the wider hours strands nothing, so no confirmation - but it does rescue the booking.
+            Assert.Equal(HttpStatusCode.OK, removed.StatusCode);
+            var listed = (await ReadJson(removed)).GetProperty("backInsideHours").EnumerateArray().ToList();
+            Assert.Single(listed);
+            Assert.Equal(bookingId, listed[0].GetProperty("id").GetInt32());
+
+            using var assertDb = NewDb();
+            Assert.True((await assertDb.Bookings.SingleAsync(b => b.Id == bookingId)).NeedsReview);
         }
 
         [Fact]
