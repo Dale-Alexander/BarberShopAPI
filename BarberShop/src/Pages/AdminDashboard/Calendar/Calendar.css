@@ -96,6 +96,41 @@
     border-color: var(--blue-300) !important;
 }
 
+/* A long closure title is truncated with an ellipsis, on one line.
+   FullCalendar clips it with overflow: hidden and no text-overflow, so it ended mid-word with no
+   sign anything was missing - "Closed for the ann" reads like the whole reason. The ellipsis says
+   there is more without costing any height.
+
+   Deliberately NOT wrapped. Chips stay one line tall, which is what dayMaxEvents budgets the day
+   cell against: taller chips mean fewer fit, and the rest collapse into a "+1 more" link that hides
+   the closure completely. Truncating one title beats hiding an entire entry.
+
+   No min-width on the title, deliberately. A floor stops it shrinking, and since the time beside it
+   will not shrink either, the row grows past the day cell and the title spills outside the box - a
+   part-day closure reading "Closed" out in the margin. (min(3.5em, 100%) does not save it: the 100%
+   resolves against the whole chip, not the space left after the time.) Keeping the default
+   min-width: 0 lets the title absorb whatever room is left and ellipsis inside it.
+
+   The trade is real and this is the side to take: at the narrowest widths a part-day title shrinks
+   to "..." or disappears, because a dot, a start, an end and a reason genuinely do not fit one month
+   cell. Staying inside the box beats a floor that pushes text out of it. If the title needs to be
+   guaranteed instead, the thing to drop is the end time on small screens, not the floor. */
+.fc-daygrid-event .fc-event-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* So a range can never split into "09:00 -" / "09:45", which reads as two times at a glance. */
+.fc-daygrid-event .fc-event-time {
+    white-space: nowrap;
+}
+
+/* Belt and braces on the chip itself: whatever the flex row does, nothing escapes the day cell. */
+.fc-daygrid-dot-event {
+    overflow: hidden;
+}
+
 /* ══════════════════════════════════════
    DESKTOP: toggle hidden, sidebar visible
 ══════════════════════════════════════ */
