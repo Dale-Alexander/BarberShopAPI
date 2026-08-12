@@ -96,7 +96,14 @@ namespace BarberShopAPI.Common
                     + reason switch
                     {
                         CancellationReason.BarberUnavailable => " because their barber is no longer available.",
-                        CancellationReason.ScheduleChange => " because their barber no longer works at that time.",
+                        /* "our availability", matching the email this stands in for (see the comment on
+                         * sendBookingCancelledDueToScheduleChangeEmailAsync). ScheduleChange no longer has one
+                         * cause: it also covers a slot left outside the SHOP's opening hours, and one left
+                         * outside them by a POLICY change rather than a rota edit - lowering grace-after-close
+                         * strands a pending booking that was placed legitimately under the old value. This is
+                         * a script for a phone call, so telling the admin to say the barber's hours changed is
+                         * a specific claim the customer may well check, and be right to. */
+                        CancellationReason.ScheduleChange => " because our availability for that time has changed.",
                         _ => " by a shop closure."
                     }
                     + (refundIssued ? " Their card payment has been refunded in full." : ""));
