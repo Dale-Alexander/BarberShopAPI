@@ -21,7 +21,7 @@ import {
     parse,
     addMinutes
 } from "date-fns";
-import { ChevronLeft, ChevronRight, SquarePen, UserRound, Scissors, ArrowRight, Calendar } from "lucide-react";
+import { ChevronLeft, ChevronRight, SquarePen, Scissors, ArrowRight, Calendar } from "lucide-react";
 import useFetch from "../../Hooks/useFetch";
 import LoadingSpinner from "../../Components/LoadingSpinner/LoadingSpinner";
 import ErrorState from "../../Components/ErrorState/ErrorState";
@@ -352,7 +352,6 @@ const BarberDateAndTime = () => {
             return c.isFullDay && day >= start && day <= end;
         }
         const shopWide = shopWideClosures.some(isWithinClosure);
-        if (selectedBarberId === "All") return shopWide;
         const selectedBarber = barbers.find(b => b.barberId === selectedBarberId);
         const barberSpecific = selectedBarber?.dateClosures.some(isWithinClosure);
         return shopWide || barberSpecific;
@@ -393,11 +392,6 @@ const BarberDateAndTime = () => {
     const slotUniverse = (date) => {
         if (!date || !selectedBarberId) return [];
         if (!isCustomer) return staffGridSlots(date);
-        if (selectedBarberId === "All") {
-            const set = new Set();
-            barbers.forEach((b) => scheduleSlots(b.schedule, date, slotStepMin).forEach((s) => set.add(s)));
-            return [...set].sort();
-        }
         const barber = barbers.find((b) => b.barberId === selectedBarberId);
         return scheduleSlots(barber?.schedule, date, slotStepMin);
     };
@@ -409,24 +403,6 @@ const BarberDateAndTime = () => {
         if (!date) return [];
         if (!selectedBarberId) return [];
         const universe = slotUniverse(date);
-        if (selectedBarberId === "All") {
-            return universe.filter(slot => {//FOR EVERY SLOT
-                const slotStart = parse(slot, "HH:mm", date);
-                const slotEnd = addMinutes(slotStart, slotDurationMin);
-
-                return barbers.some(b => {//IS THERE ANY BARBER
-                    // ?? [] guards the brief window where a barber is selected but `barbers` hasn't
-                    // loaded yet (or a booking has no bookings array) - otherwise .some throws on undefined.
-                    const bookingsOnDay = b?.bookings?.filter(bk => isSameDay(new Date(bk.startDateTime), date)) ?? [];
-                    return !bookingsOnDay.some(bk => {//WHOSE BOOKINGS DO NOT OVERLAP THIS SLOT
-                        const bkStart = new Date(bk.startDateTime);
-                        const bkBlockStart = addMinutes(bkStart, -bufferMin);
-                        const bkEnd = addMinutes(bkStart, bk.durationMin + bufferMin);
-                        return slotStart < bkEnd && slotEnd > bkBlockStart;
-                    });
-                });
-            });
-        }
         const barber = barbers.find(b => selectedBarberId === b.barberId);
         // ?? [] guards the window where selectedBarberId is set (e.g. a barber auto-selected onto their
         // own chair) but `barbers` hasn't loaded yet, so `barber` is momentarily undefined.
@@ -468,26 +444,34 @@ const BarberDateAndTime = () => {
     };
 
     /* Mirrors backend ScheduleResolver.FitsWithinAShift: does [time, time+duration] fit ENTIRELY within
-     * one of the barber's shifts for `date`? Grace (minutes past close) applies only to the day's last
-     * shift, never a split-shift lunch gap. No shifts that day => false (fail closed). */
+     * one of the barber's shifts for `date`? Grace (minutes past CLOSING) reaches at most one shift - the
+     * day's last, and only when it actually runs to closing time. Never a split-shift lunch gap, and never
+     * a shift that finishes while the shop is still open: grace is granted to the shift only so that Req 2's
+     * normal case (shift ends at closing) doesn't fail here after clearing the shop's own check. A barber
+     * who finishes at 13:00 in a shop open until 17:30 isn't owed 13:30 by a setting called after-close.
+     * The start must be strictly inside the shift for the same reason it must be strictly before closing
+     * below - grace lengthens an appointment that began during the shift, it doesn't add one after it.
+     * No shifts that day => false (fail closed). */
     const slotFitsBarberSchedule = (time, date, barber) => {
         const shifts = shiftsForDate(barber?.schedule, date);
         if (shifts.length === 0) return false;
+        const hours = shopHoursForDate(shopHours, date);
         const startMin = toMin(time);
         const endMin = startMin + slotDurationMin;
         for (let i = 0; i < shifts.length; i++) {
-            const isLast = i === shifts.length - 1;
-            const allowedEnd = shifts[i].endMin + (isLast ? graceMinutesAfterClose : 0);
-            if (startMin >= shifts[i].startMin && endMin <= allowedEnd) return true;
+            const closesTheDay = i === shifts.length - 1
+                && hours != null && shifts[i].endMin >= hours.closeMin;
+            const allowedEnd = shifts[i].endMin + (closesTheDay ? graceMinutesAfterClose : 0);
+            if (startMin >= shifts[i].startMin && startMin < shifts[i].endMin && endMin <= allowedEnd)
+                return true;
         }
         return false;
     };
 
     /* Does this slot fall outside the selected barber's scheduled hours for the date? Mirrors the
      * backend's ScheduleResolver, including grace past the day's last shift and the duration being
-     * booked. Skipped for "All", where there is no one barber's schedule to measure against. */
+     * booked. */
     const isTimeSlotOutsideSchedule = (time, date = selectedDate) => {
-        if (selectedBarberId === "All") return false;
         const barber = barbers.find((b) => b.barberId === selectedBarberId);
         return !slotFitsBarberSchedule(time, date, barber);
     };
@@ -517,6 +501,12 @@ const BarberDateAndTime = () => {
         if (!hours) return shopHours.length > 0 ? { kind: "closed" } : null;
         const startMin = toMin(time);
         if (startMin < hours.openMin) return { kind: "before-open", at: toHHMM(hours.openMin) };
+        /* Starting AT or after closing is its own case, not an overrun, and has to be tested before the
+         * overrun below would let it through: at a 17:30 close with 30 minutes of grace, 17:30-18:00 ends
+         * exactly on the limit, so the end test alone reported no breach at all and the chip rendered as an
+         * ordinary slot. Only reachable with extended hours on - the ordinary grid stops one step short of
+         * close - which made this the one slot that toggle revealed without also guarding it. */
+        if (startMin >= hours.closeMin) return { kind: "after-close", at: toHHMM(hours.closeMin) };
         if (startMin + slotDurationMin > hours.closeMin + graceMinutesAfterClose)
             return { kind: "overruns", at: toHHMM(hours.closeMin) };
         return null;
@@ -525,7 +515,7 @@ const BarberDateAndTime = () => {
     /* The same question for the selected barber's shifts. "Runs past the end of their shift" and "they
      * aren't working then" read very differently to whoever has to agree to it. */
     const barberHoursBreach = (time, date = selectedDate) => {
-        if (selectedBarberId === "All" || !date) return null;
+        if (!date) return null;
         const barber = barbers.find((b) => b.barberId === selectedBarberId);
         const shifts = shiftsForDate(barber?.schedule, date);
         if (shifts.length === 0) return { kind: "day-off" };
@@ -546,14 +536,12 @@ const BarberDateAndTime = () => {
     const selectedBarberName = barbers.find((b) => b.barberId === selectedBarberId)?.barberName ?? "this barber";
 
     /* Staff-only: which boundaries does the currently SELECTED slot step outside? Drives the
-     * warn-and-confirm on the Next button and which of the three messages it shows.
-     *
-     * The shop-hours half is asked even when the barber is "All", where there is no one schedule to
-     * measure against - the shop's hours don't depend on which barber it is. */
+     * warn-and-confirm on the Next button and which of the three messages it shows. The two are asked
+     * independently - a slot can sit inside the shop's hours and outside the barber's, or the reverse. */
     const selectedSlotOverrides = () => {
         if (isCustomer || !selectedTime || !selectedDate || !selectedBarberId)
             return { schedule: false, shop: false, any: false };
-        const schedule = selectedBarberId !== "All" && isTimeSlotOutsideSchedule(selectedTime, selectedDate);
+        const schedule = isTimeSlotOutsideSchedule(selectedTime, selectedDate);
         const shop = isTimeSlotOutsideShopHours(selectedTime, selectedDate);
         return { schedule, shop, any: schedule || shop };
     };
@@ -567,6 +555,10 @@ const BarberDateAndTime = () => {
         if (!breach) return null;
         if (breach.kind === "closed") return `the shop is closed on ${dayName}s`;
         if (breach.kind === "before-open") return `the shop doesn't open until ${breach.at}`;
+        // Distinct from the overrun below for the same reason before-open is: an appointment starting at or
+        // after closing isn't one that runs over, it's one that happens after the shop has shut, and saying
+        // "it would run past closing" of a 17:30 slot in a shop that closes at 17:30 reads as nonsense.
+        if (breach.kind === "after-close") return `the shop has already closed by then (${breach.at})`;
         return `it would run past closing (${breach.at})`;
     };
     /* `subject` and `possessive` are passed in rather than derived, because the same sentence is said to
@@ -625,7 +617,6 @@ const BarberDateAndTime = () => {
             .filter(c => !c.isFullDay && c.startDate === dateStr && c.startTime && c.endTime);
 
         const shopWide = partialOnDay(shopWideClosures).some(overlaps);
-        if (selectedBarberId === "All") return shopWide;
         const selectedBarber = barbers.find(b => b.barberId === selectedBarberId);
         return shopWide || partialOnDay(selectedBarber?.dateClosures).some(overlaps);
     }
@@ -932,26 +923,6 @@ const BarberDateAndTime = () => {
                             <h2 className="bp-section-title">Choose Your Barber</h2>
                             <p className="bp-section-sub">Select a barber to get started</p>
                             <div className="bp-barber-grid">
-                                {/*barbers.length > 1 && (
-                                        <motion.button
-                                            key="any-available"
-                                            className={`bp-barber-card ${selectedBarberId === "All" ? "selected" : ""}`}
-                                            onClick={() => setSelectedBarberId("All")}
-                                            whileHover={{ y: -4 }}
-                                            whileTap={{ scale: 0.97 }}
-                                        >
-                                            <div className="bp-barber-avatar-wrap">
-                                                <div className="bp-barber-avatar bp-barber-avatar--icon">
-                                                    <UserRound size={32}/>
-                                                </div>
-                                                <span className={`bp-status-dot online`} />
-                                            </div>
-                                            <span className="bp-barber-name">Any Available</span>
-                                            <span className={`bp-barber-status available`}>
-                                                Auto-assigned
-                                            </span>
-                                        </motion.button>
-                                    ) */}
                                 {barberBookingsloading && barbers.length === 0 ? (
                                     // Availability is still loading - hold the barber grid with a spinner
                                     // rather than showing an empty "Choose Your Barber" strip on first paint.

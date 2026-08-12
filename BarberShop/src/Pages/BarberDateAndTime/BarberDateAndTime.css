@@ -649,14 +649,6 @@
     font-size: 0.95rem;
 }
 
-.bp-barber-avatar--icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background-color: #f0ede6; /* match your theme */
-    color: #c9a84c;
-    border-radius: 50%; /* or whatever your avatar shape is */
-}
 
 .datetime-hero {
     position: relative;
