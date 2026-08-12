@@ -39,6 +39,14 @@ const AdminCalendar = () => {
      * a deactivated barber takes no bookings, so closing their time would be meaningless. */
     const { data: barbersData } = useFetch(user?.role === "ADMIN" ? "/api/barbers/admin" : null, true);
     const activeBarbers = (barbersData ?? []).filter(b => b.isActive);
+
+    /* Drives snapDuration below, so a part-day closure can only be drawn on the same boundaries the booking
+     * picker offers. GET /api/Settings is open to ADMIN and BARBER, which is both roles that reach this page.
+     *
+     * Falls back to 30 - which is what FullCalendar defaults to anyway - so a failed or in-flight settings
+     * load leaves the grid behaving exactly as it did before rather than at some finer accidental value. */
+    const { data: settingsData } = useFetch("/api/Settings", true);
+    const slotStepMin = settingsData?.slotStepMin ?? 30;
     // "" = whole shop (BarberId null); otherwise the selected barber's id.
     const [selectedBarberId, setSelectedBarberId] = useState("");
     const [deleteSelectedEvent, setDeleteSelectedEvent] = useState(null);
@@ -435,13 +443,40 @@ const AdminCalendar = () => {
                             right: "dayGridMonth,timeGridWeek,timeGridDay,listMonth",
                         }}
                         initialView="dayGridMonth"
-                        /* All three are the admin's tools for changing closures: dragging an event,
-                           dragging out a new range, and clicking one to delete it. For a barber the
-                           calendar is a read-out, so they're off - the event's title and dates are already
-                           spelled out in the Events list beside the grid, which is why clicking one simply
-                           does nothing rather than opening a detail popup that would just repeat it. */
-                        editable={canManageClosures}
+                        /* The admin's tools for changing closures are dragging out a new range and clicking
+                           one to delete it. For a barber the calendar is a read-out, so both are off - the
+                           event's title and dates are already spelled out in the Events list beside the
+                           grid, which is why clicking one simply does nothing rather than opening a detail
+                           popup that would just repeat it.
+
+                           editable is FALSE for everyone, including the admin, because there is nothing
+                           behind it: DatesController exposes create (POST), two reads and delete (PATCH
+                           delete/{id}) and no update of any kind, and this calendar wires no eventDrop or
+                           eventResize. With it on, an admin could drag a closure, watch it land somewhere
+                           new, and have it silently snap back on the next load - the change never left the
+                           browser. A closure that cannot be moved is better than one that looks moved and
+                           isn't. Turn this back on only together with an update endpoint AND the handlers
+                           that call it. */
+                        editable={false}
                         selectable={canManageClosures && !loading && !loadFailed}
+                        /* A part-day closure must land on the boundaries customers actually book on. Left
+                           unset, FullCalendar inherits snapDuration from slotDuration and snaps to 30
+                           minutes - which matched the seeded slot step by coincidence, not by wiring, so
+                           setting "Time between slots" to anything else left the admin unable to draw a
+                           closure that lines up with the grid the picker offers.
+
+                           Misalignment costs more than it looks. Both overlap tests are half-open (backend
+                           StartTime < bookingEnd && EndTime > bookingStart, and isTimeSlotClosed on the
+                           front end), so a slot dies if it touches ANY closed minute: a 13:15-14:00 closure
+                           against 30-minute slots removes 13:00-14:00, an hour, while the calendar draws a
+                           block starting at 13:15. Snapping costs no expressiveness in exchange - the same
+                           slots die either way, because the effect was already quantised.
+
+                           snapDuration and NOT slotDuration on purpose: slotDuration is the row height, and
+                           at a 5-minute step it would render 288 rows a day (FullCalendar's own docs warn
+                           small slots make the calendar very tall). Snapping finer than the visible rows is
+                           the normal configuration for exactly this reason. */
+                        snapDuration={{ minutes: slotStepMin }}
                         selectMirror={true}
                         dayMaxEvents={true}
                         select={canManageClosures ? handleDateClick : undefined}
