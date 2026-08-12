@@ -760,17 +760,23 @@ const Schedules = () => {
                                 ? "Cancel this scheduled change?"
                                 : "Remove this schedule?"}
                         </h2>
-                        {/* Dated from the version being REMOVED, never from the one being restored.
-                            Two reasons. Its label ("Schedule until 30 Jun") stops being true the instant
-                            it reopens open-ended, and its effectiveFrom can be the 2020-01-01 sentinel the
-                            back-fill migration gives every pre-existing barber - a date chosen to be
-                            safely past, not one to show anybody. The removed version's own start is always
-                            a real date somebody picked, and it's the one that answers the actual question:
-                            from when do the old hours apply again. */}
+                        {/* Phrased as an ending that stops happening, not as a date something starts on.
+                            "Takes over from 10 Aug onwards" read as though the 9th were left uncovered -
+                            it never is, the previous schedule already governed that day and simply carries
+                            on through it. Saying which end date is being cancelled describes the actual
+                            change, and "no gap in cover" closes the misreading outright.
+
+                            Both dates come from the version being REMOVED (its start, minus a day for the
+                            predecessor's end, which the contiguous chain guarantees). Never from the
+                            restored version itself: its label ("Schedule until 30 Jun") stops being true
+                            the instant it reopens open-ended, and its effectiveFrom can be the 2020-01-01
+                            sentinel the back-fill migration gives every pre-existing barber - a date
+                            chosen to sit safely in the past, not one to show anybody. */}
                         <p>
                             <strong>{versionLabel(selectedVersion)}</strong> and its shifts will be deleted.
-                            The schedule before it takes over again from{" "}
-                            {fmtDate(selectedVersion.effectiveFrom)} onwards. This can't be undone.
+                            The schedule before it no longer ends on{" "}
+                            {fmtDate(addDays(selectedVersion.effectiveFrom, -1))} — it carries straight on
+                            as this barber's current schedule, with no gap in cover. This can't be undone.
                         </p>
                         <div className="sched-orphan-actions">
                             <button className="btn-secondary" onClick={() => setConfirmDelete(false)} disabled={saving}>
