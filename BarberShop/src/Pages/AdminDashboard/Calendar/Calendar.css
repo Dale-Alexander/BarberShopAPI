@@ -438,6 +438,16 @@
     font-size: 0.9rem;
 }
 
+/* The same treatment on the delete modal's "when" line, so the closure being destroyed is stated as
+   plainly as the one being created - matching weight and colour rather than a second grey sentence
+   that reads like more prose to skim past. */
+.closure-delete-when {
+    color: hsl(210, 20%, 90%);
+    font-weight: 600;
+    font-size: 0.9rem;
+    margin-top: 6px;
+}
+
 .closure-create-type {
     color: var(--muted-fg);
     font-size: 0.78rem;

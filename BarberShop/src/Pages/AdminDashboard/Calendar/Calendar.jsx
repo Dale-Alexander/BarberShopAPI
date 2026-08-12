@@ -793,6 +793,17 @@ const AdminCalendar = () => {
                                 Are you sure you want to delete{" "}
                                 <strong>{deleteSelectedEvent?.title}</strong>?
                             </p>
+                            {/* WHICH closure this is, not just what it's called. Reasons repeat - a shop
+                                closes for "Public holiday" several times a year, and the month grid can
+                                only show a truncated title anyway - so a name alone left the admin
+                                confirming a deletion they couldn't verify. formatEventDate rather than
+                                formatting here, so this and the Events list beside the calendar can never
+                                describe the same closure differently; it already prints a part-day
+                                closure's start and end, a multi-day range with the exclusive end wound
+                                back a day, and a plain date for a single full day. */}
+                            <p className="closure-delete-when">
+                                {formatEventDate(deleteSelectedEvent)}
+                            </p>
                         </div>
                         <div className="modal-footer">
                             <button
