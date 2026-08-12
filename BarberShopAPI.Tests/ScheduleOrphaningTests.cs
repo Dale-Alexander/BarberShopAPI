@@ -343,8 +343,10 @@ namespace BarberShopAPI.Tests
         }
 
         [Theory]
-        // A 16:45 booking runs to 17:15. With 30 minutes of grace it still finishes inside 17:00 + grace,
-        // so it is not stranded; with no grace it is. Grace applies to the day's LAST shift only.
+        /* A 17:15 booking runs to 17:45. The proposed shift ends at 17:30, which is when the shop shuts, so
+         * this is the shift grace applies to: with 30 minutes of it the booking still finishes inside
+         * 17:30 + grace and is not stranded, with none it is. Grace reaches the day's LAST shift only, and
+         * only when that shift runs to closing - see the test below for the other half of that rule. */
         [InlineData(30, false)]
         [InlineData(0, true)]
         public async Task Grace_minutes_decide_whether_a_booking_that_runs_past_closing_is_stranded(
@@ -357,7 +359,7 @@ namespace BarberShopAPI.Tests
                 var admin = db.AddUser(Role.ADMIN);
                 var barber = db.AddBarber();
                 var schedule = db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30));
-                var booking = db.AddBooking(barber.Id, TestData.FutureAt(14, 16, 45), BookingStatus.COMPLETED, durationMin: 30);
+                var booking = db.AddBooking(barber.Id, TestData.FutureAt(14, 17, 15), BookingStatus.COMPLETED, durationMin: 30);
 
                 adminId = admin.Id;
                 scheduleId = schedule.Id;
@@ -366,13 +368,47 @@ namespace BarberShopAPI.Tests
             Client.Authenticate(adminId, Role.ADMIN, tokenVersion: 0);
 
             var response = await Client.PutAsync($"/api/schedules/version/{scheduleId}",
-                Body(new { shifts = AllDays(9, 0, 17, 0), confirmOrphaned = true }));
+                Body(new { shifts = AllDays(9, 0, 17, 30), confirmOrphaned = true }));
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
             using var assertDb = NewDb();
             var booking2 = await assertDb.Bookings.SingleAsync(b => b.Id == bookingId);
             Assert.Equal(expectOrphaned, booking2.NeedsReview);
+        }
+
+        /* The other half of that rule. Grace reaches a shift at all only because Req 2 makes "the last shift
+         * ends when the shop closes" the normal case, so without it a booking would clear the shop's close
+         * and then fail on the shift, breaking the last slot of every day. A shift that finishes while the
+         * shop is still open isn't at closing time, so nothing is running past close and there is nothing
+         * for grace to forgive - a 13:00 finisher in a shop open to 17:30 is not owed until 13:30. */
+        [Fact]
+        public async Task Grace_is_not_granted_to_a_shift_that_ends_before_closing()
+        {
+            int adminId, scheduleId, bookingId;
+            using (var db = NewDb())
+            {
+                db.SetShopSetting(s => s.GraceMinutesAfterClose = 30);
+                var admin = db.AddUser(Role.ADMIN);
+                var barber = db.AddBarber();
+                var schedule = db.AddSchedule(barber.Id, ShopClock.Today.AddDays(-30));
+                // Runs to 13:15, against the 13:00 finish proposed below. The shop shuts at 17:30 throughout.
+                var booking = db.AddBooking(barber.Id, TestData.FutureAt(14, 12, 45), BookingStatus.COMPLETED, durationMin: 30);
+
+                adminId = admin.Id;
+                scheduleId = schedule.Id;
+                bookingId = booking.Id;
+            }
+            Client.Authenticate(adminId, Role.ADMIN, tokenVersion: 0);
+
+            var response = await Client.PutAsync($"/api/schedules/version/{scheduleId}",
+                Body(new { shifts = AllDays(9, 0, 13, 0), confirmOrphaned = true }));
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+            using var assertDb = NewDb();
+            // Stranded: with no grace to lean on, 13:15 is simply past the end of the barber's day.
+            Assert.True((await assertDb.Bookings.SingleAsync(b => b.Id == bookingId)).NeedsReview);
         }
 
         [Fact]

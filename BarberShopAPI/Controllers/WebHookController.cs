@@ -273,7 +273,7 @@ namespace BarberShopAPI.Controllers
                              * Shop hours are re-checked here as well as shifts (Req 3): an admin can narrow
                              * opening hours during the ~15 minutes a booking sits PENDING. */
                             var outsideSchedule = !booking.OutsideBarberSchedule
-                                && !ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, graceMin);
+                                && !ScheduleResolver.FitsWithinAShift(scheduleVersions, shopHours, appointmentDate, appointmentTime, endTime, graceMin);
                             var outsideShopHours = !booking.OutsideShopHours
                                 && !ShopHoursResolver.FitsShopHours(shopHours, appointmentDate, appointmentTime, endTime, graceMin);
 

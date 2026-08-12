@@ -120,6 +120,8 @@ namespace BarberShopAPI.Controllers
             BookingStatus status)
         {
             var grace = await _context.ShopSettings.Select(s => s.GraceMinutesAfterClose).FirstAsync();
+            // Only to decide whether a proposed shift runs to closing and so earns its grace (FitsWithinAShift).
+            var shopHours = await _context.ShopHours.ToListAsync();
             var now = ShopClock.Now;
             /* Bookings staff deliberately placed outside this barber's shifts are not candidates. Without
              * that filter every such booking was reported as stranded by EVERY schedule edit covering its
@@ -151,7 +153,7 @@ namespace BarberShopAPI.Controllers
                 if (date < windowFrom || (windowTo != null && date > windowTo)) continue; // outside this version's reign
                 var start = TimeOnly.FromDateTime(b.StartDateTime);
                 var end = TimeOnly.FromDateTime(b.StartDateTime.AddMinutes(b.DurationMin));
-                if (!ScheduleResolver.FitsWithinAShift(proposed, date, start, end, grace))
+                if (!ScheduleResolver.FitsWithinAShift(proposed, shopHours, date, start, end, grace))
                     orphaned.Add(b);
             }
             return orphaned;
@@ -178,6 +180,8 @@ namespace BarberShopAPI.Controllers
             List<ScheduleShiftViewModel> previousShifts, List<ScheduleShiftViewModel> proposedShifts)
         {
             var grace = await _context.ShopSettings.Select(s => s.GraceMinutesAfterClose).FirstAsync();
+            // As in FindConflictsAsync: only to decide which shift runs to closing and so earns its grace.
+            var shopHours = await _context.ShopHours.ToListAsync();
             var now = ShopClock.Now;
             var flagged = await _context.Bookings
                 .Include(b => b.User)
@@ -210,8 +214,8 @@ namespace BarberShopAPI.Controllers
                  * reads them - the modal says as much. Filtering them out here would hide the fact that the
                  * hours problem is genuinely resolved, which is the same mistake as hiding a booking because
                  * it also has a stuck refund. Each list vouches for its own dimension only. */
-                if (ScheduleResolver.FitsWithinAShift(before, date, start, end, grace)
-                    || !ScheduleResolver.FitsWithinAShift(after, date, start, end, grace))
+                if (ScheduleResolver.FitsWithinAShift(before, shopHours, date, start, end, grace)
+                    || !ScheduleResolver.FitsWithinAShift(after, shopHours, date, start, end, grace))
                     continue;
 
                 rescued.Add(b);

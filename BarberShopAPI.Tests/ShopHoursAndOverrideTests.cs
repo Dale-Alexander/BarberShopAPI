@@ -372,6 +372,89 @@ namespace BarberShopAPI.Tests
             Assert.Null(booking.OverriddenByUserId);
         }
 
+        /* The far side of that boundary. Grace lengthens an appointment that began while the shop was open;
+         * it does not open a slot after closing. 17:30-18:00 ends exactly on the 30-minute limit, so bounding
+         * only the END admitted it as an ORDINARY booking - no confirmation asked, no override recorded - for
+         * an appointment lying wholly after the shop shut. The staff grid never offered it (it stops one step
+         * short of close), which left the extended-hours toggle showing the one out-of-hours slot it didn't
+         * also guard. */
+        [Fact]
+        public async Task A_booking_starting_at_closing_time_is_an_override_even_when_it_ends_inside_grace()
+        {
+            var adminId = AuthenticateAsAdmin();
+            int barberId;
+            var monday = TestData.NextWeekday(DayOfWeek.Monday);
+            using (var db = NewDb())
+            {
+                var barber = db.AddBarber();
+                barberId = barber.Id;
+                db.AddSchedule(barberId, ShopClock.Today.AddDays(-30));   // 09:00-17:30 every day
+                db.SetShopSetting(s => s.GraceMinutesAfterClose = 30);
+            }
+
+            object payload(bool confirm) => new
+            {
+                startDateTime = monday.ToDateTime(new TimeOnly(17, 30)),   // 17:30 + 30 = exactly close + grace
+                barberId,
+                defaultDurationMin = 30,
+                phone = "+35679000555",
+                fullName = "After Close",
+                confirmOutsideHours = confirm
+            };
+
+            var refused = await Client.PostAsync("/api/Bookings/create-admin-booking", Body(payload(false)));
+            Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+            var refusal = await ReadJson(refused);
+            // Both, because the shift ends at 17:30 too - neither has room for a booking that STARTS there.
+            Assert.True(refusal.GetProperty("outsideShopHours").GetBoolean());
+            Assert.True(refusal.GetProperty("outsideWorkingHours").GetBoolean());
+
+            var accepted = await Client.PostAsync("/api/Bookings/create-admin-booking", Body(payload(true)));
+            Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+
+            using var check = NewDb();
+            var booking = check.Bookings.Single();
+            Assert.True(booking.OutsideShopHours);
+            Assert.True(booking.OutsideBarberSchedule);
+            Assert.Equal(adminId, booking.OverriddenByUserId);
+        }
+
+        /* Grace is after CLOSE, and only the shift that runs to closing earns it. A barber finishing at 13:00
+         * in a shop open until 17:30 was bookable to 13:30 - half an hour of their afternoon, taken with no
+         * confirmation, because the shift check granted grace to the day's last shift unconditionally. */
+        [Fact]
+        public async Task Grace_does_not_extend_a_shift_that_ends_before_the_shop_closes()
+        {
+            AuthenticateAsAdmin();
+            int barberId;
+            var monday = TestData.NextWeekday(DayOfWeek.Monday);
+            using (var db = NewDb())
+            {
+                var barber = db.AddBarber();
+                barberId = barber.Id;
+                // Shop shuts at the seeded 17:30; this barber's only shift ends at 13:00.
+                db.AddSchedule(barberId, ShopClock.Today.AddDays(-30),
+                    shifts: new[] { (DayOfWeek.Monday, new TimeOnly(9, 0), new TimeOnly(13, 0)) });
+                db.SetShopSetting(s => s.GraceMinutesAfterClose = 30);
+            }
+
+            var response = await Client.PostAsync("/api/Bookings/create-admin-booking", Body(new
+            {
+                startDateTime = monday.ToDateTime(new TimeOnly(12, 45)),   // runs to 13:15, past a 13:00 finish
+                barberId,
+                defaultDurationMin = 30,
+                phone = "+35679000666",
+                fullName = "Early Finisher",
+                confirmOutsideHours = false
+            }));
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            var refusal = await ReadJson(response);
+            // The barber's day only. The shop is open until 17:30, so nothing is being asked of the shop.
+            Assert.True(refusal.GetProperty("outsideWorkingHours").GetBoolean());
+            Assert.False(refusal.GetProperty("outsideShopHours").GetBoolean());
+        }
+
         // ---- 3. Overrides ------------------------------------------------------------------------
 
         [Fact]
@@ -606,6 +689,37 @@ namespace BarberShopAPI.Tests
             var response = await Client.PostAsync("/api/Bookings/create-pending", Body(new
             {
                 startDateTime = sunday.ToDateTime(new TimeOnly(11, 0)),
+                barberId,
+                servicesIds = new[] { serviceId }
+            }));
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            using var check = NewDb();
+            Assert.Empty(check.Bookings);
+        }
+
+        /* The customer half of the closing-time boundary. Staff get a confirmation for it (section 2); a
+         * customer gets a flat refusal, and it reaches EvaluateHoursAsync down a different branch with no
+         * override in front of it - so the rule has to be proven on both. 17:30 + 30 lands exactly on
+         * close + grace, so bounding only the END would have admitted this as an ordinary customer booking
+         * for an appointment lying wholly after the shop shut. */
+        [Fact]
+        public async Task A_customer_cannot_book_a_slot_that_starts_at_closing_time()
+        {
+            int barberId, serviceId;
+            var monday = TestData.NextWeekday(DayOfWeek.Monday);
+            using (var db = NewDb())
+            {
+                var barber = db.AddBarber();
+                barberId = barber.Id;
+                db.AddSchedule(barberId, ShopClock.Today.AddDays(-30));   // 09:00-17:30, and the shop shuts 17:30
+                db.SetShopSetting(s => s.GraceMinutesAfterClose = 30);
+                serviceId = db.AddService(durationMin: 30).Id;
+            }
+
+            var response = await Client.PostAsync("/api/Bookings/create-pending", Body(new
+            {
+                startDateTime = monday.ToDateTime(new TimeOnly(17, 30)),
                 barberId,
                 servicesIds = new[] { serviceId }
             }));

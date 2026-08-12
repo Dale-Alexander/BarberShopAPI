@@ -92,8 +92,11 @@ namespace BarberShopAPI.Common
                             && s.EffectiveFrom <= appointmentDate
                             && (s.EffectiveTo == null || s.EffectiveTo >= appointmentDate))
                 .ToListAsync();
+            // Needed only to decide whether the day's last shift runs to closing and so earns its grace -
+            // this asks about the BARBER's hours, and doesn't check the shop's on its own account.
+            var shopHours = await context.ShopHours.ToListAsync();
 
-            return ScheduleResolver.FitsWithinAShift(scheduleVersions, appointmentDate, appointmentTime, endTime, graceMin);
+            return ScheduleResolver.FitsWithinAShift(scheduleVersions, shopHours, appointmentDate, appointmentTime, endTime, graceMin);
         }
 
         /// <summary>

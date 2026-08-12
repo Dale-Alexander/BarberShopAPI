@@ -235,6 +235,33 @@ namespace BarberShopAPI.Tests
             Assert.Equal(HttpStatusCode.Conflict, spillsOver.StatusCode);
         }
 
+        /* The same boundary from the other side, and with grace switched on so the end test alone cannot
+         * catch it: 17:30 + 30 = 18:00 is exactly close + grace, so a rule that bounded only the END would
+         * have moved this booking wholly past closing time without so much as a confirmation. Reschedule is
+         * its own call into EvaluateHoursAsync, and the slot you can't create is the slot you must not be
+         * able to move into either. */
+        [Fact]
+        public async Task A_reschedule_to_a_slot_starting_at_closing_time_needs_confirming_first()
+        {
+            AuthenticateAsAdmin();
+            var (_, bookingId) = ArrangeBarberWithBooking();
+            using (var db = NewDb()) db.SetShopSetting(s => s.GraceMinutesAfterClose = 30);
+
+            var response = await Client.PatchAsync($"/api/bookings/update-booking/{bookingId}",
+                Body(new { startDateTime = TestData.FutureAt(15, 17, 30) }));
+
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            var refusal = await ReadJson(response);
+            // Both boundaries: the shift ends at 17:30 as well, so neither has room for a start there.
+            Assert.True(refusal.GetProperty("outsideWorkingHours").GetBoolean());
+            Assert.True(refusal.GetProperty("outsideShopHours").GetBoolean());
+
+            // Untouched by the refusal - the booking is still where it was.
+            using var assertDb = NewDb();
+            Assert.Equal(TestData.FutureAt(14, 16),
+                (await assertDb.Bookings.SingleAsync(b => b.Id == bookingId)).StartDateTime);
+        }
+
         [Fact]
         public async Task Reassigning_to_a_barber_who_is_not_working_then_is_rejected()
         {

@@ -18,6 +18,14 @@ namespace BarberShopAPI.Common
          * let a booking run past the barber's shift and then fail on the shop instead - the grace setting
          * would break the last slot of every day rather than allow it.
          *
+         * The start must be STRICTLY before closing, and that is what keeps grace meaning "overrun". Bounding
+         * only the end let an appointment lying WHOLLY after closing through: at a 17:30 close with 30 minutes
+         * of grace, 17:30-18:00 ends exactly on the limit and passed - silently, with no override recorded,
+         * because nothing here reported a breach. The picker never offered that slot (its grid stops one step
+         * short of close), so the two disagreed about where the day ends; the extended-hours toggle showed the
+         * slot and, since this said it fitted, showed it as an ordinary one. Grace lengthens an appointment
+         * that began while the shop was open. It does not add a slot after closing.
+         *
          * A closed day fails, as does a weekday with no row at all: the seven rows are seeded, so a missing
          * one means something is wrong with the data, and refusing bookings is the safe reading of that. */
         public static bool FitsShopHours(
@@ -25,7 +33,9 @@ namespace BarberShopAPI.Common
         {
             var day = ForDay(hours, date.DayOfWeek);
             if (day == null || day.IsClosed) return false;
-            return start >= day.OpenTime && end <= day.CloseTime.AddMinutes(graceMinutes);
+            return start >= day.OpenTime
+                && start < day.CloseTime
+                && end <= day.CloseTime.AddMinutes(graceMinutes);
         }
 
         /* Why a shift breaks the proposed hours, or null when it doesn't. Req 2's invariant in one place,

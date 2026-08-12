@@ -851,7 +851,7 @@ namespace BarberShopAPI.Controllers
                 .ToListAsync();
             return new HoursOverride(
                 !ShopHoursResolver.FitsShopHours(shopHours, date, start, end, graceMinutes),
-                !ScheduleResolver.FitsWithinAShift(scheduleVersions, date, start, end, graceMinutes));
+                !ScheduleResolver.FitsWithinAShift(scheduleVersions, shopHours, date, start, end, graceMinutes));
         }
 
         // The caller's own user id, for recording who authorised an override. Never taken from the request.
