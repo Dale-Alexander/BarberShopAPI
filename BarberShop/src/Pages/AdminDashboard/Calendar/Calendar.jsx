@@ -495,6 +495,18 @@ const AdminCalendar = () => {
                             minute: "2-digit",
                             hour12: false,
                         }}
+                        /* Month view shows a part-day closure's start only by default (displayEventEnd is
+                           false for dayGridMonth), so "09:00 Dentist" left the admin unable to tell a
+                           15-minute closure from one that swallows the afternoon without opening the day.
+                           Showing the range - "09:00 - 09:45 Dentist" - answers it from the month grid.
+
+                           Scoped to this view deliberately: the timeGrid views already draw the closure as
+                           a block whose height IS its length, and listMonth prints the range already, so
+                           setting it globally would only add noise where the answer is already on screen.
+
+                           Full-day closures are unaffected - they are allDay, which suppresses the time
+                           display entirely, so they keep reading as just their reason. */
+                        views={{ dayGridMonth: { displayEventEnd: true } }}
                     />
 
                     <style>{`
