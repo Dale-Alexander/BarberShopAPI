@@ -114,6 +114,16 @@ namespace BarberShopAPI.Data
 
             var payment = modelBuilder.Entity<Payment>();
 
+            /* Replaces CK_Payments_Amount_Max400, which bounded only the top: it read [Amount] <= 400, so a
+             * negative amount satisfied it and could have landed in the revenue figures as a credit nobody
+             * gave. The three API paths that set an amount (confirm-cash, mark-cash-paid, edit-amount) all
+             * already refuse <= 0, so nothing could reach it - this makes the column say what those three say.
+             *
+             * NULL stays legal and must: an admin booking is created with no amount at all and captures one
+             * later at mark-paid time, so a large share of live rows are legitimately NULL. */
+            payment.ToTable(t => t.HasCheckConstraint(
+                "CK_Payments_Amount", "[Amount] IS NULL OR ([Amount] > 0 AND [Amount] <= 400)"));
+
             payment.HasIndex(p => p.BookingId)
        .IsUnique()
        .HasDatabaseName("UX_Payment_BookingId");
@@ -215,6 +225,21 @@ namespace BarberShopAPI.Data
 
             var barberScheduleShift = modelBuilder.Entity<BarberScheduleShift>();
 
+            /* The two rules SchedulesController.ValidateShifts already enforces on every write, mirrored on the
+             * column so they hold for seeds and any future writer too. Deliberately NOT the overlap rule from
+             * that same method - that one is about a set of rows on the same day, which a check constraint
+             * (one row at a time) cannot see.
+             *
+             * Start < end also means no overnight shift, which the app has never supported: ValidateShifts has
+             * always required it, and a shift crossing midnight would break ShiftsForDate's ordering and the
+             * grace-at-close rule. If overnight shifts are ever wanted, this constraint is one of the places
+             * that has to change. */
+            barberScheduleShift.ToTable(t =>
+            {
+                t.HasCheckConstraint("CK_BarberScheduleShifts_StartBeforeEnd", "[StartTime] < [EndTime]");
+                t.HasCheckConstraint("CK_BarberScheduleShifts_DayOfWeek", "[DayOfWeek] BETWEEN 0 AND 6");
+            });
+
             barberScheduleShift.HasOne(sh => sh.Schedule)
                                .WithMany(s => s.Shifts)
                                .HasForeignKey(sh => sh.BarberScheduleId)
@@ -222,11 +247,40 @@ namespace BarberShopAPI.Data
 
             barberScheduleShift.HasIndex(sh => sh.BarberScheduleId);
 
+            /* The same bounds UpdateShopSettingsViewModel already enforces with [Range]/[AllowedValues], kept
+             * here as well so they hold for every writer rather than only the settings endpoint. Seeds,
+             * migrations, the test fixture's raw UPDATE and any future admin tooling all reach this table
+             * without passing through that view model, and these are policy numbers the whole booking engine
+             * reads - a slot step that doesn't divide 60 walks the picker off the hour, a negative grace
+             * silently shortens every day. The annotations stay: they give the admin a field-level message
+             * instead of a 500, and this is the backstop for everything that isn't that form.
+             *
+             * One constraint per column rather than one composite, so a violation names the column it broke. */
+            modelBuilder.Entity<ShopSettings>().ToTable(t =>
+            {
+                t.HasCheckConstraint("CK_ShopSettings_BufferMin", "[BufferMin] BETWEEN 0 AND 120");
+                t.HasCheckConstraint("CK_ShopSettings_DefaultAdminBookingDurationMin", "[DefaultAdminBookingDurationMin] BETWEEN 5 AND 240");
+                t.HasCheckConstraint("CK_ShopSettings_GraceMinutesAfterClose", "[GraceMinutesAfterClose] BETWEEN 0 AND 120");
+                t.HasCheckConstraint("CK_ShopSettings_MinAdvanceBookingMinutes", "[MinAdvanceBookingMinutes] BETWEEN 0 AND 1440");
+                t.HasCheckConstraint("CK_ShopSettings_MaxAdvanceBookingDays", "[MaxAdvanceBookingDays] BETWEEN 1 AND 365");
+                t.HasCheckConstraint("CK_ShopSettings_RefundCutoffHours", "[RefundCutoffHours] BETWEEN 0 AND 168");
+                // Not a range: the value has to divide 60 or the picker's grid walks off the hour.
+                t.HasCheckConstraint("CK_ShopSettings_SlotStepMin", "[SlotStepMin] IN (5, 10, 15, 20, 30)");
+            });
+
             // Seed the single shop-settings row. Buffer defaults to 0 so behaviour is unchanged
             // until an admin sets it from the dashboard; admin bookings default to 30 min; grace of
             // 0 keeps the strict "must finish by closing" rule.
             modelBuilder.Entity<ShopSettings>().HasData(
                 new ShopSettings { Id = 1, BufferMin = 0, DefaultAdminBookingDurationMin = 30, GraceMinutesAfterClose = 0, MinAdvanceBookingMinutes = 90, MaxAdvanceBookingDays = 60, RefundCutoffHours = 24, SlotStepMin = 30 });
+
+            /* Mirrors ShopHoursDayViewModel.Validate, INCLUDING its exemption for a closed day - and the
+             * exemption is the whole reason this isn't a plain OpenTime < CloseTime. A closed day's times are
+             * ignored by every reader and kept only so reopening restores what was there before, so they are
+             * allowed to be junk; constraining them would make a day with junk times impossible to close,
+             * which is exactly the state an admin closes a day to get out of. */
+            modelBuilder.Entity<ShopHours>().ToTable(t => t.HasCheckConstraint(
+                "CK_ShopHours_OpenBeforeClose", "[IsClosed] = 1 OR [OpenTime] < [CloseTime]"));
 
             /* All seven days open 09:00-17:30 - the same hours DefaultSchedule gives a new barber and the
              * same ones the day-one schedule seed used. Deliberately permissive rather than realistic (no

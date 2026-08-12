@@ -4,6 +4,7 @@ using BarberShopAPI.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace BarberShopAPI.Migrations
 {
     [DbContext(typeof(BarberShopContext))]
-    partial class BarberShopContextModelSnapshot : ModelSnapshot
+    [Migration("20260812170608_AddShopSettingsRangeConstraints")]
+    partial class AddShopSettingsRangeConstraints
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -121,12 +124,7 @@ namespace BarberShopAPI.Migrations
 
                     b.HasIndex("BarberScheduleId");
 
-                    b.ToTable("BarberScheduleShifts", t =>
-                        {
-                            t.HasCheckConstraint("CK_BarberScheduleShifts_DayOfWeek", "[DayOfWeek] BETWEEN 0 AND 6");
-
-                            t.HasCheckConstraint("CK_BarberScheduleShifts_StartBeforeEnd", "[StartTime] < [EndTime]");
-                        });
+                    b.ToTable("BarberScheduleShifts");
                 });
 
             modelBuilder.Entity("BarberShopAPI.Models.Booking", b =>
@@ -305,10 +303,7 @@ namespace BarberShopAPI.Migrations
                         .HasDatabaseName("UX_Payment_StripePaymentIntentId")
                         .HasFilter("[StripePaymentIntentId] IS NOT NULL");
 
-                    b.ToTable("Payments", t =>
-                        {
-                            t.HasCheckConstraint("CK_Payments_Amount", "[Amount] IS NULL OR ([Amount] > 0 AND [Amount] <= 400)");
-                        });
+                    b.ToTable("Payments");
                 });
 
             modelBuilder.Entity("BarberShopAPI.Models.Service", b =>
@@ -427,10 +422,7 @@ namespace BarberShopAPI.Migrations
                     b.HasIndex("DayOfWeek")
                         .IsUnique();
 
-                    b.ToTable("ShopHours", t =>
-                        {
-                            t.HasCheckConstraint("CK_ShopHours_OpenBeforeClose", "[IsClosed] = 1 OR [OpenTime] < [CloseTime]");
-                        });
+                    b.ToTable("ShopHours");
 
                     b.HasData(
                         new

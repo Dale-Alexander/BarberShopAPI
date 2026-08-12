@@ -10,11 +10,15 @@ namespace BarberShopAPI.Common
      * the same string by hand to actually use the parts. Seven hand-rolled copies of
      * `parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : ""` across the codebase.
      *
-     * The 50-character cap is the part that matters. User.Name and User.Surname are nvarchar(50), so a name
-     * whose halves exceed that is a truncation error at SaveChanges rather than a clean 400 - and the split
-     * has to be identical to the one the caller then stores, or validation passes on one shape while a
-     * different shape gets written. One function returning both the verdict and the halves makes that
-     * impossible to get wrong. */
+     * The 50-character cap is the part that matters. It is this application's rule, NOT the column's -
+     * User.Name and User.Surname are nvarchar(100), so 50 is the stricter of the two and nothing here can
+     * truncate. It is deliberately kept stricter, and the frontend mirrors it exactly (utils/validation.js),
+     * so a name is accepted or refused identically on both sides. If it is ever raised, raise it in both
+     * places and stay at or under 100.
+     *
+     * What matters just as much is that the split is identical to the one the caller then stores, or
+     * validation passes on one shape while a different shape gets written. One function returning both the
+     * verdict and the halves makes that impossible to get wrong. */
     public static class PersonName
     {
         public const int MaxPartLength = 50;
@@ -23,7 +27,7 @@ namespace BarberShopAPI.Common
         /// Splits a full name into first/surname on whitespace, first word to <paramref name="first"/> and
         /// everything after it to <paramref name="last"/>. Returns false - with both set to "" - when the
         /// name is unusable: empty, under two characters, containing digits (a person isn't "123"), or
-        /// either half longer than the nvarchar(50) columns can hold.
+        /// either half longer than <see cref="MaxPartLength"/>.
         /// </summary>
         public static bool TrySplit(string? fullName, out string first, out string last)
         {
